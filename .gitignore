@@ -1,0 +1,41 @@
+# Build products and dependency checkouts
+.build/
+.swiftpm/
+dist/
+/discobox/
+
+# Machine-local settings and agent state
+.DS_Store
+.idea/
+.vscode/
+.agents/
+.codex/
+xcuserdata/
+*.xcuserstate
+
+# Credentials, signing material, and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+.netrc
+.aws/
+.ssh/
+credentials.json
+secrets.json
+
+# Runtime data, diagnostics, and captures
+*.log
+*.sock
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.xcresult/
+/screenshots/
+/captures/
