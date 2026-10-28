@@ -1,15 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
-
-# Build tools and caches stay in this checkout. This script never launches the
-# app, the Discobox CLI, or a backend.
-export CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-cache"
-export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/swift-cache"
-export GOMODCACHE="$PWD/.build/go-mod-cache"
-export GOCACHE="$PWD/.build/go-cache"
-export GOTOOLCHAIN=local
-mkdir -p "$GOCACHE" "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE"
+# This script builds artifacts only; it never launches the app or backend.
+source "$(dirname "$0")/dev-env.sh"
 # Keep this local artifact independent of dsymutil's external cache writes.
 # Debug builds (including tests and Xcode runs) retain their normal symbols.
 swift build --disable-sandbox --cache-path .build/package-cache --configuration release -debug-info-format none
