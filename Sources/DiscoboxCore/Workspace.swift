@@ -5,6 +5,9 @@ import Observation
 public final class Workspace {
     public private(set) var connectionID = UUID()
     public private(set) var usage = HarnessUsage()
+    public private(set) var cachedHarnesses: [Harness] = []
+    @ObservationIgnored private var harnessesReadAt: Date?
+    @ObservationIgnored private var harnessLoad: Task<[Harness], Error>?
     public var streamsLiveTerminals = false
     public private(set) var sandboxes: [Sandbox] = []
     public private(set) var execs: [Exec] = []
@@ -18,6 +21,7 @@ public final class Workspace {
     public private(set) var isDemo = false
     public private(set) var isSending = false
     public private(set) var endpointLabel = ""
+    public private(set) var transportEndpoint = ""
     public private(set) var lastRefresh: Date?
     public private(set) var inventoryObservedAt: String?
     public private(set) var servicesObservedAt: String?
@@ -50,7 +54,32 @@ public final class Workspace {
         public var id: Self { self }
     }
 
-    public init() {}
+    private struct RecentBox {
+        let execs: [Exec]
+        let selectedExec: String?
+        let services: [Service]
+        let servicesObservedAt: String?
+        let loadedAt: Date
+    }
+    @ObservationIgnored private var recentBoxes: [String: RecentBox] = [:]
+    @ObservationIgnored private var inventoryLoadedAt: Date?
+    @ObservationIgnored private var selectionLoad: Task<Void, Never>?
+    @ObservationIgnored private let now: () -> Date
+
+    public init() { now = Date.init }
+    init(now: @escaping () -> Date) { self.now = now }
+
+    private func rememberSelection() {
+        guard let sandboxID, selectedBox?.isRunning == true,
+              !pendingBoxActions.contains(sandboxID), detailError == nil,
+              inventoryObservedAt == nil, let loadedAt = inventoryLoadedAt,
+              now().timeIntervalSince(loadedAt) < 30 else { return }
+        recentBoxes[sandboxID] = RecentBox(execs: execs, selectedExec: execID,
+            services: services, servicesObservedAt: servicesObservedAt, loadedAt: loadedAt)
+        if recentBoxes.count > 12, let oldest = recentBoxes.min(by: { $0.value.loadedAt < $1.value.loadedAt })?.key {
+            recentBoxes.removeValue(forKey: oldest)
+        }
+    }
 
     public var selectedBox: Sandbox? { sandboxes.first { $0.id == sandboxID } }
     public var selectedExec: Exec? { execs.first { $0.id == execID } }
@@ -100,10 +129,17 @@ public final class Workspace {
         isConnecting = true
         let current = revision
         do {
+            let transport = try await client.prepareConnection()
+            guard current == revision, !Task.isCancelled else { return }
+            transportEndpoint = transport ?? label
             let project = try await client.decode(.init(.defaultProject), as: Project.self)
             guard current == revision, !Task.isCancelled else { return }
             projectID = project.id
             isConnected = true
+            Task { [weak self] in
+                guard let self, self.revision == current else { return }
+                _ = try? await self.harnesses()
+            }
             await refresh()
             guard current == revision, !Task.isCancelled else { return }
             isConnecting = false
@@ -118,8 +154,13 @@ public final class Workspace {
     public func disconnect() {
         revision = UUID()
         connectionID = UUID()
+        client?.closeConnection()
         client = nil
+        recentBoxes.removeAll()
+        transportEndpoint = ""
         usage = HarnessUsage()
+        harnessLoad?.cancel(); harnessLoad = nil
+        cachedHarnesses = []; harnessesReadAt = nil
         approvals = []; approvalError = nil; approvalRequest = UUID()
         sandboxes = []
         pendingBoxActions = []
@@ -134,9 +175,23 @@ public final class Workspace {
 
     public func selectBox(_ id: String?) async {
         guard sandboxID != id else { return }
+        rememberSelection()
         clearSelection()
         sandboxID = id
-        await refreshDetails()
+        // Reattach the already-retained Ghostty surface before an API round trip.
+        // Only recent, live inventories qualify; backend checks still gate a new attach.
+        if let id, selectedBox?.isRunning == true, !pendingBoxActions.contains(id),
+           let cached = recentBoxes[id], now().timeIntervalSince(cached.loadedAt) < 30 {
+            execs = cached.execs
+            execID = cached.execs.first(where: { $0.id == cached.selectedExec })?.id
+                ?? cached.execs.first(where: { $0.primary == true })?.id ?? cached.execs.first?.id
+            services = cached.services
+            servicesObservedAt = cached.servicesObservedAt
+            inventoryLoadedAt = cached.loadedAt
+        }
+        let load = Task { await refreshDetails() }
+        selectionLoad = load
+        await load.value
     }
 
     public func selectExec(_ id: String?) async {
@@ -159,7 +214,10 @@ public final class Workspace {
         do {
             let result = try await client.decode(.init(.sandboxes, projectID: projectID), as: SandboxesResponse.self)
             guard current == revision, request == listRequest, !Task.isCancelled else { return }
-            sandboxes = result.sandboxes ?? []
+            let updatedBoxes = result.sandboxes ?? []
+            if sandboxes != updatedBoxes { sandboxes = updatedBoxes }
+            let running = Set(updatedBoxes.filter(\.isRunning).map(\.id))
+            recentBoxes = recentBoxes.filter { running.contains($0.key) && now().timeIntervalSince($0.value.loadedAt) < 30 }
             connectionError = nil
             lastRefresh = Date()
             if let sandboxID, !sandboxes.contains(where: { $0.id == sandboxID }) { clearSelection() }
@@ -179,6 +237,7 @@ public final class Workspace {
             throw DiscoboxError("This action is no longer available. Refresh the box and try again.")
         }
         guard !pendingBoxActions.contains(boxID) else { throw DiscoboxError("An action is already in progress for this box.") }
+        recentBoxes.removeValue(forKey: boxID)
         pendingBoxActions.insert(boxID)
         defer { if connection == connectionID { pendingBoxActions.remove(boxID) } }
         if sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { clearSelection() }
@@ -198,21 +257,27 @@ public final class Workspace {
         do {
             async let execResult = client.decode(.init(.execs, projectID: projectID, sandboxID: sandboxID), as: ExecsResponse.self)
             async let serviceResult = client.decode(.init(.services, projectID: projectID, sandboxID: sandboxID), as: ServicesResponse.self)
-            let (terminals, serviceList) = try await (execResult, serviceResult)
+            // Publish terminal inventory as soon as it arrives. Service discovery
+            // can be slow and must not delay mounting an interactive terminal.
+            let terminals = try await execResult
             guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
-            execs = terminals.execs.filter(\.tty).sorted {
+            let updatedExecs = terminals.execs.filter(\.tty).sorted {
                 if ($0.primary == true) != ($1.primary == true) { return $0.primary == true }
                 return $0.id < $1.id
             }
-            services = serviceList.services
-            inventoryObservedAt = terminals.observedAt
-            servicesObservedAt = serviceList.observedAt
+            if execs != updatedExecs { execs = updatedExecs }
+            inventoryLoadedAt = now()
+            if inventoryObservedAt != terminals.observedAt { inventoryObservedAt = terminals.observedAt }
             detailError = nil
             if !execs.contains(where: { $0.id == execID }) {
                 await selectExec(execs.first(where: { $0.primary == true })?.id ?? execs.first?.id)
             } else {
                 await refreshScreen()
             }
+            let serviceList = try await serviceResult
+            guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
+            if services != serviceList.services { services = serviceList.services }
+            if servicesObservedAt != serviceList.observedAt { servicesObservedAt = serviceList.observedAt }
             if !canSendInput { inputEnabled = false }
         } catch {
             guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
@@ -253,7 +318,8 @@ public final class Workspace {
         do {
             let result = try await client.decode(.init(.approvals, projectID: projectID), as: ApprovalInbox.self)
             guard connectionID == connection, approvalRequest == request, !Task.isCancelled else { return }
-            approvals = result.approvalRequests.filter { $0.request["status"].string == "pending" }
+            let pending = result.approvalRequests.filter { $0.request["status"].string == "pending" }
+            if approvals != pending { approvals = pending }
             approvalError = nil
         } catch {
             guard connectionID == connection, approvalRequest == request, !Task.isCancelled else { return }
@@ -339,6 +405,7 @@ public final class Workspace {
     public func reconnect() async {
         guard let client else { return }
         let label = endpointLabel, demo = isDemo, box = sandboxID, terminal = execID
+        self.client = nil // Preserve the shared transport while reconnecting this workspace.
         await connect(client: client, label: label, demo: demo)
         if isConnected {
             await selectBox(box)
@@ -347,12 +414,33 @@ public final class Workspace {
     }
     public func refreshUsage() async {
         guard let client, let projectID, isConnected else { return }
-        await usage.refresh(client: client, project: projectID, boxes: sandboxes)
+        let connection = connectionID
+        let catalog = (try? await harnesses()) ?? cachedHarnesses
+        guard connection == connectionID, !Task.isCancelled else { return }
+        await usage.refresh(client: client, project: projectID, boxes: sandboxes, configuredHarnesses: catalog)
     }
 
-    public func harnesses() async throws -> [Harness] {
+    public func harnesses(force: Bool = false) async throws -> [Harness] {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
-        return try await client.decode(.init(.harnesses, projectID: projectID), as: HarnessList.self).harnessConfigs ?? []
+        if !force, let readAt = harnessesReadAt, now().timeIntervalSince(readAt) < 60 { return cachedHarnesses }
+        let connection = connectionID
+        if let harnessLoad {
+            let result = try await harnessLoad.value
+            guard connection == connectionID else { throw CancellationError() }
+            if cachedHarnesses != result { cachedHarnesses = result }
+            harnessesReadAt = now()
+            return result
+        }
+        let load = Task.detached(priority: .utility) {
+            try await client.decode(.init(.harnesses, projectID: projectID), as: HarnessList.self).harnessConfigs ?? []
+        }
+        harnessLoad = load
+        defer { if connection == connectionID { harnessLoad = nil } }
+        let result = try await load.value
+        guard connection == connectionID else { throw CancellationError() }
+        if cachedHarnesses != result { cachedHarnesses = result }
+        harnessesReadAt = now()
+        return result
     }
     public func createBox(harness: String, repository: String, prompt: String = "") async throws {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
@@ -371,7 +459,9 @@ public final class Workspace {
         guard let client, let projectID, let sandboxID,
               execs.contains(where: { $0.id == id && $0.primary != true && $0.tty }) else { throw DiscoboxError("Select a shell terminal.") }
         let current = selectionRevision
+        let connection = connectionID
         _ = try await client.perform(.init(execs.first(where: { $0.id == id })?.isShell == true ? .closeShell : .closeTerminal, projectID: projectID, sandboxID: sandboxID, execID: id))
+        if connection == connectionID { recentBoxes.removeValue(forKey: sandboxID) }
         guard current == selectionRevision else { return }
         execs.removeAll { $0.id == id }
         await selectExec(execs.first?.id)
@@ -407,6 +497,9 @@ public final class Workspace {
     }
 
     private func clearSelection() {
+        selectionLoad?.cancel()
+        selectionLoad = nil
+        inventoryLoadedAt = nil
         selectionRevision = UUID()
         commandError = nil
         terminalRevision = UUID()

@@ -11,12 +11,17 @@ import DiscoboxCore
     var showAudit = false
     var tab = WorkspaceTab.terminal
     var showInspector = false
+    var inspectorSection = UserDefaults.standard.string(forKey: "inspectorSection") ?? "services" {
+        didSet { UserDefaults.standard.set(inspectorSection, forKey: "inspectorSection") }
+    }
+    func openServices() { inspectorSection = "services"; showInspector = true }
+    func toggleInspector() { showInspector.toggle() }
+
     var focusMode = false
     private struct AgentFocusSnapshot {
         let layout: WorkspaceTabs
         let selected: String
         let agentFocused: Bool
-        let sidebarHidden: Bool
         let inspectorVisible: Bool
     }
     private var agentFocusSnapshot: AgentFocusSnapshot?
@@ -26,16 +31,14 @@ import DiscoboxCore
         agentFocusSnapshot = nil
         saved.layout.open(saved.layout.ids.contains(saved.selected) ? saved.selected : "agent")
         saved.layout.agentFocused = saved.agentFocused
-        focusMode = saved.sidebarHidden
         showInspector = saved.inspectorVisible
     }
     private func toggleAgentMaximization() {
         if agentFocusSnapshot != nil { restoreAgentLayout(); return }
         guard let layout = currentLayout else { return }
         agentFocusSnapshot = AgentFocusSnapshot(layout: layout, selected: layout.selected,
-            agentFocused: layout.agentFocused, sidebarHidden: focusMode, inspectorVisible: showInspector)
+            agentFocused: layout.agentFocused, inspectorVisible: showInspector)
         layout.open("agent")
-        focusMode = true
         showInspector = false
     }
     var showCommands = false
@@ -95,6 +98,7 @@ import DiscoboxCore
         case .previousTab: moveTab(-1)
         case .nextTab: moveTab(1)
         case .previousPane, .nextPane: movePane()
+        case .toggleInspector: toggleInspector()
         case .help: showCommands = true
         }
     }
@@ -176,7 +180,7 @@ import DiscoboxCore
         case .previousTerminal: moveTerminal(-1)
         case .nextTerminal: moveTerminal(1)
         case .newShell: tab = .terminal; Task { await workspace.openShell() }
-        case .services: tab = .services; currentLayout?.open("services")
+        case .services: openServices()
         case .audit: showFiles = false; showAudit = true; currentLayout?.open("audit")
         case .boxes: focusMode = false; choosingBox = true
         case .previousBox: moveBox(-1)
@@ -307,21 +311,28 @@ struct CommandsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { Text("Workspace commands").font(.title2.bold()); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
-            Text("Leader: \(commands.bindings.leader) · Press twice to send literally").foregroundStyle(.secondary)
-            ForEach(AppShortcutAction.allCases) { action in
-                HStack { Text(action.title); Spacer(); Text(commands.appShortcuts[action]).font(.caption.monospaced()) }
-            }
-            Divider()
-            ForEach(WorkspaceCommand.allCases) { command in
-                Button {
-                    dismiss()
-                    commands.perform(command)
-                } label: {
-                    HStack { Text(command.title); Spacer(); Text(commands.bindings[command]).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                }.buttonStyle(.plain)
-            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("macOS shortcuts").font(.headline)
+                    Text("Press these shortcuts directly; no leader needed.").font(.caption).foregroundStyle(.secondary)
+                    ForEach(AppShortcutAction.allCases) { action in
+                        HStack { Text(action.title); Spacer(); Text(commands.appShortcuts[action]).font(.caption.monospaced()) }
+                    }
+                    Divider()
+                    Text("Leader shortcuts").font(.headline)
+                    Text("Press \(commands.bindings.leader), release it, then press a key below. Press the leader twice to send it to the terminal.").font(.caption).foregroundStyle(.secondary)
+                    ForEach(WorkspaceCommand.allCases) { command in
+                        Button {
+                            dismiss()
+                            commands.perform(command)
+                        } label: {
+                            HStack { Text(command.title); Spacer(); Text(commands.bindings[command]).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                        }.buttonStyle(.plain)
+                    }
 
-        }.padding(24).frame(width: 440)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.padding(24).frame(width: 480, height: 650)
     }
 }
 

@@ -6,10 +6,11 @@ remains the source of truth; boxes stay usable through the CLI and other clients
 This build provides:
 
 - Automatically tries the default local Unix socket on launch, with a connecting screen and manual connection form on failure. Custom Unix socket and HTTP/S endpoints are also supported.
+- Authenticated Iroh connections to remote servers, with an app-owned Keychain identity, saved connections, and enrollment instructions.
 - The server's default project, searchable box lists, running/attention/archive filters, and an inspector. Project selection is internal and has no UI.
 - Repository-grouped sidebar with harness, branch, and server-reported lifecycle state. Right-click a box or use its toolbar action menu to start, stop, rename, archive, restore, upgrade, or repair. Swipe left to reveal Archive; Archived offers Restore and confirmed permanent Purge.
 - Embedded Ghostty terminals with direct keyboard input, selection, copy/paste, and resize. Shift-Enter and Ctrl-Enter use the Discobox TUI’s newline mappings (Escape + Return and line feed).
-- Resumable terminal streams; sessions survive switching boxes and tabs.
+- Resumable terminal streams; sessions survive switching boxes and tabs. Recently viewed running boxes restore their selected terminal immediately while inventory refreshes in the background (up to 12 boxes, 30-second freshness window). Obsolete selection requests are cancelled.
 - Read-only saved screens for stopped boxes and ended terminals.
 - Declared services plus discovered ports and Desktop. Desktop opens in a native WebKit window; other web ports open in the browser through loopback-only TCP forwards; TCP/UDP ports have copyable local addresses. Port collisions are remapped automatically.
 - Configurable command leader and sequences in **Discobox → Settings → Keybindings**.
@@ -23,7 +24,7 @@ This build provides:
 - An isolated demo workspace that never contacts a server.
 
 Selecting a live terminal attaches to its shared stream. Typing goes straight to
-that terminal; there is no input checkbox. Iroh/Discobot authentication remains future work.
+that terminal; there is no input checkbox. Iroh remote connections are supported; Discobot authentication remains future work.
 The implementation sequence is in [PLAN.md](PLAN.md).
 
 ## Build
@@ -59,8 +60,8 @@ open dist/Discobox.app --args --demo
 `unix://` resolves the default socket using the same runtime-directory convention
 as the CLI. A specific socket can be entered as `unix:///absolute/path/server.sock`.
 Use HTTP/S only if the server already listens there; no listener is added or
-backend configuration changed. With required authentication, a server may refuse
-this build because Iroh and Discobot assertions are not implemented yet.
+backend configuration changed. For authenticated remote servers, use an enrolled Iroh peer connection.
+Discobot assertions are not implemented.
 
 The bundle is **ad-hoc signed for local development**, not Developer ID signed or
 notarized. It is not an App Store sandbox build. Distribution signing and helper
@@ -71,6 +72,49 @@ the companion first, then set `DISCOBOX_DESKTOP_BRIDGE` in the run scheme to the
 absolute path of `.build/discobox-desktop-bridge`, and set
 `GHOSTTY_RESOURCES_DIR` to the SDK's `Resources/ghostty` directory. The packaged
 app finds both its companion and resources inside the bundle.
+
+## Remote connections over Iroh
+
+In **Discobox → Settings → Connection**, paste the remote server’s
+`discobox://d1-…` address (`iroh://d1-…` also works). The remote operator must
+already have an Iroh listener configured; this app does not change server settings.
+
+1. Click **Show My Peer ID**, then **Copy Enrollment Command**.
+2. Run that command on the remote host, targeting the intended server:
+   `discobox admin peer add <app-peer-id> --name discobox-desktop`.
+3. Click **Connect**. Successful connections can be selected again from
+   **Saved connections**. Launch still tries the default local socket first.
+
+The GUI has its own stable Ed25519 identity in macOS Keychain, separate from the
+CLI. Enrollment gives default-user access on that server, not access limited to
+a particular box. Forgetting a saved connection does not revoke its peer or erase
+the identity; revoke the peer on the server to remove access. Reinstalling the app
+on the same Mac can reuse the Keychain identity. Another Mac must be enrolled
+separately.
+
+The private seed travels only through an anonymous pipe to the companion. A
+persistent companion uses a fresh transport key certified by that identity and
+shares its Iroh connection through a private, owner-only Unix socket. Terminals,
+audit, approvals, files, usage, and Git source delivery use that transport. Service
+and desktop ports are forwarded to this Mac’s loopback interface; remote localhost
+URLs are not opened directly. Disconnect closes the GUI’s transport, not boxes.
+
+Advanced options support custom HTTPS relay URLs and direct-only connections.
+Custom relays must match the server configuration. Direct-only mode disables
+relays and discovery and requires `?addr=IP:port` on the server address; use it only
+when that address is reachable from your Mac. Default mode uses Discobox’s normal
+relay/discovery configuration.
+
+An HTTP 401/403 indicates refused access; check enrollment/revocation. A transport
+failure can also occur before HTTP when the peer is not enrolled, the server is
+unreachable, or its listener is unavailable. The UI reports that distinction
+without guessing which network condition caused it. Existing terminal streams
+use their normal resume behavior; server-side revocation is checked on subsequent
+requests and is not a promise to terminate every already-open stream immediately.
+
+The helper bundles a signed Iroh native library. The upstream Go binding’s README
+states MIT or Apache-2.0 licensing and is included in the app resources. Full
+third-party notices and Developer ID notarization remain release work.
 
 ## Workspace commands
 
@@ -274,17 +318,20 @@ window ends its viewer connection without stopping the box or Linux desktop.
 A client-only loopback proxy appends the clipboard adapter to the existing page's
 JavaScript module; no backend files are modified.
 
-Remote access: the backend supports enrolled Iroh identities, but this GUI does
-not yet implement Iroh enrollment/transport. Its Unix socket endpoint can instead
-be used with an externally managed SSH tunnel to a remote server socket. HTTPS
-provides transport encryption; the GUI does not yet provide client authentication.
+Remote access uses the enrolled Iroh connection described above. An externally
+managed SSH tunnel to a server socket is also usable through a Unix endpoint.
+Plain HTTP/S connections do not add client authentication.
 
 ### Experimental harness quota display
 
 Expand **Harness usage** at the bottom of the box sidebar. While the section is expanded,
 its read-only collector checks recorded HTTP audit data once a minute, grouped by
 configured harness ID. It searches the latest 200 requests per supported provider
-host and reads at most eight matching response bodies per pass. Successful readings
+host and reads at most eight matching response bodies per pass. Collection and
+parsing run at utility priority outside the UI actor, with a 20-second collection
+budget. Polls never overlap; collapsing/reopening does not bypass the one-minute
+rate limit. Results publish together, and unchanged readings do not trigger new
+sidebar updates. Successful readings
 are cached in memory for the connection, with observation and reset times; switching
 connections clears them. Multiple boxes on one harness do not add their quotas together.
 
@@ -310,3 +357,46 @@ other workspace panes, the boxes sidebar, and the inspector without closing any
 terminals. Press the same button to restore the prior tabs and panel visibility.
 The existing remappable leader command (default **Ctrl-A, z**) and Workspace menu
 provide the same maximize/restore action. Switching boxes leaves maximized mode.
+
+
+### Dialog responsiveness
+
+New Box and the box switcher have a separate presentation host so their visibility
+does not invalidate the complete terminal workspace. The switcher uses lightweight
+rows without sidebar context menus or per-row approval sheets. New Box shares a
+one-minute, connection-scoped harness catalog with the usage display, prefetched
+after connection without blocking it. Repository and prompt fields remain editable
+while a cold catalog loads. Creation still requires a configured harness.
+
+Services display `box port → local port` when remapped. Browser links always use
+the actual local binding reported by the shared Discobox forwarder, including its
+OS-assigned fallback ports. TCP does not identify the application protocol; use
+Open as HTTP/HTTPS for a web server reported as TCP. No background probes are added.
+
+### Harness and credential settings
+
+**Discobox → Settings → Harnesses** lists the connected server's harnesses and
+configuration status. Configure/Reconfigure opens a separate Ghostty setup
+window. The bundled companion reuses Discobox's existing `admin harness configure`
+workflow, including login callback forwarding and exit-status-checked commit;
+it explicitly disables server auto-start. Closing early detaches setup and may
+leave it unfinished on the server. Existing work boxes are not used for setup.
+
+**Discobox → Settings → Credentials** lists credential names, types and destinations,
+with search and confirmed deletion. It does not display secret values. Management
+is scoped to the currently connected server and default project. These controls
+are disabled in demo mode.
+
+### Inspector and tag organization
+
+Services opens in the right inspector, alongside Box and read-only Tags sections.
+Toggle it with **⌘⌥I** (customizable under Settings → Keybindings). Under
+Settings → Appearance, choose a compact service rail or hide the collapsed
+inspector completely. Rail buttons use actual forwarded addresses; their context
+menus offer HTTP/HTTPS and Copy Address.
+
+The boxes dropdown supports grouping by repository, harness, state, a tag key,
+or no grouping. Filter by tag opens a searchable multi-select panel with Match
+All/Match Any. A bare tag key matches its presence; key=value matches exactly.
+Selected tags appear as removable chips. Filtering reads existing metadata and
+does not edit tags or start stopped boxes.

@@ -8,7 +8,7 @@ public struct QuotaWindow: Identifiable, Sendable, Equatable {
     public let resetsAt: Date?
 }
 
-public struct HarnessQuota: Sendable {
+public struct HarnessQuota: Sendable, Equatable {
     public let observedAt: Date
     public let windows: [QuotaWindow]
 }
@@ -63,48 +63,100 @@ public final class HarnessUsage {
     public private(set) var snapshots: [String: HarnessQuota] = [:]
     public private(set) var notices: [String] = []
     public private(set) var isLoading = false
-    private var checked: Set<String> = []
-    public init() {}
+    @ObservationIgnored private var checked: Set<String> = []
+    @ObservationIgnored private var lastAttempt: Date?
+    @ObservationIgnored private let now: () -> Date
+    public init(now: @escaping () -> Date = Date.init) { self.now = now }
 
-    public func refresh(client: any DiscoboxClient, project: String, boxes: [Sandbox]) async {
-        guard !isLoading else { return }
+    public func refresh(client: any DiscoboxClient, project: String, boxes: [Sandbox], configuredHarnesses: [Harness]? = nil) async {
+        // The cadence survives collapsing/reopening the view. Only one poll can
+        // run, even when several UI tasks ask simultaneously.
+        guard !isLoading, lastAttempt.map({ now().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        lastAttempt = now()
         isLoading = true
         defer { isLoading = false }
-        do {
-            harnesses = try await client.decode(.init(.harnesses, projectID: project), as: HarnessList.self).harnessConfigs ?? []
-            let result = try await client.decode(.init(.usage, projectID: project), as: UsageRecords.self)
-            try Task.checkCancellation()
-            notices = result.missing
-            let byBox = Dictionary(boxes.compactMap { box in box.config.harnessConfigId.map { (box.id, $0) } }, uniquingKeysWith: { first, _ in first })
-            var fetched = 0
-            for row in result.records.sorted(by: { $0.createdAt > $1.createdAt }) {
-                guard let harness = byBox[row.sandboxId], let at = QuotaParser.date(row.createdAt),
-                      snapshots[harness].map({ $0.observedAt < at }) ?? true else { continue }
-                let key = row.poolId + ":" + row.id
-                guard !checked.contains(key), fetched < 8 else { continue }
-                fetched += 1
-                do {
-                    let windows: [QuotaWindow]
-                    if row.provider == "claude-headers" {
-                        let result = try await client.decode(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId), as: UsageHeaders.self)
-                        windows = QuotaParser.headers(result.headers)
-                    } else {
-                        let body = try await client.decode(.init(.auditBody, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId, action: "response"), as: UsageBody.self)
-                        guard body.truncated != true, body.recordingTruncatedFrom?.isEmpty != false else {
-                            notices.append("A quota recording was truncated."); continue
-                        }
-                        windows = QuotaParser.parse(body.text, provider: row.provider)
-                    }
-                    try Task.checkCancellation()
-                    if !windows.isEmpty { snapshots[harness] = .init(observedAt: at, windows: windows) }
-                    else { notices.append("An observed quota response had no recognized windows.") }
-                    checked.insert(key)
-                } catch is CancellationError { return }
-                catch { notices.append("A quota recording could not be read.") }
+        let previous = snapshots, visited = checked
+        let work = Task.detached(priority: .utility) {
+            try await withThrowingTaskGroup(of: UsageBatch.self) { group in
+                group.addTask {
+                    try await UsageCollector.collect(client: client, project: project, boxes: boxes,
+                        configured: configuredHarnesses, snapshots: previous, checked: visited)
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(20))
+                    throw DiscoboxError("Usage refresh timed out; keeping previous readings.")
+                }
+                defer { group.cancelAll() }
+                return try await group.next()!
             }
-            if checked.count > 1000 { checked.removeAll() }
+        }
+        do {
+            let batch = try await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: { work.cancel() }
+            try Task.checkCancellation()
+            // Publish once, and only changed values: incremental record updates
+            // used to repeatedly relayout the sidebar and its terminal neighbor.
+            if harnesses != batch.harnesses { harnesses = batch.harnesses }
+            if snapshots != batch.snapshots { snapshots = batch.snapshots }
+            if notices != batch.notices { notices = batch.notices }
+            checked = batch.checked
         } catch is CancellationError { return }
-        catch { notices = ["Usage unavailable: \(error.localizedDescription)"] }
+        catch {
+            guard !Task.isCancelled else { return }
+            let message = ["Usage unavailable: \(error.localizedDescription)"]
+            if notices != message { notices = message }
+        }
+    }
+}
+
+private struct UsageBatch: Sendable {
+    let harnesses: [Harness]
+    let snapshots: [String: HarnessQuota]
+    let notices: [String]
+    let checked: Set<String>
+}
+
+/// All audit decoding, sorting and quota parsing runs outside the UI actor.
+private enum UsageCollector {
+    static func collect(client: any DiscoboxClient, project: String, boxes: [Sandbox], configured: [Harness]?, snapshots initial: [String: HarnessQuota], checked initialChecked: Set<String>) async throws -> UsageBatch {
+        var snapshots = initial, checked = initialChecked
+        var notices: [String] = []
+        let harnesses: [Harness]
+        if let configured { harnesses = configured }
+        else { harnesses = try await client.decode(.init(.harnesses, projectID: project), as: HarnessList.self).harnessConfigs ?? [] }
+        let result = try await client.decode(.init(.usage, projectID: project), as: UsageRecords.self)
+        try Task.checkCancellation()
+        notices = result.missing
+        let byBox = Dictionary(boxes.compactMap { box in box.config.harnessConfigId.map { (box.id, $0) } }, uniquingKeysWith: { first, _ in first })
+        var fetched = 0
+        for row in result.records.sorted(by: { $0.createdAt > $1.createdAt }) {
+            guard let harness = byBox[row.sandboxId], let at = QuotaParser.date(row.createdAt),
+                  snapshots[harness].map({ $0.observedAt < at }) ?? true else { continue }
+            let key = row.poolId + ":" + row.id
+            guard !checked.contains(key), fetched < 8 else { continue }
+            fetched += 1
+            do {
+                let windows: [QuotaWindow]
+                if row.provider == "claude-headers" {
+                    let result = try await client.decode(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId), as: UsageHeaders.self)
+                    windows = QuotaParser.headers(result.headers)
+                } else {
+                    let body = try await client.decode(.init(.auditBody, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId, action: "response"), as: UsageBody.self)
+                    guard body.truncated != true, body.recordingTruncatedFrom?.isEmpty != false else {
+                        notices.append("A quota recording was truncated."); continue
+                    }
+                    windows = QuotaParser.parse(body.text, provider: row.provider)
+                }
+                try Task.checkCancellation()
+                if !windows.isEmpty { snapshots[harness] = .init(observedAt: at, windows: windows) }
+                else { notices.append("An observed quota response had no recognized windows.") }
+                checked.insert(key)
+            } catch is CancellationError { throw CancellationError() }
+            catch { notices.append("A quota recording could not be read.") }
+        }
+        if checked.count > 1000 { checked.removeAll() }
+        return UsageBatch(harnesses: harnesses.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, snapshots: snapshots, notices: Array(Set(notices)).sorted(), checked: checked)
     }
 }
 private struct UsageRecords: Decodable, Sendable {

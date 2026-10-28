@@ -8,7 +8,7 @@ import DiscoboxCore
     private var sessions: [String: ServiceForwardSession] = [:]
     func session(box: String, workspace: Workspace) -> ServiceForwardSession {
         if let session = sessions[box] { return session }
-        let session = ServiceForwardSession(endpoint: workspace.endpointLabel, project: workspace.projectID ?? "", box: box, demo: workspace.isDemo)
+        let session = ServiceForwardSession(endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box, demo: workspace.isDemo)
         sessions[box] = session
         return session
     }

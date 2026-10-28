@@ -81,7 +81,7 @@ struct ServicesView: View {
                 Text(port.serviceName).font(.subheadline.weight(.medium))
             }
             HStack {
-                Text("\(port.port) · \(port.protocol.uppercased())").font(.system(.callout, design: .monospaced))
+                Text("\(port.port == port.local ? String(port.port) : "\(port.port) → \(port.local)") · \(port.protocol.uppercased())").font(.system(.callout, design: .monospaced))
                 Spacer()
                 if let url = port.browserURL {
                     Button {
@@ -90,6 +90,22 @@ struct ServicesView: View {
                     } label: {
                         Label(port.isDesktop ? "Open Desktop" : "Open", systemImage: "arrow.up.right.square")
                     }.disabled(!live || workspace.isDemo)
+                }
+                if port.protocol == "tcp" {
+                    Menu {
+                        ForEach(["http", "https"], id: \.self) { scheme in
+                            if let url = port.browserURL(as: scheme) {
+                                Button("Open as " + scheme.uppercased()) { NSWorkspace.shared.open(url) }
+                            }
+                        }
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.right.square")
+                    } primaryAction: {
+                        if let url = port.browserURL(as: "http") { NSWorkspace.shared.open(url) }
+                    }
+                    .menuIndicator(.visible)
+                    .fixedSize().disabled(!live || workspace.isDemo)
+                    .help("Open using HTTP, or choose a protocol from the menu")
                 }
                 Button {
                     NSPasteboard.general.clearContents()

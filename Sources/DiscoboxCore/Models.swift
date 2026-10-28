@@ -39,6 +39,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     }
     public func matchesSearch(_ query: String) -> Bool {
         let terms = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !terms.isEmpty else { return true }
         let fields = [displayName, id, repository ?? "", harnessName ?? "", config.model ?? "", branch ?? "", meta?.description ?? "", meta?.tags?.values.joined(separator: " ") ?? ""]
         return terms.allSatisfy { term in fields.contains { $0.localizedCaseInsensitiveContains(term) } }
     }
@@ -127,7 +128,7 @@ public struct InputPart: Codable, Sendable, Equatable {
 }
 
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public enum Operation: String, Encodable, Sendable { case deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
     public let operation: Operation
     public let projectID: String?
     public let sandboxID: String?
@@ -163,7 +164,7 @@ public struct DiscoboxError: LocalizedError, Sendable {
     public var errorDescription: String? { message }
 }
 
-public struct Harness: Decodable, Identifiable, Sendable {
+public struct Harness: Decodable, Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let configured: Bool

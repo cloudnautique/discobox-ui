@@ -76,7 +76,7 @@ It resolves the default Unix socket the same way as `pkg/endpoint/default_unix.g
 then `discobox/server.sock`. It never changes backend configuration to expose TCP.
 HTTP/S is supported when the existing server already exposes it. TLS validation
 stays enabled. Redirects are rejected. Current single-user auth is supported;
-Iroh enrollment and Discobot assertions are not implemented in this build.
+Iroh enrollment uses an app-owned Keychain identity and the persistent transport described below. Discobot assertions are not implemented.
 
 Reads are an allowlist of operations, not an arbitrary HTTP proxy. The bounded
 legacy input operation still requires an explicit flag. The GUI now uses a
@@ -252,3 +252,69 @@ Command-Shift-brackets navigate tabs; Command-brackets cycle the two panes.
 These commands are scoped to the workspace window, excluded while a sheet is
 active, and exposed in the native Workspace menu. Tool focus relinquishes the
 terminal responder without stealing focus from an already-clicked text field.
+
+
+## Iroh transport
+
+Remote connections use the existing backend `pkg/endpoint` implementation; no
+backend source changes. `IrohConnection` owns one persistent companion and an
+anonymous stdin pipe whose EOF shuts it down. Keychain holds the GUI enrollment
+seed; the pipe carries it once. The helper certifies an ephemeral transport key
+with the stable enrollment identity, following Discobox's existing peer protocol.
+
+The helper exposes HTTP/WebSocket proxying only on an owner-only Unix socket in a
+random 0700 directory. Its upstream peer is fixed at startup, it forwards only
+`/api/` routes, and it does not follow redirects. Each GUI request, terminal attach,
+and port-forward helper retains its existing authorization/cancellation behavior
+and connects to that socket. No public control-plane listener is created.
+
+Workspace separates the display address (`endpointLabel`) from the effective
+`transportEndpoint`. Disconnect closes the client transport and resets per-host
+state. Reconnect preserves a healthy transport while rebuilding workspace state.
+The endpoint library redials lost QUIC connections; no custom retry of mutation
+requests is added. A crashed helper requires disconnect/connect to start a new
+helper. One active host is supported; saved profiles are not permission scopes.
+
+Offline Go fixtures exercise actual Iroh certificate authentication and HTTP /
+WebSocket proxying, including per-request revocation and socket cleanup. Running
+the same test with `DISCOBOX_TEST_IROH_HELPER` pointing to the packaged companion
+also checks its signed native library and stdin startup/lifetime protocol.
+
+
+## Fast box switching
+
+Ghostty sessions already outlive SwiftUI views. Workspace now also keeps a bounded
+recent-box inventory cache (12 running boxes, 30 seconds from the last successful
+inventory read), including the selected terminal. A warm selection can mount the
+existing surface immediately and revalidate its inventory asynchronously. Cached
+or stopped backend snapshots do not qualify. Connection changes, lifecycle
+actions, observed stopped/removed boxes, and completed terminal closes invalidate
+relevant entries. Closing a terminal while switching away also invalidates that
+box's cached entry. Legacy input opt-in and drafts are never restored.
+
+Selection-owned refresh tasks are cancelled on switching away; CompanionClient's
+existing cancellation closes only those request processes. Revision guards still
+reject late results from clients that do not cooperate with cancellation. Tests
+hold the API response open to verify that warm terminal selection does not depend
+on a response; no wall-clock speed claim depends on a live user backend.
+
+
+## Dialog and usage workload isolation
+
+New Box and the chooser are hosted in a small child view, isolating their
+presentation flags from workspace rendering. The chooser renders lightweight
+rows, and its body computes the filtered/sorted result once. Harness catalog
+reads are coalesced and cached per connection for 60 seconds. A nonblocking
+prefetch after connection warms the New Box picker; usage reuses the same list.
+
+Usage collection runs in a cancellable detached utility task with a 20-second
+budget, sequential bounded recording reads, and at most one attempt per minute.
+Parsing and sorting stay outside MainActor. A single batch of changed results is
+published on MainActor; existing readings remain visible during collection.
+Companion request processes inherit utility QoS for this background workload.
+The section's view task owns cancellation, so collapsing it cancels active usage
+work. Catalog prefetch is shared with the creation UI and has connection lifetime.
+
+The dialog smoke test uses only DemoClient, opens both dialogs twice, edits and
+submits the switcher search through its keyboard delegate, and reports readiness
+timings. It never creates a box or accesses Keychain/backend data.

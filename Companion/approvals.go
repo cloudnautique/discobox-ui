@@ -25,6 +25,12 @@ func (b *bridge) approvals(ctx context.Context, req request) (response, error) {
 	if !b.allowManage {
 		return response{}, errors.New("answering requests requires explicit permission")
 	}
+	if req.Operation == "deleteSecret" {
+		if validID(req.RequestID) != nil {
+			return response{}, errors.New("invalid credential")
+		}
+		return b.call(ctx, "DELETE", base+"/secrets/"+req.RequestID, nil)
+	}
 	if req.Operation == "createSecret" {
 		return b.call(ctx, "POST", base+"/secrets", req.Payload)
 	}

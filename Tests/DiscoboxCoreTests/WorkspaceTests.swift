@@ -98,7 +98,7 @@ import Testing
     await workspace.connect(client: client, label: "fixture")
     #expect(workspace.isConnected)
     #expect(workspace.projectID == "resolved-default")
-    #expect(await client.operations == ["defaultProject", "sandboxes"])
+    #expect(await client.operations.filter { $0 != "harnesses" } == ["defaultProject", "sandboxes"])
     #expect(await client.listedProject == "resolved-default")
 }
 
@@ -123,6 +123,8 @@ private actor DefaultProjectClient: DiscoboxClient {
         case .defaultProject:
             if missing { throw DiscoboxError("No default project") }
             return Data(#"{"id":"resolved-default","name":"My workspace"}"#.utf8)
+        case .harnesses:
+            return Data(#"{"harnessConfigs":[]}"#.utf8)
         case .sandboxes:
             listedProject = request.projectID
             return Data(#"{"sandboxes":[]}"#.utf8)
@@ -248,4 +250,43 @@ private actor FailingInventoryClient: DiscoboxClient {
         if request.operation == .sandboxes { throw DiscoboxError("Fixture server unavailable") }
         return try await demo.perform(request)
     }
+}
+
+@MainActor @Test func slowServicesDoNotDelayLiveTerminalSelection() async throws {
+    let client = GateClient(operation: .services)
+    let workspace = Workspace()
+    workspace.streamsLiveTerminals = true
+    await workspace.connect(client: client, label: "fixture")
+    let pending = Task { await workspace.selectBox("demo-ui") }
+    await client.waitUntilBlocked()
+    // Services remain blocked throughout this check. Allow the independent
+    // inventory request to finish and publish the live terminal.
+    for _ in 0..<100 {
+        if workspace.hasLiveTerminal { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(workspace.hasLiveTerminal)
+    #expect(workspace.execID == "agent-1")
+    await client.release()
+    await pending.value
+    #expect(workspace.detailError == nil)
+}
+
+@MainActor @Test func lateServicesCannotReplaceNewBoxInventory() async {
+    let client = GateClient(operation: .services)
+    let workspace = Workspace()
+    workspace.streamsLiveTerminals = true
+    await workspace.connect(client: client, label: "fixture")
+    let pending = Task { await workspace.selectBox("demo-ui") }
+    await client.waitUntilBlocked()
+    await workspace.selectBox("demo-api")
+    let services = workspace.services
+    let observedAt = workspace.servicesObservedAt
+    let execs = workspace.execs
+    await client.release()
+    await pending.value
+    #expect(workspace.sandboxID == "demo-api")
+    #expect(workspace.services == services)
+    #expect(workspace.servicesObservedAt == observedAt)
+    #expect(workspace.execs == execs)
 }

@@ -1,5 +1,5 @@
 // discobox-desktop-bridge is a bounded, unprivileged client. It never runs the
-// Discobox CLI or launches a backend. Explicit repository delivery uses a
+// general-purpose Discobox CLI or launches a backend. Explicit repository delivery uses a
 // temporary loopback Git proxy scoped to the newly created box.
 package main
 
@@ -64,11 +64,14 @@ type bridge struct {
 }
 
 func main() {
+	irohProxy := flag.Bool("iroh-proxy", false, "Keep an authenticated Iroh connection behind a private socket")
+	irohIdentity := flag.Bool("iroh-identity", false, "Print the public identity supplied over stdin")
 	endpoint := flag.String("endpoint", "unix://", "An existing Discobox endpoint")
 	allowInput := flag.Bool("allow-input", false, "Allow one explicit terminal input request")
 	desktop := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
 	desktopURL := flag.String("desktop-url", "", "Existing local desktop forward")
 	forward := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
+	configure := flag.String("configure-harness", "", "Run only a harness interactive setup flow")
 	attach := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
 	project := flag.String("project", "", "Project ID")
 	box := flag.String("box", "", "Box ID")
@@ -77,6 +80,21 @@ func main() {
 	allowShell := flag.Bool("allow-shell", false, "Allow one explicitly requested new shell")
 	allowManage := flag.Bool("allow-manage", false, "Allow one explicit management, approval, tool launch, or file transfer request")
 	flag.Parse()
+	if *configure != "" {
+		if err := runHarnessSetup(*endpoint, *project, *configure); err != nil {
+			fmt.Fprintf(os.Stderr, "\r\nSetup failed: %s\r\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, "\r\nSetup completed successfully. You can close this window.")
+		return
+	}
+	if *irohProxy || *irohIdentity {
+		if err := runIroh(*endpoint, *irohIdentity, os.Stdin, os.Stdout); err != nil {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error()})
+			os.Exit(1)
+		}
+		return
+	}
 	if *demo {
 		_ = terminalDemo()
 		return
@@ -295,7 +313,7 @@ func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
 	case "boxAction":
 		return b.boxAction(ctx, req)
-	case "approvals", "secrets", "answer", "createSecret", "ruleProposals":
+	case "deleteSecret", "approvals", "secrets", "answer", "createSecret", "ruleProposals":
 		return b.approvals(ctx, req)
 	case "tools", "openTool", "newAgent":
 		return b.toolOperation(ctx, req)

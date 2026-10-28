@@ -31,7 +31,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
     public var pretty: String { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; return (try? e.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
 }
 public struct ApprovalInbox: Decodable, Sendable { public let approvalRequests: [ApprovalItem] }
-public struct ApprovalItem: Decodable, Identifiable, Sendable {
+public struct ApprovalItem: Decodable, Identifiable, Sendable, Equatable {
     public let kind: String
     public let credential: JSONValue?
     public let trust: JSONValue?

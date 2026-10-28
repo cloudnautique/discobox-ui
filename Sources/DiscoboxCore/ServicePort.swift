@@ -11,7 +11,13 @@ public struct ServicePort: Decodable, Identifiable, Sendable {
     public var address: String { "127.0.0.1:\(local)" }
     public var browserURL: URL? {
         guard ["http", "https"].contains(`protocol`), (1...65535).contains(local) else { return nil }
-        return URL(string: "\(`protocol`)://\(address)")
+        return browserURL(as: `protocol`)
+    }
+    /// Explicit user choice for a TCP port whose application protocol is unknown.
+    public func browserURL(as scheme: String) -> URL? {
+        guard ["tcp", "http", "https"].contains(`protocol`), ["http", "https"].contains(scheme),
+              (1...65535).contains(local) else { return nil }
+        return URL(string: "\(scheme)://\(address)")
     }
 }
 public struct ServiceForwardSnapshot: Decodable, Sendable {

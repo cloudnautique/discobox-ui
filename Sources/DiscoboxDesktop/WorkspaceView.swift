@@ -7,11 +7,37 @@ struct WorkspaceView: View {
     @State private var refreshingBoxes = false
     @State private var showInbox = false
     @State private var boxAction: BoxActionRequest?
-    @State private var collapsedRepositories: Set<String> = []
-    @AppStorage("groupBoxesByRepository") private var groupByRepository = true
+    @AppStorage("collapsedRepositoryGroups") private var collapsedRepositoryData = "[]"
+    private var collapsedRepositories: Set<String> {
+        get { Set((try? JSONDecoder().decode([String].self, from: Data(collapsedRepositoryData.utf8))) ?? []) }
+        nonmutating set { collapsedRepositoryData = String(data: (try? JSONEncoder().encode(newValue.sorted())) ?? Data(), encoding: .utf8) ?? "[]" }
+    }
+    @AppStorage("boxGrouping") private var grouping = "repository"
+    @AppStorage("boxGroupingTagKey") private var groupingTagKey = ""
+    @AppStorage("inspectorCompactRail") private var compactRail = true
+    private var inspectorRailVisible: Bool { compactRail && !commands.showInspector && workspace.selectedBox != nil }
+    @State private var selectedTags: Set<String> = []
+    @State private var matchAnyTag = false
+    @State private var showTagFilters = false
+    private var tagKeys: [String] { Set(workspace.sandboxes.flatMap { Array(($0.meta?.tags ?? [:]).keys) }).sorted() }
+    private var tagChoices: [String] {
+        Set(workspace.sandboxes.flatMap { box in
+            (box.meta?.tags ?? [:]).flatMap { key, value in value.isEmpty ? [key] : [key, key + "=" + value] }
+        }).sorted()
+    }
+    private func collapseKey(_ group: String) -> String { grouping == "repository" ? group : grouping + ":" + groupingTagKey + ":" + group }
+
     var body: some View {
         @Bindable var workspace = workspace
         @Bindable var commands = commands
+        let waiting = Set(workspace.approvals.map(\.boxID))
+        let visibleBoxes = workspace.visibleBoxes.filter { BoxOrganization.matches(tags: $0.meta?.tags ?? [:], selectors: selectedTags, matchAny: matchAnyTag) }.enumerated().sorted { lhs, rhs in
+            func rank(_ box: Sandbox) -> Int { waiting.contains(box.id) || box.matchesAttention ? 0 : (box.isRunning ? 1 : 2) }
+            let left = rank(lhs.element), right = rank(rhs.element)
+            return left == right ? lhs.offset < rhs.offset : left < right
+        }.map(\.element)
+        let groupedBoxes = Dictionary(grouping: visibleBoxes) { BoxOrganization.group($0, by: grouping, tagKey: groupingTagKey) }
+        let repositories = groupedBoxes.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         Group {
             if workspace.isConnecting {
                 VStack(spacing: 18) {
@@ -31,50 +57,74 @@ struct WorkspaceView: View {
                                     ForEach(Workspace.BoxFilter.allCases) { Text($0.rawValue).tag($0) }
                                 }.pickerStyle(.inline)
                                 Divider()
-                                Toggle("Group by repository", isOn: $groupByRepository)
+                                Menu("Group by") {
+                                    Picker("Group by", selection: $grouping) {
+                                        Text("Repository").tag("repository")
+                                        Text("Harness").tag("harness")
+                                        Text("State").tag("state")
+                                        Text("None").tag("none")
+                                    }
+                                    Menu("Tag…") {
+                                        ForEach(tagKeys, id: \.self) { key in
+                                            Button { groupingTagKey = key; grouping = "tag" } label: {
+                                                if grouping == "tag" && groupingTagKey == key { Label(key, systemImage: "checkmark") }
+                                                else { Text(key) }
+                                            }
+                                        }
+                                    }.disabled(tagKeys.isEmpty)
+                                }
+                                Button("Filter by tag…") { showTagFilters = true }.disabled(tagChoices.isEmpty)
+                                Button("Clear tag filters") { selectedTags.removeAll() }.disabled(selectedTags.isEmpty)
                             } label: { Text(workspace.filter.rawValue).fontWeight(.semibold) }
                             .menuStyle(.borderlessButton).fixedSize()
                             Spacer()
                             Button { commands.showCreateBox = true } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New box")
                             if refreshingBoxes { ProgressView().controlSize(.small) }
-                            Text("\(workspace.visibleBoxes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text("\(visibleBoxes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }.padding(.horizontal, 16).padding(.vertical, 12)
                         TextField("Find a box", text: $workspace.searchText)
                             .textFieldStyle(.roundedBorder).padding(.horizontal, 10).padding(.bottom, 8)
+                        if !selectedTags.isEmpty {
+                            ScrollView(.horizontal) {
+                                HStack(spacing: 5) {
+                                    Text(matchAnyTag ? "Any:" : "All:").font(.caption2).foregroundStyle(.secondary)
+                                    ForEach(selectedTags.sorted(), id: \.self) { tag in
+                                        Button { selectedTags.remove(tag) } label: {
+                                            HStack(spacing: 4) { Text(tag); Image(systemName: "xmark").font(.system(size: 8)) }
+                                                .font(.caption).padding(.horizontal, 7).padding(.vertical, 4)
+                                                .background(.quaternary, in: Capsule())
+                                        }.buttonStyle(.plain).help("Remove filter: " + tag)
+                                    }
+                                }
+                            }.padding(.horizontal, 10).padding(.bottom, 6)
+                        }
                         List(selection: Binding(get: { workspace.sandboxID }, set: { id in Task { await workspace.selectBox(id) } })) {
-                            if groupByRepository {
-                                ForEach(repositoryGroups, id: \.self) { repository in
-                                    Section(isExpanded: Binding(
-                                        get: { !collapsedRepositories.contains(repository) },
-                                        set: { expanded in
-                                            if expanded { collapsedRepositories.remove(repository) }
-                                            else { collapsedRepositories.insert(repository) }
-                                        }
-                                    )) {
-                                        ForEach(boxes(in: repository)) { box in sidebarRow(box) }
-                                    } header: {
-                                        HStack(alignment: .top, spacing: 7) {
-                                            Image(systemName: "folder").foregroundStyle(.secondary)
-                                            Text(repository).fontWeight(.semibold).foregroundStyle(.primary)
-                                                .lineLimit(2).help(repository)
-                                            Spacer(minLength: 4)
-                                            Text("\(boxes(in: repository).count)").monospacedDigit().foregroundStyle(.secondary)
-                                        }
-                                        .font(.caption).textCase(nil)
-                                        .padding(.top, 10).padding(.bottom, 5)
-                                        .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
-                                        .accessibilityLabel("\(repository), \(boxes(in: repository).count) boxes")
+                            if grouping != "none" {
+                                ForEach(repositories, id: \.self) { repository in
+                                    let boxes = groupedBoxes[repository] ?? []
+                                    Button {
+                                        if collapsedRepositories.contains(collapseKey(repository)) { collapsedRepositories.remove(collapseKey(repository)) }
+                                        else { collapsedRepositories.insert(collapseKey(repository)) }
+                                    } label: {
+                                        RepositoryGroupHeader(repository: repository, count: boxes.count, symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
+                                                              expanded: !collapsedRepositories.contains(collapseKey(repository)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 4, trailing: 0))
+                                    .accessibilityLabel("\(repository), \(boxes.count) boxes")
+                                    .accessibilityValue(collapsedRepositories.contains(collapseKey(repository)) ? "Collapsed" : "Expanded")
+                                    if !collapsedRepositories.contains(collapseKey(repository)) {
+                                        ForEach(boxes) { box in sidebarRow(box) }
                                     }
                                 }
                             } else {
-                                ForEach(workspace.visibleBoxes) { box in sidebarRow(box) }
+                                ForEach(visibleBoxes) { box in sidebarRow(box) }
                             }
                         }.listStyle(.sidebar).frame(minHeight: 120)
                         .refreshable { await refreshBoxes() }
                         .background(BoxPullToRefresh { await refreshBoxes() })
                         .help("Pull down at the top to refresh, or press ⌘R.")
                         .accessibilityAction(named: Text("Refresh boxes")) { Task { await refreshBoxes() } }
-                        Divider()
                         if !commands.focusMode { HarnessUsageSection().layoutPriority(1) }
                     }.frame(minWidth: commands.focusMode ? 0 : 220,
                             idealWidth: commands.focusMode ? 0 : 270,
@@ -84,13 +134,18 @@ struct WorkspaceView: View {
                         .accessibilityHidden(commands.focusMode)
                         .accessibilityLabel("Boxes")
                     VStack(spacing: 0) {
-                        Group {
-                            if let box = workspace.selectedBox { BoxWorkspaceView(box: box).id(workspace.connectionID.uuidString + box.id) }
-                            else { ContentUnavailableView("Choose a box", systemImage: "shippingbox", description: Text("Your agent sessions, shells, and services in one workspace.")) }
+                        HStack(spacing: 0) {
+                            Group {
+                                if let box = workspace.selectedBox { BoxWorkspaceView(box: box).id(workspace.connectionID.uuidString + box.id) }
+                                else { ContentUnavailableView("Choose a box", systemImage: "shippingbox", description: Text("Your agent sessions, shells, and services in one workspace.")) }
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if inspectorRailVisible, let box = workspace.selectedBox {
+                                ServiceRail(box: box).id(workspace.connectionID.uuidString + box.id)
+                            }
                         }
                         .inspector(isPresented: $commands.showInspector) {
-                            if let box = workspace.selectedBox { BoxInspector(box: box) }
-                        }.inspectorColumnWidth(min: 220, ideal: 260, max: 340)
+                            if let box = workspace.selectedBox { WorkspaceInspector(box: box).id(workspace.connectionID.uuidString + box.id) }
+                        }.inspectorColumnWidth(min: 320, ideal: 360, max: 480)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
 
@@ -112,6 +167,11 @@ struct WorkspaceView: View {
                     Spacer()
                     Circle().fill(workspace.connectionError == nil ? Color.green : .orange).frame(width: 6, height: 6)
                     Text(workspace.isDemo ? "Demo" : (workspace.connectionError == nil ? "Connected" : "Connection interrupted")).font(.caption).foregroundStyle(.secondary)
+                    if workspace.endpointLabel.hasPrefix("discobox://") || workspace.endpointLabel.hasPrefix("iroh://") {
+                        Text(URLComponents(string: workspace.endpointLabel)?.host ?? "Remote")
+                            .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).frame(maxWidth: 160)
+                            .help(workspace.endpointLabel)
+                    }
                     Button { Task { await workspace.reconnect() } } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless).help("Reconnect to server")
                         .disabled(workspace.isConnecting)
@@ -139,8 +199,12 @@ struct WorkspaceView: View {
                             } label: { Image(systemName: "ellipsis.circle") }
                             .menuStyle(.borderlessButton).fixedSize()
                             .disabled(workspace.selectedBox == nil).help("Actions for this box")
-                            Button { commands.showInspector.toggle() } label: { Image(systemName: "sidebar.right") }
-                                .buttonStyle(.borderless).help("Show or hide box details")
+                            Button { commands.toggleInspector() } label: { Image(systemName: "sidebar.right") }
+                                .buttonStyle(.borderless).help("Toggle inspector (" + commands.appShortcuts[.toggleInspector] + ")")
+                                .opacity(inspectorRailVisible ? 0 : 1)
+                                .disabled(inspectorRailVisible)
+                                .allowsHitTesting(!inspectorRailVisible)
+                                .accessibilityHidden(inspectorRailVisible)
                         }.frame(width: 70)
                     }
                 }
@@ -165,14 +229,11 @@ struct WorkspaceView: View {
         .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
         .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
         .sheet(isPresented: $commands.showCommands) { CommandsSheet().environment(commands) }
-        .sheet(isPresented: $commands.showCreateBox) { NewBoxSheet().environment(workspace) }
-        .sheet(isPresented: $commands.choosingBox) { BoxChooser().environment(workspace) }
-    }
-    private var repositoryGroups: [String] {
-        Set(workspace.visibleBoxes.map { $0.repository ?? "No repository" }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
-    private func boxes(in repository: String) -> [Sandbox] {
-        workspace.visibleBoxes.filter { ($0.repository ?? "No repository") == repository }
+        .background { WorkspaceDialogs() }
+        .sheet(isPresented: $showTagFilters) {
+            TagFilterSheet(choices: tagChoices, selected: $selectedTags, matchAny: $matchAnyTag)
+        }
+        .onChange(of: workspace.connectionID) { _, _ in selectedTags.removeAll() }
     }
     private func openShell(in box: Sandbox) {
         let connection = workspace.connectionID
@@ -229,6 +290,17 @@ struct WorkspaceView: View {
     }
 }
 
+private struct WorkspaceDialogs: View {
+    @Environment(Workspace.self) private var workspace
+    @Environment(WorkspaceCommands.self) private var commands
+    var body: some View {
+        @Bindable var commands = commands
+        Color.clear.frame(width: 0, height: 0)
+            .sheet(isPresented: $commands.showCreateBox) { NewBoxSheet().environment(workspace) }
+            .sheet(isPresented: $commands.choosingBox) { BoxChooser().environment(workspace) }
+    }
+}
+
 private struct BoxChooser: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
@@ -236,32 +308,59 @@ private struct BoxChooser: View {
     @State private var selected: String?
     private var results: [Sandbox] { workspace.switcherBoxes.filter { $0.matchesSearch(query) } }
     var body: some View {
+        let matches = results
+        let waiting = Set(workspace.approvals.map(\.boxID))
         VStack(alignment: .leading) {
             HStack { Text("Switch box").font(.title2.bold()); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
             BoxChooserSearch(text: $query, move: move, choose: choose, cancel: { dismiss() })
                 .frame(height: 24)
             ScrollViewReader { reader in
                 List(selection: $selected) {
-                    ForEach(results) { box in
-                        Button { select(box.id) } label: { BoxRow(box: box) }.buttonStyle(.plain).tag(box.id)
+                    ForEach(matches) { box in
+                        Button { select(box.id) } label: { BoxChooserRow(box: box, needsAttention: box.matchesAttention || waiting.contains(box.id)) }.buttonStyle(.plain).tag(box.id)
                     }
                 }.listStyle(.inset)
-                    .overlay { if results.isEmpty { ContentUnavailableView("No matching boxes", systemImage: "magnifyingglass") } }
+                    .overlay { if matches.isEmpty { ContentUnavailableView("No matching boxes", systemImage: "magnifyingglass") } }
                     .onChange(of: selected) { _, id in if let id { reader.scrollTo(id) } }
             }
             Text("↑ ↓ Select   ·   Return Switch   ·   Esc Cancel").font(.caption).foregroundStyle(.secondary)
         }.padding(20).frame(width: 460, height: 480)
-            .onChange(of: results.map(\.id), initial: true) { _, ids in
+            .onChange(of: matches.map(\.id), initial: true) { _, ids in
                 if selected == nil || !ids.contains(selected!) { selected = ids.first }
             }
     }
     private func move(_ delta: Int) {
-        guard !results.isEmpty else { return }
-        let index = results.firstIndex { $0.id == selected } ?? 0
-        selected = results[min(max(index + delta, 0), results.count - 1)].id
+        let matches = results
+        guard !matches.isEmpty else { return }
+        let index = matches.firstIndex { $0.id == selected } ?? 0
+        selected = matches[min(max(index + delta, 0), matches.count - 1)].id
     }
     private func choose() { if let id = selected, results.contains(where: { $0.id == id }) { select(id) } }
     private func select(_ id: String) { Task { await workspace.selectBox(id) }; dismiss() }
+}
+
+/// The switcher has no per-row sheets, approval buttons, or context menus.
+private struct BoxChooserRow: View {
+    let box: Sandbox
+    let needsAttention: Bool
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if needsAttention {
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.caption)
+                    .accessibilityLabel("Needs attention").padding(.top, 3)
+            } else {
+                Circle().fill(box.isRunning ? Color.green : .secondary.opacity(0.5))
+                    .frame(width: 7, height: 7).padding(.top, 5)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(box.displayName).fontWeight(.medium).lineLimit(2)
+                Text([box.harnessName, box.repository, box.branch].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Text(box.status).font(.caption).foregroundStyle(.secondary)
+        }.padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
 }
 
 /// NSTextField's field editor consumes arrows before SwiftUI key handlers.
@@ -312,6 +411,33 @@ private struct BoxChooserSearch: NSViewRepresentable {
     }
 }
 
+private struct RepositoryGroupHeader: View {
+    let repository: String
+    let count: Int
+    let symbol: String
+    let expanded: Bool
+    private var parts: [String] { repository.split(separator: "/").map(String.init) }
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+            Image(systemName: symbol).foregroundStyle(.secondary)
+            if symbol == "folder" && parts.count > 1 {
+                (Text(parts.dropLast().joined(separator: "/") + " / ").foregroundColor(.secondary)
+                 + Text(parts.last ?? repository).bold())
+                    .lineLimit(1).truncationMode(.middle)
+            } else { Text(repository).bold().lineLimit(1) }
+            Spacer(minLength: 2)
+            Text(String(count)).monospacedDigit().foregroundStyle(.secondary)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+        .font(.caption).padding(.horizontal, 8).padding(.vertical, 7)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 5))
+        .contentShape(Rectangle()).help(repository)
+    }
+}
+
 struct BoxRow: View {
     let box: Sandbox
     @Environment(Workspace.self) private var workspace
@@ -332,14 +458,16 @@ struct BoxRow: View {
                     Text(box.harnessName ?? box.config.name ?? "Agent").lineLimit(1)
                     Spacer(minLength: 4)
                     if workspace.pendingBoxActions.contains(box.id) { ProgressView().controlSize(.mini) }
-                    else { Text(box.status) }
+                    if let branch = box.branch, !branch.isEmpty {
+                        Label(branch, systemImage: "arrow.triangle.branch")
+                            .font(.caption2).lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: 110, alignment: .trailing)
+                    }
                 }.font(.caption).foregroundStyle(.secondary)
-                if let branch = box.branch, !branch.isEmpty {
-                    Label(branch, systemImage: "arrow.triangle.branch").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                }
             }
         }.padding(.vertical, 5)
-        .help([box.displayName, box.repository, box.harnessName, box.branch, box.runtime.errorMessage].compactMap { $0 }.joined(separator: "\n"))
+        .accessibilityValue(box.status)
+        .help([box.displayName, box.status, box.repository, box.harnessName, box.branch, box.runtime.errorMessage].compactMap { $0 }.joined(separator: "\n"))
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
     }
 }
@@ -407,5 +535,37 @@ struct WelcomeView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+    }
+}
+
+private struct TagFilterSheet: View {
+    let choices: [String]
+    @Binding var selected: Set<String>
+    @Binding var matchAny: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Filter by tag").font(.title2.bold())
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            Picker("Matching", selection: $matchAny) {
+                Text("Match all").tag(false)
+                Text("Match any").tag(true)
+            }.pickerStyle(.segmented)
+            TextField("Find a tag", text: $search).textFieldStyle(.roundedBorder)
+            List(choices.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { tag in
+                Toggle(tag, isOn: Binding(get: { selected.contains(tag) }, set: { on in
+                    if on { selected.insert(tag) } else { selected.remove(tag) }
+                })).toggleStyle(.checkbox)
+            }
+            HStack {
+                Text("\(selected.count) selected").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear filters") { selected.removeAll() }.disabled(selected.isEmpty)
+            }
+        }.padding(20).frame(width: 420, height: 460)
     }
 }

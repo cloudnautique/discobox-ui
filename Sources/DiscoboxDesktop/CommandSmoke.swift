@@ -89,7 +89,8 @@ import DiscoboxCore
             post(window, code: 1, text: "S", plain: "s", flags: .shift)
             try await Task.sleep(for: .milliseconds(100))
             post(window, code: 29, text: "0")
-            try await wait { commands.tab == .services }
+            try await wait { commands.showInspector && commands.inspectorSection == "services" }
+            commands.showInspector = false
             print("COMMAND: services"); fflush(stdout)
             // Bindings are active across the workspace, not in editable fields.
             let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
@@ -123,22 +124,23 @@ import DiscoboxCore
             print("COMMAND: split"); fflush(stdout)
             let beforeMaximize = commands.currentLayout!.selected
             let beforeFocus = commands.currentLayout!.agentFocused
+            let beforeSidebar = commands.focusMode
             commands.showInspector = true
             commands.perform(.focus)
             try await wait {
                 guard commands.isAgentMaximized, let view = terminalViews(window.contentView!).first,
                       terminalViews(window.contentView!).count == 1 else { return false }
                 let frame = view.convert(view.bounds, to: nil)
-                return frame.minX <= 2 && frame.maxX >= window.contentLayoutRect.maxX - 2
+                return frame.minX >= 0 && frame.maxX <= window.contentLayoutRect.maxX + 2
             }
-            guard commands.focusMode && !commands.showInspector,
+            guard commands.focusMode == beforeSidebar && !commands.showInspector,
                   commands.currentLayout?.selected == "agent",
                   terminalViews(window.contentView!).first === splitViews[0] else {
                 throw Failure("maximization did not isolate the existing agent")
             }
             commands.perform(.focus)
             try await wait { !commands.isAgentMaximized && terminalViews(window.contentView!).count == 2 }
-            guard !commands.focusMode && commands.showInspector,
+            guard commands.focusMode == beforeSidebar && commands.showInspector,
                   commands.currentLayout?.selected == beforeMaximize,
                   commands.currentLayout?.agentFocused == beforeFocus else {
                 throw Failure("maximization did not restore the previous layout")
@@ -202,10 +204,8 @@ import DiscoboxCore
             guard terminalViews(window.contentView!).contains(where: { $0 === splitViews[0] }) else { throw Failure("pinned agent remounted on tab wrap") }
             post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "audit" && window.firstResponder is NSTextView }
-            // Cmd-{ crosses Services then returns to the shell; Cmd-[ moves focus
+            // Cmd-{ returns to the shell; Cmd-[ moves focus
             // between its two panes without changing the selected tab.
-            post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
-            try await wait { commands.currentLayout?.selected == "services" }
             post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "exec:shell-1" && terminalViews(window.contentView!).count == 2 }
             guard terminalViews(window.contentView!).contains(where: { $0 === splitViews[1] }) else { throw Failure("tab switch replaced retained shell") }
@@ -215,8 +215,6 @@ import DiscoboxCore
             guard commands.currentLayout?.selected == "exec:shell-1" else { throw Failure("pane navigation changed tab") }
             post(window, code: 30, text: "]", flags: .command)
             try await wait { window.firstResponder === splitViews[1] }
-            post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
-            try await wait { commands.currentLayout?.selected == "services" }
             post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "audit" && terminalViews(window.contentView!).count == 1 }
             try await wait { !(window.firstResponder is GhosttyTerminalView) }

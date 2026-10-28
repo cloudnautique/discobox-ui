@@ -508,3 +508,29 @@ Discobox's TUI source confirms it inherits the host terminal background rather
 than defining one fixed background palette. Native controls/focus use a softer
 brand purple, with subtle filled/outlined selected tool tabs. Updated offline
 command smoke passed and the palette snapshot was inspected. App rebuilt.
+
+
+## Iroh remote connections — implemented
+
+- App-owned Keychain identity; manual server enrollment using a copyable public ID
+  and command. No backend changes or automatic listener configuration.
+- Saved connection names, addresses and relay settings; one active host. Default
+  startup remains local. Remote transport sockets are separate from display URLs.
+- Persistent Go helper reusing `pkg/endpoint`, ephemeral certified transport keys,
+  private Unix HTTP/WebSocket proxy, stdin lifetime and owner-only permissions.
+- Existing terminal, service, desktop, file and source-delivery helpers use the
+  private socket. Normal reconnect preserves the transport; disconnect closes it.
+- Custom relays and direct-only mode with explicit address hints.
+- Native library bundled and ad-hoc signed; upstream licensing README included.
+- Offline tests cover shared helper lifetime, workspace separation, real Iroh
+  authentication, HTTP, WebSockets, revocation and cleanup. The same transport
+  fixture can exercise the packaged helper using DISCOBOX_TEST_IROH_HELPER.
+
+Remaining validation: a two-host enrollment and NAT/relay test on a designated
+remote test server. Existing user instances are not used by automated tests.
+
+Validation for this implementation: 39 Swift tests, Go race tests/vet, and the
+packaged-helper Iroh fixtures pass. Bundle signature verification passes. The
+broader offline GUI command smoke did not complete: inspector/maximize timing
+and native key-window acquisition failed in separate runs. No layout code was
+changed to work around those failures. Two-host relay/NAT validation remains.

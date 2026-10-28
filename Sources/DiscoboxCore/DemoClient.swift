@@ -42,6 +42,7 @@ public actor DemoClient: DiscoboxClient {
             return Data((pendingRequests ? #"{"approvalRequests":[{"kind":"credential","credential":{"id":"demo-request","sandboxId":"demo-ui","status":"pending","name":"GitHub","hosts":["api.github.com"],"grantTTLSeconds":3600,"justification":"Read repository issues to investigate a reported bug.","policy":{"statements":[{"effect":"allow","actions":["read"],"resource":{"type":"issue"}}],"resolved":{"primary.repo":"example/project"}}}}]}"# : #"{"approvalRequests":[]}"#).utf8)
         case .secrets: return Data(#"{"secrets":[{"id":"demo-token","name":"GitHub token","host":"api.github.com","maxGrantTTLSeconds":28800}]}"#.utf8)
         case .answer: lastApprovalAction = request.action; pendingRequests = false; return Data("{}".utf8)
+        case .deleteSecret: return Data("{}".utf8)
         case .createSecret: return Data(#"{"id":"demo-token"}"#.utf8)
         case .ruleProposals: return Data("{}".utf8)
         case .harnesses:

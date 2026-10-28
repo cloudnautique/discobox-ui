@@ -101,14 +101,17 @@ struct TerminalIdentity: Hashable {
     var ended = false
     var error: String?
     private var monitor: Task<Void, Never>?
-    init(identity: TerminalIdentity) {
+    convenience init(identity: TerminalIdentity) {
+        let args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec]
+        self.init(arguments: args)
+    }
+    init(arguments: [String]) {
         view = GhosttyTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
         view.ended = { [weak self] in self?.ended = true }
         view.failed = { [weak self] message in self?.error = message }
-        let args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec]
         // Ghostty executes command through a shell. Quote every argument,
         // including the bundled path; endpoint text must never become shell code.
-        let command = ([CompanionLocation.executable.path] + args).map(Self.quote).joined(separator: " ")
+        let command = ([CompanionLocation.executable.path] + arguments).map(Self.quote).joined(separator: " ")
         error = view.start(command: command)
         monitor = Task { [weak self] in
             while !Task.isCancelled {
@@ -127,6 +130,13 @@ struct TerminalIdentity: Hashable {
     func session(_ identity: TerminalIdentity) -> TerminalSession {
         if let value = sessions[identity] { return value }
         let value = TerminalSession(identity: identity); sessions[identity] = value; return value
+    }
+    func focus(_ identity: TerminalIdentity) {
+        guard let view = sessions[identity]?.view else { return }
+        DispatchQueue.main.async { [weak view] in
+            guard let view, let window = view.window, window.isKeyWindow else { return }
+            window.makeFirstResponder(view)
+        }
     }
     func reconnect(_ identity: TerminalIdentity) {
         sessions.removeValue(forKey: identity)?.close()
@@ -163,7 +173,7 @@ struct LiveTerminal: View {
     }
 }
 
-private struct TerminalSurface: NSViewRepresentable {
+struct TerminalSurface: NSViewRepresentable {
     let view: GhosttyTerminalView
     let focused: Bool
     let onFocus: (() -> Void)?
@@ -213,8 +223,9 @@ private struct TerminalSurface: NSViewRepresentable {
     override func layout() {
         super.layout()
         guard let terminal = subviews.first as? GhosttyTerminalView else { return }
-        terminal.frame = bounds
-        terminal.refreshPresentation()
+        // Frame changes schedule a resize; routine SwiftUI layout passes should
+        // not force a synchronous renderer draw on the main thread.
+        if terminal.frame != bounds { terminal.frame = bounds }
     }
 }
 
@@ -277,6 +288,7 @@ private struct TerminalSurface: NSViewRepresentable {
         ghostty_surface_refresh(surface)
         ghostty_surface_draw(surface)
     }
+    private var contentScale: CGFloat?
     private var resizeScheduled = false
     private func scheduleResize() {
         guard window != nil, !resizeScheduled else { return }
@@ -290,7 +302,10 @@ private struct TerminalSurface: NSViewRepresentable {
     private func resizeSurface() {
         guard window != nil, let surface, bounds.width > 0, bounds.height > 0 else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        ghostty_surface_set_content_scale(surface, scale, scale)
+        if contentScale != scale {
+            ghostty_surface_set_content_scale(surface, scale, scale)
+            contentScale = scale
+        }
         let pixels = convertToBacking(bounds.size)
         let current = ghostty_surface_size(surface)
         let width = UInt32(pixels.width.rounded())

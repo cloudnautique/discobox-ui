@@ -17,12 +17,13 @@ import Testing
 
 private actor UsageFixture: DiscoboxClient {
     var bodyReads = 0
+    var usageReads = 0
     let truncated: Bool
     init(truncated: Bool = false) { self.truncated = truncated }
     func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
         case .harnesses: return Data(#"{"harnessConfigs":[{"id":"h","name":"Codex work","configured":true}]}"#.utf8)
-        case .usage: return Data(#"{"records":[{"id":"http_2","poolId":"pool","sandboxId":"box2","createdAt":"2026-10-27T17:00:00Z","provider":"codex"},{"id":"http_1","poolId":"pool","sandboxId":"box1","createdAt":"2026-10-27T16:00:00Z","provider":"codex"}],"missing":[]}"#.utf8)
+        case .usage: usageReads += 1; return Data(#"{"records":[{"id":"http_2","poolId":"pool","sandboxId":"box2","createdAt":"2026-10-27T17:00:00Z","provider":"codex"},{"id":"http_1","poolId":"pool","sandboxId":"box1","createdAt":"2026-10-27T16:00:00Z","provider":"codex"}],"missing":[]}"#.utf8)
         case .auditBody:
             bodyReads += 1
             return try JSONSerialization.data(withJSONObject: ["text": #"{"rate_limit":{"primary_window":{"used_percent":70}}}"#, "truncated": truncated])
@@ -57,4 +58,42 @@ private actor UsageFixture: DiscoboxClient {
     #expect(windows.first?.resetsAt == Date(timeIntervalSince1970: 1793142000))
     #expect(QuotaParser.headers(["anthropic-ratelimit-unified-5h-utilization": ["NaN"]]).isEmpty)
     #expect(QuotaParser.headers(["anthropic-ratelimit-unified-5h-utilization": ["10"]]).isEmpty)
+}
+
+
+@MainActor @Test func usagePollCadenceSurvivesRepeatedRefreshRequests() async {
+    var now = Date()
+    let usage = HarnessUsage(now: { now })
+    let client = UsageFixture()
+    await usage.refresh(client: client, project: "p", boxes: [])
+    for _ in 0..<10 { await usage.refresh(client: client, project: "p", boxes: []) }
+    #expect(await client.usageReads == 1)
+    now = now.addingTimeInterval(61)
+    await usage.refresh(client: client, project: "p", boxes: [])
+    #expect(await client.usageReads == 2)
+}
+
+@MainActor @Test func cancellingUsageStopsBackgroundWorkWithoutHoldingUIActor() async {
+    let usage = HarnessUsage()
+    let client = SlowUsageFixture()
+    let poll = Task { await usage.refresh(client: client, project: "p", boxes: [], configuredHarnesses: []) }
+    while !(await client.started) { await Task.yield() }
+    // This main-actor test can continue while a usage request remains blocked.
+    #expect(usage.isLoading)
+    poll.cancel()
+    await poll.value
+    #expect(await client.cancelled)
+    #expect(!usage.isLoading)
+    #expect(usage.snapshots.isEmpty)
+}
+
+private actor SlowUsageFixture: DiscoboxClient {
+    var started = false
+    var cancelled = false
+    func perform(_ request: BridgeRequest) async throws -> Data {
+        started = true
+        do { try await Task.sleep(for: .seconds(60)) }
+        catch { cancelled = true; throw error }
+        return Data(#"{"records":[],"missing":[]}"#.utf8)
+    }
 }

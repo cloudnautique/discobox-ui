@@ -7,6 +7,10 @@ import Testing
     #expect(snapshot.ports[0].isDesktop)
     #expect(snapshot.ports[0].browserURL?.absoluteString == "https://127.0.0.1:7101")
     #expect(snapshot.ports[1].browserURL == nil)
+    #expect(snapshot.ports[1].browserURL(as: "http")?.absoluteString == "http://127.0.0.1:5433")
+    #expect(snapshot.ports[1].browserURL(as: "https")?.absoluteString == "https://127.0.0.1:5433")
+    #expect(snapshot.ports[1].browserURL(as: "file") == nil)
+    #expect(snapshot.ports[2].browserURL(as: "http") == nil)
     #expect(snapshot.ports[2].browserURL == nil)
     #expect(snapshot.ports[1].id != snapshot.ports[2].id)
 }

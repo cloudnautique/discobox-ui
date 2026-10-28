@@ -5,7 +5,7 @@ import DiscoboxCore
 struct NewBoxSheet: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
-    @State private var harnesses: [Harness] = []
+    private var harnesses: [Harness] { workspace.cachedHarnesses }
     @State private var harness = ""
     @State private var repository = ""
     @State private var prompt = ""
@@ -26,9 +26,9 @@ struct NewBoxSheet: View {
                 Text("Starting prompt (optional)")
                 TextEditor(text: $prompt).frame(height: 90).border(.quaternary)
                 Text("Leave blank to start without a task.").font(.caption).foregroundStyle(.secondary)
-            }.disabled(creating || loading)
+            }.disabled(creating)
             if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            if loading { ProgressView("Loading harnesses…") }
+            if loading && harnesses.isEmpty { ProgressView("Loading harnesses…") }
             if !loading && harnesses.filter(\.configured).isEmpty { Text("No configured harnesses are available. Configure a harness in Discobox first.").foregroundStyle(.secondary) }
             if creating { ProgressView("Preparing source and creating your box…").controlSize(.small)
                 Text("Repository delivery can take several minutes. This window stays open until it finishes.").font(.caption).foregroundStyle(.secondary)
@@ -44,11 +44,16 @@ struct NewBoxSheet: View {
                         creating = false
                     }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(harness.isEmpty || creating || loading)
+                    .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }))
             }
         }.padding(24).frame(width: 520).interactiveDismissDisabled(creating)
         .task {
-            do { harnesses = try await workspace.harnesses(); harness = harnesses.first(where: \.configured)?.id ?? "" }
+            harness = harnesses.first(where: \.configured)?.id ?? ""
+            loading = harnesses.isEmpty
+            do {
+                let refreshed = try await workspace.harnesses()
+                if !refreshed.contains(where: { $0.id == harness && $0.configured }) { harness = refreshed.first(where: \.configured)?.id ?? "" }
+            }
             catch { self.error = error.localizedDescription }
             loading = false
         }

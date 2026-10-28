@@ -2,9 +2,13 @@ import Foundation
 
 public protocol DiscoboxClient: Sendable {
     func perform(_ request: BridgeRequest) async throws -> Data
+    func prepareConnection() async throws -> String?
+    func closeConnection()
 }
 
 extension DiscoboxClient {
+    public func prepareConnection() async throws -> String? { nil }
+    public func closeConnection() {}
     public func decode<T: Decodable & Sendable>(_ request: BridgeRequest, as type: T.Type) async throws -> T {
         let data = try await perform(request)
         do { return try JSONDecoder().decode(type, from: data) }
@@ -18,22 +22,30 @@ public actor CompanionClient: DiscoboxClient {
     public nonisolated static func cancelAllRequests() { ProcessRequest.cancelAll() }
     private let executable: URL
     private let endpoint: String
+    private nonisolated let remote: IrohConnection?
 
-    public init(executable: URL, endpoint: String) {
+    public init(executable: URL, endpoint: String, identitySeed: Data? = nil, relayURLs: [String] = [], directOnly: Bool = false) {
         self.executable = executable
         self.endpoint = endpoint
+        remote = identitySeed.map { IrohConnection(executable: executable, endpoint: endpoint, seed: $0, relayURLs: relayURLs, directOnly: directOnly) }
     }
+    public func prepareConnection() async throws -> String? {
+        if let remote { return try await remote.prepare() }
+        return endpoint
+    }
+    public nonisolated func closeConnection() { remote?.close() }
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         try await perform(request, progress: nil)
     }
     public func perform(_ request: BridgeRequest, progress: (@Sendable (Int64) -> Void)?) async throws -> Data {
+        let destination = try await prepareConnection() ?? endpoint
         let payload = try JSONEncoder().encode(request)
-        let job = ProcessRequest(executable: executable, endpoint: endpoint,
-                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
+        let job = ProcessRequest(executable: executable, endpoint: destination,
+                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            return try await Task.detached { try job.run() }.value
+            return try await Task.detached(priority: Task.currentPriority) { try job.run() }.value
         } onCancel: { job.cancel() }
         try Task.checkCancellation()
         let response: BridgeResponse
@@ -43,7 +55,7 @@ public actor CompanionClient: DiscoboxClient {
         if let error = response.error, !error.isEmpty { throw DiscoboxError(error) }
         guard (200..<300).contains(response.status) else {
             if response.status == 401 || response.status == 403 {
-                throw DiscoboxError("Access refused (\(response.status)). This build supports existing single-user Unix/HTTP endpoints. Iroh and Discobot authentication are not yet supported.")
+                throw DiscoboxError("Access refused (\(response.status)). For Iroh, enroll this app’s peer ID on the remote server or check whether it was revoked. Discobot authentication is not supported.")
             }
             let problem = response.body.flatMap { try? JSONDecoder().decode(APIProblem.self, from: $0) }
             let detail = problem?.detail ?? problem?.error ?? problem?.message ?? "The request was refused."
@@ -86,6 +98,7 @@ private final class ProcessRequest: @unchecked Sendable {
     init(executable: URL, endpoint: String, interactive: Bool, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
         self.progress = progress
         process.executableURL = executable
+        if Task.currentPriority.rawValue <= TaskPriority.utility.rawValue { process.qualityOfService = .utility }
         process.arguments = ["--endpoint", endpoint] + (interactive ? ["--allow-input"] : []) + (newShell ? ["--allow-shell"] : []) + (manage ? ["--allow-manage"] : [])
         self.payload = payload
     }

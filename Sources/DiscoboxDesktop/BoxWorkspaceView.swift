@@ -38,14 +38,22 @@ struct BoxWorkspaceView: View {
                 if workspace.execID != exec { Task { if workspace.sandboxID == box.id { await workspace.selectExec(exec) } } }
             }
         }
+        .onChange(of: commands.showInspector) { _, visible in
+            guard !visible else { return }
+            let exec = layout.agentFocused || layout.selected == "agent" ? harness?.id : (layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil)
+            guard let exec else { return }
+            let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint,
+                                            project: workspace.projectID ?? "", box: box.id, exec: exec, demo: workspace.isDemo)
+            terminals.focus(identity)
+        }
         .onChange(of: commands.showFiles) { _, show in if show { layout.open("files") } }
         .onChange(of: commands.showAudit) { _, show in if show { layout.open("audit") } }
-        .onChange(of: commands.tab) { _, tab in if tab == .services { layout.open("services") } }
+
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
         .confirmationDialog("Close this terminal and end its running process?", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }), titleVisibility: .visible) {
             if let closing {
                 Button("Close Terminal", role: .destructive) {
-                    let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.endpointLabel, project: workspace.projectID ?? "", box: box.id, exec: closing.id, demo: workspace.isDemo)
+                    let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box.id, exec: closing.id, demo: workspace.isDemo)
                     Task {
                         do { try await workspace.closeShell(closing.id); terminals.reconnect(identity) }
                         catch { workspace.commandError = error.localizedDescription }
@@ -116,7 +124,7 @@ struct BoxWorkspaceView: View {
                 Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
                 Divider()
                 Button("Audit") { layout.open("audit") }
-                Button("Services") { layout.open("services") }
+                Button("Services") { commands.openServices() }
                 Button("Files") { layout.open("files") }
                 Button("Changes") { commands.perform(.changes) }.disabled(!box.isRunning)
                 Button("Tools & Additional Agent…") { commands.showTools = true }
@@ -239,7 +247,7 @@ struct ConsoleView: View {
         VStack(spacing: 0) {
             if live, let project = workspace.projectID, let box = workspace.sandboxID {
                 LiveTerminal(identity: TerminalIdentity(connection: workspace.connectionID,
-                    endpoint: workspace.endpointLabel, project: project, box: box, exec: terminal.id, demo: workspace.isDemo), focused: focused ?? (workspace.execID == terminal.id), onFocus: {
+                    endpoint: workspace.transportEndpoint, project: project, box: box, exec: terminal.id, demo: workspace.isDemo), focused: focused ?? (workspace.execID == terminal.id), onFocus: {
                         if let onFocus { onFocus(); return }
                         guard workspace.execID != terminal.id else { return }
                         Task { await workspace.selectExec(terminal.id) }
