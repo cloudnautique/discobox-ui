@@ -99,7 +99,10 @@ not by forwarding those signals. Typed Ctrl-C remains remote terminal input.
 Session identities include a connection UUID, endpoint, project, box, and concrete
 exec ID. Switching tabs/boxes retains the surface and local stream; disconnect
 and app exit free all surfaces. Remote exit leaves its output visible, with a
-Reconnect action. Cached/stopped sessions retain the read-only saved-screen view.
+Reconnect action. Successful live terminal inventories evict obsolete execs only
+for their own box; loading transitions and cached inventories do not evict warm
+sessions. Stopped/removed boxes release their local terminal resources when the
+sandbox list changes. Cached/stopped sessions retain the read-only saved-screen view.
 Live sessions no longer poll screen endpoints. Metadata polling remains bounded.
 
 Reconnections reuse acknowledged action positions, replay and retained dimensions.
@@ -159,7 +162,13 @@ refuses harness sessions. This is a destructive shell action,
 so the GUI confirms it explicitly.
 
 The native Audit tab uses bounded parallel snapshots of the five default trails.
-Records are keyed by trail/pool/ID/event, merged, and sorted by parsed time.
+Records are keyed by trail/pool/ID/event, merged, and sorted by parsed time in an
+isolated AuditBuffer actor. Retention stops at 32 MiB of UTF-8 record data (with
+per-record overhead allowance) or 50,000 records, keeping the newest records and
+showing a persistent limit notice. This is a data budget, not a process-memory
+ceiling. Search is debounced by 180 ms and runs in cancellable background work;
+query/history generations reject obsolete results. Unchanged snapshots do not
+republish the history or repeat filtering.
 Unavailable sources and bounded-history warnings are part of the response, not
 silently dropped. History uses per-trail inclusive time bounds; HTTP following
 uses per-pool row cursors. Timestamp-only ties are reported as a limitation.
@@ -193,6 +202,13 @@ the current box and rejects non-archived state. The backend owns final concurren
 and lifecycle validation. Successful disruptive actions clear the selected box to
 avoid retaining an attachment while the requested transition settles.
 
+Archived sidebar selection uses a native multi-selection List. Purge Selected
+captures concrete box IDs and the connection generation in one confirmation,
+requires DELETE, and processes each archived box once without automatic retries.
+The companion still rereads archived state before each deletion. A batch reports
+individual failures and refreshes inventory once; a connection change stops
+submission of remaining boxes. Filtering and disconnect clear hidden selections.
+
 Sidebar presentation reads harnessConfig, source URL, displayState and cached
 agentStatus from the existing list response. It makes no live inspection requests
 to obtain labels. Repository grouping is a local presentation preference.
@@ -210,7 +226,12 @@ the same as terminal attach; backend validation remains authoritative.
 
 The companion streams bounded JSON snapshots to a retained Swift process session.
 HTTP/HTTPS links use the reported local binding, never the sandbox's port number
-by assumption. A parent's stdin EOF or termination cancels all listeners. Swift
+by assumption. Ghostty's open-URL callback resolves loopback/wildcard HTTP(S) links
+against the originating terminal's box, preserving the path, query, and fragment.
+It waits for that box's forward discovery when necessary; an unavailable mapping
+produces a notice instead of opening an unrelated localhost service. Public URLs
+are unchanged. The inspector labels box and Mac ports explicitly; compact rail
+labels show the usable Mac port. A parent's stdin EOF or termination cancels all listeners. Swift
 closes sessions on disconnect, lifecycle actions and stopped/removed boxes; hiding
 the Services drawer does not break already-open browser tabs.
 
@@ -264,7 +285,7 @@ with the stable enrollment identity, following Discobox's existing peer protocol
 
 The helper exposes HTTP/WebSocket proxying only on an owner-only Unix socket in a
 random 0700 directory. Its upstream peer is fixed at startup, it forwards only
-`/api/` routes, and it does not follow redirects. Each GUI request, terminal attach,
+`/projects/` resource routes and `/api/` stream routes, and it does not follow redirects. Each GUI request, terminal attach,
 and port-forward helper retains its existing authorization/cancellation behavior
 and connects to that socket. No public control-plane listener is created.
 
@@ -273,7 +294,22 @@ Workspace separates the display address (`endpointLabel`) from the effective
 state. Reconnect preserves a healthy transport while rebuilding workspace state.
 The endpoint library redials lost QUIC connections; no custom retry of mutation
 requests is added. A crashed helper requires disconnect/connect to start a new
-helper. One active host is supported; saved profiles are not permission scopes.
+helper. Multiple hosts can be connected simultaneously; saved profiles are not permission scopes.
+
+Connections settings presents a built-in Name (This computer) entry and named saved profiles.
+The local name defaults to SystemConfiguration's computer name, with an app
+preference override shared by sidebar labels and shell-quoted peer enrollment
+commands. Renaming changes no endpoint or enrollment identity and never edits
+an existing server-side peer registration.
+Save persists the name, address and options without network access. Optional
+Test Connection probes with a separate client using only the default-project read,
+then closes that client. Connect creates or selects that computer’s session without
+replacing another computer’s transport.
+Successful creation clears the destination's list/search filters, selects the
+new box and activates its owning computer. Failed creation preserves navigation.
+The original saved-profile JSON format is preserved. Migration consolidates the
+current default socket aliases while retaining custom sockets and relay options.
+Removing a profile does not disconnect an active workspace or revoke enrollment.
 
 Offline Go fixtures exercise actual Iroh certificate authentication and HTTP /
 WebSocket proxying, including per-request revocation and socket cleanup. Running
@@ -318,3 +354,29 @@ work. Catalog prefetch is shared with the creation UI and has connection lifetim
 The dialog smoke test uses only DemoClient, opens both dialogs twice, edits and
 submits the switcher search through its keyboard delegate, and reports readiness
 timings. It never creates a box or accesses Keychain/backend data.
+
+## Multiple computers
+
+Connections owns a ConnectionSession per normalized server address, each with its
+own Workspace and independent inventory, approval, and usage polling tasks.
+Active selection is an address plus box ID. Equal project, box, harness, or exec
+IDs on two computers never identify the same UI object. Already-connected hosts
+reuse their clients when selected; failed connection attempts leave the active
+computer unchanged. Polling is cancelled per host on disconnect and globally at
+app termination.
+
+ConnectionRuntimes owns separate terminal, forwarding, and desktop stores for
+each session. Always-mounted ConnectionLifecycle observers release only that
+host’s resources on reconnect/disconnect or authoritative inventory changes.
+ConnectedWorkspace rebinds keyboard commands and view environments on active-host
+changes, while retained Ghostty surfaces and per-connection tab layouts survive.
+Harness setup windows close by connection generation rather than globally.
+The box switcher aggregates composite identities; new-box requests capture a
+chosen host before awaiting work. Archived bulk actions stay within one host.
+
+TerminalContainerView tracks a retained surface’s visible presentation owner.
+Off-screen representable updates cannot reparent that surface away from the
+visible computer. Mounting is deferred until a container joins a window and is
+rechecked on layout; dismantling a cached SwiftUI representable does not destroy
+the session. The two-host UI smoke exercises this handoff, command routing,
+Return in the cross-host chooser, forwarding isolation, and per-host disconnect.

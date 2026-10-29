@@ -56,6 +56,8 @@ import Testing
     await client.release()
     await returning.value
     #expect(workspace.execs.isEmpty)
+    #expect(workspace.terminalInventory?.box == "demo-ui")
+    #expect(workspace.terminalInventory?.execIDs.isEmpty == true)
     #expect(workspace.execID == nil)
     #expect(!workspace.hasLiveTerminal)
 }
@@ -110,4 +112,25 @@ private actor SwitchingClient: DiscoboxClient {
         }
         return try await demo.perform(request)
     }
+}
+
+@MainActor @Test func terminalCleanupInventorySurvivesLoadingAndClearsOnDisconnect() async {
+    let client = SwitchingClient()
+    let workspace = Workspace()
+    workspace.streamsLiveTerminals = true
+    await workspace.connect(client: client, label: "fixture")
+    await workspace.selectBox("demo-ui")
+    let inventory = workspace.terminalInventory
+    #expect(inventory?.execIDs.isEmpty == false)
+    await workspace.selectBox(nil)
+    #expect(workspace.execs.isEmpty)
+    #expect(workspace.terminalInventory == inventory)
+    await client.holdNextInventory()
+    let load = Task { await workspace.selectBox("demo-ui") }
+    await client.waitUntilBlocked()
+    #expect(workspace.terminalInventory == inventory)
+    await client.release()
+    await load.value
+    workspace.disconnect()
+    #expect(workspace.terminalInventory == nil)
 }

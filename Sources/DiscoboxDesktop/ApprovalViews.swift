@@ -32,6 +32,7 @@ struct ApprovalInboxView: View {
 }
 
 struct ApprovalSheet: View {
+    @Environment(Connections.self) private var connections: Connections?
     let item: ApprovalItem
     @Environment(Workspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
@@ -64,6 +65,7 @@ struct ApprovalSheet: View {
             ScrollView {
                 Form {
                     Section("Request") {
+                    if let host = connections?.sessions.first(where: { $0.workspace === workspace }) { LabeledContent("Computer", value: host.profile.displayName) }
                         LabeledContent("Box", value: workspace.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID)
                         if request["purpose"].string == "delegate" { Text("Delegation: this allows handing access to other boxes, not using the credential directly.").foregroundStyle(.orange) }
                         if !request["justification"].string.isEmpty { Text(request["justification"].string).textSelection(.enabled) }

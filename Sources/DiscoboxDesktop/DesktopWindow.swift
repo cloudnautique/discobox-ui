@@ -3,13 +3,14 @@ import WebKit
 import DiscoboxCore
 
 @MainActor @Observable final class DesktopWindows {
+    var computerName = ""
     private var sessions: [String: DesktopSession] = [:]
     func open(url: URL, box: Sandbox) {
         if let session = sessions[box.id], !session.closed, session.source == url {
             session.window.makeKeyAndOrderFront(nil); return
         }
         sessions.removeValue(forKey: box.id)?.close()
-        let session = DesktopSession(source: url, title: box.displayName)
+        let session = DesktopSession(source: url, title: computerName.isEmpty ? box.displayName : computerName + " › " + box.displayName)
         sessions[box.id] = session
         session.window.makeKeyAndOrderFront(nil)
     }

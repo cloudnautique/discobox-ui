@@ -2,6 +2,7 @@ import SwiftUI
 import DiscoboxCore
 
 struct HarnessUsageSection: View {
+    @Environment(Connections.self) private var connections: Connections?
     @Environment(Workspace.self) private var workspace
     @AppStorage("harnessUsageExpanded") private var expanded = true
     @AppStorage("harnessUsageShelfHeight") private var height = 210.0
@@ -30,6 +31,7 @@ struct HarnessUsageSection: View {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10, weight: .semibold)).frame(width: 12)
                         Text("HARNESS USAGE").font(.caption.weight(.semibold))
+                        if let connections { Text(connections.active.profile.displayName).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Spacer()
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -42,6 +44,7 @@ struct HarnessUsageSection: View {
                 UsageSummary().padding(.horizontal, 12).padding(.bottom, 10)
                     .frame(height: min(320, max(120, height)))
                     .task(id: workspace.connectionID, priority: .utility) {
+                        guard connections == nil else { return }
                         while !Task.isCancelled {
                             await workspace.refreshUsage()
                             do { try await Task.sleep(for: .seconds(60)) } catch { return }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,11 @@ func TestForwardBrowserTrafficUsesLocalBindingAndClosesOnParentEOF(t *testing.T)
 		}
 		if r.URL.Path != "/api/projects/p/sandboxes/s/tcp/attach" {
 			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("port") != strconv.Itoa(port) || r.URL.Query().Get("host") != "localhost" {
+			t.Errorf("tunnel must dial the box port, not the remapped local port: %s", r.URL.RawQuery)
+			http.Error(w, "wrong target", 400)
 			return
 		}
 		ws, err := websocket.Accept(w, r, nil)

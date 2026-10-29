@@ -69,6 +69,31 @@ Tests use synthetic data, fixture executables, and temporary local HTTP/WebSocke
 and Iroh servers. They do not connect to your running Discobox backend. CI does
 not launch the GUI.
 
+### GitHub Actions preview builds
+
+The **Build preview** workflow runs on pushed tags matching `v*` (for example,
+`v0.1.0-preview.1`) and through **Run workflow**. It uses an Apple Silicon macOS 26
+runner with Xcode 26.6, installs the Go version in `Companion/go.mod` and
+checksum-verified Zig 0.14.1, and builds the pinned Ghostty SDK when uncached.
+It then runs `make ci` and uploads `Discobox-macos-arm64.zip` for 30 days. The run
+summary contains the commit and ZIP checksum. It does not publish a GitHub Release.
+
+If the Discobox source or its `github.com/discobox-ai/*` dependencies are private,
+add a repository Actions secret named **DISCOBOX_SOURCE_TOKEN** with read-only
+access to those repositories. The normal workflow token cannot read another
+private repository. No Apple signing credentials are required for preview builds.
+
+Pushing a tag triggers a build; making a local tag alone does not. For example,
+after committing and pushing the intended app version:
+
+```sh
+git tag v0.1.0-preview.1
+git push origin v0.1.0-preview.1
+```
+
+The workflow checks out the exact tag's app source and the pinned Discobox source.
+Update the runner/Xcode selection and cache keys together when changing toolchains.
+
 For an additional interactive-session check, run the demo UI smoke test:
 
 ```sh

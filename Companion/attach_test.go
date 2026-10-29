@@ -176,6 +176,36 @@ func TestResizeQueueKeepsFinalDimensions(t *testing.T) {
 	}
 }
 
+func TestTerminalSizePollingRecoversWithoutResizeSignal(t *testing.T) {
+	sizes := make(chan frame.ResizePayload, 1)
+	cols, rows := 80, 24
+	check := changedTerminalSize(func() (int, int, error) { return cols, rows, nil }, sizes)
+	check()
+	if got := <-sizes; got.Cols != 80 || got.Rows != 24 {
+		t.Fatalf("initial size: %+v", got)
+	}
+	for range 20 {
+		check()
+	}
+	if len(sizes) != 0 {
+		t.Fatal("unchanged geometry emitted network work")
+	}
+	// No SIGWINCH is delivered: the next poll must still catch the final
+	// geometry after host switching or restoring a full-size pane.
+	cols, rows = 220, 70
+	check()
+	if got := <-sizes; got.Cols != 220 || got.Rows != 70 {
+		t.Fatalf("missed resize signal was not recovered: %+v", got)
+	}
+	cols, rows = 0, 0
+	check()
+	cols, rows = 220, 70
+	check()
+	if len(sizes) != 0 {
+		t.Fatal("transient invalid geometry replaced the last valid size")
+	}
+}
+
 func TestAttachAppliesInitialSizeBeforeReplay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()

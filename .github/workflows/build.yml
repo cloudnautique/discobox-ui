@@ -1,0 +1,127 @@
+name: Build preview
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: macOS Apple Silicon
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DISCOBOX_REVISION: d61a7f405389fcc0dda68c5689397aec3a085d9e
+      GOPRIVATE: github.com/discobox-ai/*
+      GIT_TERMINAL_PROMPT: '0'
+
+    steps:
+      - name: Check out app
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check out pinned Discobox client sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: discobox-ai/discobox
+          ref: ${{ env.DISCOBOX_REVISION }}
+          path: discobox
+          token: ${{ secrets.DISCOBOX_SOURCE_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: Companion/go.mod
+          cache: false # The scripts keep caches beneath .build.
+
+      - name: Check Xcode and Metal
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(git -C discobox rev-parse HEAD)" = "$DISCOBOX_REVISION"
+          xcodebuild -version
+          swift --version
+          if ! xcrun -sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun -sdk macosx metal --version
+          xcrun --find llvm-libtool-darwin
+
+      - name: Install pinned Zig
+        run: |
+          archive="$RUNNER_TEMP/zig-0.14.1.tar.xz"
+          curl --fail --location --retry 3 \
+            https://ziglang.org/download/0.14.1/zig-aarch64-macos-0.14.1.tar.xz \
+            --output "$archive"
+          printf '%s  %s\n' \
+            39f3dc5e79c22088ce878edc821dedb4ca5a1cd9f5ef915e9b3cc3053e8faefa \
+            "$archive" | shasum -a 256 --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/zig-aarch64-macos-0.14.1" >> "$GITHUB_PATH"
+
+      - name: Cache Ghostty SDK
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .build/ghostty/sdk
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('scripts/build-ghostty-sdk.sh', 'scripts/prepare-ghostty-sdk-overlay.py') }}
+
+      - name: Cache Go dependencies and compilation
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            .build/go-mod-cache
+            .build/go-cache
+            .build/iroh-cache
+          key: go-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('Companion/go.mod', 'Companion/go.sum', 'discobox/go.mod', 'discobox/go.sum', 'discobox/cli/go.mod', 'discobox/cli/go.sum') }}
+
+      - name: Build Ghostty SDK when uncached
+        run: |
+          sdk=.build/ghostty/sdk/6d2dd585a5d87fa745d48188dd096ca6e63014d0
+          if [[ ! -f "$sdk/GhosttyKit.xcframework/Info.plist" ]]; then
+            make ghostty
+          fi
+          test "$(cat "$sdk/REVISION")" = 6d2dd585a5d87fa745d48188dd096ca6e63014d0
+
+      - name: Test, build and verify
+        env:
+          DISCOBOX_SOURCE_TOKEN: ${{ secrets.DISCOBOX_SOURCE_TOKEN }}
+        run: |
+          # Git reads the optional token from this step's environment. No token
+          # is embedded in a remote URL, artifact, or persisted Git config.
+          git config --global credential.https://github.com.helper \
+            '!f() { if [ "$1" = get ] && [ -n "$DISCOBOX_SOURCE_TOKEN" ]; then printf "%s\n" "username=x-access-token" "password=$DISCOBOX_SOURCE_TOKEN"; fi; }; f'
+          make ci
+
+      - name: Package preview
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/Discobox.app dist/Discobox-macos-arm64.zip
+          {
+            printf '### Discobox preview\n\n'
+            printf 'Apple Silicon. Ad-hoc signed; not notarized. See README for first-launch instructions.\n\n'
+            printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'SHA-256:\n```text\n'
+            shasum -a 256 dist/Discobox-macos-arm64.zip
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload app ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          path: dist/Discobox-macos-arm64.zip
+          archive: false # Preserve the prepared ZIP and executable permissions.
+          if-no-files-found: error
+          retention-days: 30

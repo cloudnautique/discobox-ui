@@ -29,6 +29,12 @@ import DiscoboxCore
                       let surface = target.target.surface,
                       let userdata = ghostty_surface_userdata(surface) else { return false }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+                if action.tag == GHOSTTY_ACTION_OPEN_URL, let handler = view.openURL,
+                   let pointer = action.action.open_url.url {
+                    let data = Data(bytes: pointer, count: Int(action.action.open_url.len))
+                    guard let raw = String(data: data, encoding: .utf8) else { return false }
+                    return handler(raw)
+                }
                 if action.tag == GHOSTTY_ACTION_RENDERER_HEALTH {
                     if action.action.renderer_health == GHOSTTY_RENDERER_HEALTH_UNHEALTHY {
                         view.failed?("Ghostty reported a rendering failure. Reconnect this terminal.")
@@ -146,6 +152,17 @@ struct TerminalIdentity: Hashable {
             sessions.removeValue(forKey: identity)?.close()
         }
     }
+    func retainExecs(_ inventory: Workspace.TerminalInventory, connection: UUID) {
+        for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && !inventory.execIDs.contains(identity.exec) {
+            sessions.removeValue(forKey: identity)?.close()
+        }
+    }
+    func retainRunningBoxes(_ boxes: [Sandbox], connection: UUID) {
+        let running = Set(boxes.filter(\.isRunning).map(\.id))
+        for identity in Array(sessions.keys) where identity.connection == connection && !running.contains(identity.box) {
+            sessions.removeValue(forKey: identity)?.close()
+        }
+    }
     func closeAll() {
         for session in sessions.values { session.close() }
         sessions.removeAll()
@@ -157,6 +174,8 @@ struct LiveTerminal: View {
     var focused = true
     var onFocus: (() -> Void)?
     @Environment(TerminalStore.self) private var store
+    @Environment(ServiceForwards.self) private var forwards
+    @Environment(Workspace.self) private var workspace
     var body: some View {
         let session = store.session(identity)
         VStack(spacing: 0) {
@@ -170,6 +189,14 @@ struct LiveTerminal: View {
                 }.font(.caption).padding(8)
             }
         }
+        .onChange(of: ObjectIdentifier(session), initial: true) { _, _ in
+            session.view.openURL = { [identity, weak workspace = workspace, weak forwards = forwards, weak view = session.view] raw in
+                guard let workspace, let forwards, let url = URL(string: raw),
+                      ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+                forwards.openTerminalURL(url, identity: identity, workspace: workspace, window: view?.window)
+                return true
+            }
+        }
     }
 }
 
@@ -181,59 +208,77 @@ struct TerminalSurface: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { TerminalContainerView() }
     func updateNSView(_ container: NSView, context: Context) {
+        guard let container = container as? TerminalContainerView else { return }
         view.onFocus = onFocus
-        (container as? TerminalContainerView)?.requestedFocus = focused
+        container.requestedFocus = focused
+        container.bind(view)
         if focused && (!context.coordinator.focused || view.superview !== container) {
             DispatchQueue.main.async { [weak container, weak view] in
                 guard let container, let view, view.superview === container, container.window != nil,
-                      (container as? TerminalContainerView)?.requestedFocus == true else { return }
+                      container.requestedFocus else { return }
                 view.window?.makeFirstResponder(view)
             }
         }
         context.coordinator.focused = focused
-        guard view.superview !== container else { return }
-        for child in container.subviews { child.removeFromSuperview() }
-        view.removeFromSuperview()
-        view.frame = container.bounds
-        view.autoresizingMask = [.width, .height]
-        container.addSubview(view)
-        container.needsLayout = true
-        DispatchQueue.main.async { [weak container, weak view] in
-            guard let container, let view, view.superview === container, container.window != nil else { return }
-            container.layoutSubtreeIfNeeded()
-            view.refreshPresentation()
-        }
     }
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
-        for child in container.subviews { child.removeFromSuperview() }
+        // TerminalStore owns the surface. SwiftUI may cache and reuse this
+        // native container when returning to a host/tab without another update.
+        // Leave its child attached; updateNSView reparents it when needed, and
+        // AppKit detaches it naturally when the container is deallocated.
     }
 }
 
-@MainActor private final class TerminalContainerView: NSView {
+@MainActor fileprivate final class TerminalContainerView: NSView {
     var requestedFocus = false
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.requestedFocus, let window = self.window,
-                  let terminal = self.subviews.first as? GhosttyTerminalView else { return }
-            window.makeFirstResponder(terminal)
-        }
+    private var terminal: GhosttyTerminalView?
+    func bind(_ view: GhosttyTerminalView) {
+        let changed = terminal !== view
+        terminal = view
+        // SwiftUI also updates outgoing, already-detached representables.
+        // They must never steal a retained surface from the visible host.
+        if window != nil && (changed || view.presentationContainer?.window == nil) { view.presentationContainer = self }
+        mount()
+    }
+    private func mount() {
+        guard window != nil, let terminal, terminal.presentationContainer === self,
+              terminal.superview !== self else { return }
+        for child in subviews { child.removeFromSuperview() }
+        terminal.removeFromSuperview()
+        terminal.frame = bounds
+        terminal.autoresizingMask = [.width, .height]
+        addSubview(terminal)
+        terminal.refreshPresentation()
     }
     override func layout() {
         super.layout()
-        guard let terminal = subviews.first as? GhosttyTerminalView else { return }
-        // Frame changes schedule a resize; routine SwiftUI layout passes should
-        // not force a synchronous renderer draw on the main thread.
-        if terminal.frame != bounds { terminal.frame = bounds }
+        if window != nil, terminal?.presentationContainer?.window == nil { terminal?.presentationContainer = self }
+        mount()
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else {
+            if terminal?.presentationContainer === self { terminal?.presentationContainer = nil }
+            return
+        }
+        terminal?.presentationContainer = self
+        mount()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            self.mount()
+            guard self.requestedFocus, let terminal = self.terminal, terminal.superview === self else { return }
+            window.makeFirstResponder(terminal)
+        }
     }
 }
 
 @MainActor final class GhosttyTerminalView: NSView, @preconcurrency NSTextInputClient {
+    fileprivate weak var presentationContainer: TerminalContainerView?
     private(set) var surface: ghostty_surface_t?
     var ended: (() -> Void)?
     var onFocus: (() -> Void)?
     var failed: ((String) -> Void)?
+    var openURL: ((String) -> Bool)?
     private var marked = NSAttributedString(string: "")
     private var inputText: [String]?
     private var markedSelection = NSRange(location: NSNotFound, length: 0)

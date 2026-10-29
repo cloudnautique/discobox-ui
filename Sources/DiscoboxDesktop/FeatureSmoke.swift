@@ -13,9 +13,55 @@ import DiscoboxCore
             await workspace.refreshApprovals()
             guard let item = workspace.approvals.first else { throw DiscoboxError("Missing approval fixture") }
             guard let box = workspace.selectedBox else { throw DiscoboxError("Missing box fixture") }
+            // Retained forwarding sessions must follow A → B → A without
+            // reusing another box's listener inventory.
+            let forwards = ServiceForwards()
+            let first = forwards.session(box: "demo-ui", workspace: workspace)
+            let second = forwards.session(box: "demo-api", workspace: workspace)
+            guard first !== second else { throw DiscoboxError("Boxes shared a forwarding session") }
+            for id in ["demo-ui", "demo-api", "demo-ui", "demo-api", "demo-ui"] {
+                await workspace.selectBox(id)
+                let expected = id == "demo-ui" ? first : second
+                guard forwards.existingSession(box: id, workspace: workspace) === expected else {
+                    throw DiscoboxError("Forwarding inventory did not follow box selection")
+                }
+            }
+            forwards.close(box: "demo-api")
+            guard forwards.existingSession(box: "demo-api", workspace: workspace) == nil,
+                  forwards.existingSession(box: "demo-ui", workspace: workspace) === first else {
+                throw DiscoboxError("Closing one box affected another box's forwards")
+            }
+            forwards.closeAll()
             let sidebarWorkspace = Workspace()
             await sidebarWorkspace.connect(client: DemoClient(), label: "Offline sidebar", demo: true)
+            let settingsSuite = "ai.discobox.smoke.connections." + UUID().uuidString
+            let settingsDefaults = UserDefaults(suiteName: settingsSuite)!
+            defer { settingsDefaults.removePersistentDomain(forName: settingsSuite) }
+            settingsDefaults.set(ConnectionProfiles.encode([
+                .init(name: "Studio", endpoint: "discobox://d1-fixture"),
+                .init(name: "Build server", endpoint: "https://build.example.com")
+            ]), forKey: "savedConnections")
+            let archivedWorkspace = Workspace()
+            await archivedWorkspace.connect(client: DemoClient(), label: "Offline archives", demo: true)
+            for id in ["demo-api", "demo-tests"] {
+                try await archivedWorkspace.performBoxAction(.archive, boxID: id, connection: archivedWorkspace.connectionID)
+            }
+            archivedWorkspace.filter = .archived
+            let archives = archivedWorkspace.visibleBoxes
+            let computers = Connections(polling: false)
+            let localComputer = try await computers.connect(.thisComputer, demo: true) { DemoClient() }
+            let studioComputer = try await computers.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { DemoClient(pendingRequests: true) }
+            await studioComputer.workspace.refreshApprovals()
+            computers.activate(localComputer.id)
+            let computerResources = ConnectionRuntimes()
             let panels: [(String, AnyView)] = [
+                ("computers", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults))),
+                ("new-box-computer", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers))),
+                ("archived-sidebar", AnyView(WorkspaceView().environment(archivedWorkspace).environment(WorkspaceCommands()).defaultAppStorage(settingsDefaults))),
+                ("bulk-purge", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace))),
+                ("connections", AnyView(ConnectionSettings().environment(workspace).defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
+                ("connection-editor", AnyView(ConnectionEditor(profile: nil, save: { _ in }))),
+                ("connection-edit", AnyView(ConnectionEditor(profile: .init(name: "Studio", endpoint: "discobox://d1-0000000-1111111-2222222-3333333-4444444-5555555-6666666-7777777?addr=192.0.2.10:12345"), save: { _ in }))),
                 ("sidebar", AnyView(WorkspaceView().environment(sidebarWorkspace).environment(WorkspaceCommands()))),
                 ("box-list", AnyView(List(workspace.visibleBoxes) { BoxRow(box: $0) }.listStyle(.sidebar).environment(workspace))),
                 ("archive", AnyView(BoxActionSheet(request: .init(box: box, action: .archive, connection: workspace.connectionID)).environment(workspace))),
@@ -23,7 +69,8 @@ import DiscoboxCore
                 ("approval", AnyView(ApprovalSheet(item: item).environment(workspace))),
                 ("new-box", AnyView(NewBoxSheet().environment(workspace))),
                 ("tools", AnyView(ToolsSheet().environment(workspace))),
-                ("services", AnyView(ServicesView().environment(workspace).environment(ServiceForwards()))),
+                ("audit", AnyView(AuditView(boxID: box.id).environment(workspace))),
+                ("services", AnyView(ServicesView(box: box).environment(workspace).environment(ServiceForwards()))),
                 ("files", AnyView(FilesView().environment(workspace)))
             ]
             for (name, panel) in panels {

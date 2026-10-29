@@ -58,6 +58,20 @@ import DiscoboxCore
             guard ghostty_surface_has_selection(surface) else { throw Failure("Selection unavailable") }
             guard store.session(identity) === session else { throw Failure("Session identity was not retained") }
             guard session.view.layer != nil else { throw Failure("Renderer layer missing") }
+            guard let inventory = workspace.terminalInventory else { throw Failure("Missing live inventory") }
+            let removedIdentity = TerminalIdentity(connection: identity.connection, endpoint: "offline", project: project, box: box, exec: "removed-fixture", demo: true)
+            let otherIdentity = TerminalIdentity(connection: identity.connection, endpoint: "offline", project: project, box: "demo-api", exec: "other-fixture", demo: true)
+            let removed = store.session(removedIdentity)
+            let other = store.session(otherIdentity)
+            guard removed.view.surface != nil, other.view.surface != nil else { throw Failure("Cleanup fixtures did not create surfaces") }
+            store.retainExecs(inventory, connection: identity.connection)
+            guard removed.view.surface == nil, other.view.surface != nil,
+                  session.view.surface != nil, store.session(identity) === session else {
+                throw Failure("Inventory cleanup removed a valid surface or kept an obsolete surface")
+            }
+            store.retainRunningBoxes(workspace.sandboxes, connection: identity.connection)
+            guard other.view.surface == nil, session.view.surface != nil else { throw Failure("Stopped-box cleanup affected the live box") }
+            print("SMOKE: obsolete surfaces freed; valid and other-box sessions preserved")
             "\u{3}".withCString { ghostty_surface_text(surface, $0, 1) }
             try await wait { ghostty_surface_process_exited(surface) }
             session.close()

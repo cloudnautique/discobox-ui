@@ -5,19 +5,61 @@ import DiscoboxCore
 /// Local listeners live independently of the activity drawer, so a browser keeps
 /// working when the drawer is hidden. Disconnect/stop/app exit release them.
 @MainActor @Observable final class ServiceForwards {
-    private var sessions: [String: ServiceForwardSession] = [:]
+    private struct Key: Hashable {
+        let connection: UUID
+        let project: String
+        let box: String
+    }
+    private var sessions: [Key: ServiceForwardSession] = [:]
+    private func key(box: String, workspace: Workspace) -> Key {
+        Key(connection: workspace.connectionID, project: workspace.projectID ?? "", box: box)
+    }
+    func existingSession(box: String, workspace: Workspace) -> ServiceForwardSession? {
+        sessions[key(box: box, workspace: workspace)]
+    }
+    private var openingLink: Task<Void, Never>?
     func session(box: String, workspace: Workspace) -> ServiceForwardSession {
-        if let session = sessions[box] { return session }
+        let key = key(box: box, workspace: workspace)
+        if let session = sessions[key] { return session }
         let session = ServiceForwardSession(endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box, demo: workspace.isDemo)
-        sessions[box] = session
+        sessions[key] = session
         return session
     }
-    func close(box: String) { sessions.removeValue(forKey: box)?.close() }
+    func openTerminalURL(_ url: URL, identity: TerminalIdentity, workspace: Workspace, window: NSWindow?) {
+        openingLink?.cancel()
+        guard !workspace.isDemo, workspace.connectionID == identity.connection else { return }
+        guard ForwardedServiceURL.sandboxPort(url) != nil else { NSWorkspace.shared.open(url); return }
+        guard workspace.sandboxes.contains(where: { $0.id == identity.box && $0.isRunning }),
+              !workspace.pendingBoxActions.contains(identity.box) else { return }
+        let forward = session(box: identity.box, workspace: workspace)
+        openingLink = Task { @MainActor [weak workspace, weak window] in
+            for _ in 0..<100 {
+                guard forward.loading else { break }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
+            guard !Task.isCancelled, let workspace, workspace.connectionID == identity.connection else { return }
+            if let local = ForwardedServiceURL.resolve(url, ports: forward.ports) {
+                NSWorkspace.shared.open(local)
+            } else if let window, window.attachedSheet == nil {
+                let alert = NSAlert()
+                alert.messageText = "This box port isn’t forwarded"
+                alert.informativeText = forward.error ?? "Open Services to check the reported ports for this box. The original localhost address wasn’t opened because it could belong to another app on your Mac."
+                alert.addButton(withTitle: "OK")
+                alert.beginSheetModal(for: window, completionHandler: { _ in })
+            }
+        }
+    }
+
+    func close(box: String) {
+        for key in Array(sessions.keys) where key.box == box {
+            sessions.removeValue(forKey: key)?.close()
+        }
+    }
     func retainRunningBoxes(_ boxes: [Sandbox]) {
         let running = Set(boxes.filter(\.isRunning).map(\.id))
-        for box in Array(sessions.keys) where !running.contains(box) { close(box: box) }
+        for key in Array(sessions.keys) where !running.contains(key.box) { close(box: key.box) }
     }
-    func closeAll() { for session in sessions.values { session.close() }; sessions.removeAll() }
+    func closeAll() { openingLink?.cancel(); openingLink = nil; for session in sessions.values { session.close() }; sessions.removeAll() }
 }
 
 @MainActor @Observable final class ServiceForwardSession {

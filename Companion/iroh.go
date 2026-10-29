@@ -177,11 +177,13 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Remote Discobox is unreachable or refused this peer. Check its Iroh listener, network, and peer enrollment."})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Remote Discobox is unreachable or refused this peer. Check its Iroh listener, network, and peer enrollment. Transport error: " + err.Error()})
 		},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
+		// Generated resource routes use /projects/; sandbox stream routes
+		// use /api/. Both are required for a complete desktop connection.
+		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/projects/") {
 			http.NotFound(w, r)
 			return
 		}

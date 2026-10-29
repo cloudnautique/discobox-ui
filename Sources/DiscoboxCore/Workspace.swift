@@ -11,6 +11,14 @@ public final class Workspace {
     public var streamsLiveTerminals = false
     public private(set) var sandboxes: [Sandbox] = []
     public private(set) var execs: [Exec] = []
+    /// A successful live inventory, separate from the empty/loading selection
+    /// transition so switching boxes never evicts their cached terminals.
+    public struct TerminalInventory: Equatable, Sendable {
+        public let project: String
+        public let box: String
+        public let execIDs: Set<String>
+    }
+    public private(set) var terminalInventory: TerminalInventory?
     public private(set) var services: [Service] = []
     public private(set) var screen: TerminalScreen?
     public private(set) var projectID: String?
@@ -157,6 +165,7 @@ public final class Workspace {
         client?.closeConnection()
         client = nil
         recentBoxes.removeAll()
+        terminalInventory = nil
         transportEndpoint = ""
         usage = HarnessUsage()
         harnessLoad?.cancel(); harnessLoad = nil
@@ -231,7 +240,7 @@ public final class Workspace {
     }
 
     /// Captures the target and connection; a selection change never retargets an intent.
-    public func performBoxAction(_ action: BoxAction, boxID: String, connection: UUID, name: String = "", beforeRequest: () -> Void = {}) async throws {
+    public func performBoxAction(_ action: BoxAction, boxID: String, connection: UUID, name: String = "", refreshAfter: Bool = true, beforeRequest: () -> Void = {}) async throws {
         guard connection == connectionID, let client, let projectID,
               let box = sandboxes.first(where: { $0.id == boxID }), action.isAvailable(for: box) else {
             throw DiscoboxError("This action is no longer available. Refresh the box and try again.")
@@ -246,7 +255,43 @@ public final class Workspace {
         guard connection == connectionID else { return }
         // Avoid reconnecting to a box after an explicit stop/archive/restore.
         if sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { clearSelection() }
-        await refresh()
+        if refreshAfter { await refresh() }
+    }
+
+    public struct PurgeResult: Sendable {
+        public struct Failure: Sendable {
+            public let boxID: String
+            public let message: String
+        }
+        public let purged: [String]
+        public let failures: [Failure]
+    }
+    /// One confirmed manifest, one mutation per box, and one inventory refresh.
+    /// The companion rechecks archived state on the server before every purge.
+    public func purgeArchivedBoxes(_ boxIDs: [String], connection: UUID, progress: (Int, Int) -> Void = { _, _ in }) async throws -> PurgeResult {
+        var seen: Set<String> = []
+        let ids = boxIDs.filter { seen.insert($0).inserted }
+        guard connection == connectionID, !ids.isEmpty,
+              ids.allSatisfy({ id in sandboxes.contains { $0.id == id && BoxAction.purge.isAvailable(for: $0) } && !pendingBoxActions.contains(id) }) else {
+            throw DiscoboxError("The selection changed or contains a box that can no longer be purged. Refresh Archived and select again.")
+        }
+        var purged: [String] = []
+        var failures: [PurgeResult.Failure] = []
+        for (index, id) in ids.enumerated() {
+            guard connection == connectionID, !Task.isCancelled else {
+                failures += ids[index...].map { .init(boxID: $0, message: "Not attempted: the connection changed or the operation was cancelled.") }
+                break
+            }
+            do {
+                try await performBoxAction(.purge, boxID: id, connection: connection, refreshAfter: false)
+                purged.append(id)
+            } catch {
+                failures.append(.init(boxID: id, message: error.localizedDescription))
+            }
+            progress(index + 1, ids.count)
+        }
+        if connection == connectionID, !Task.isCancelled { await refresh() }
+        return PurgeResult(purged: purged, failures: failures)
     }
 
     public func refreshDetails() async {
@@ -264,6 +309,11 @@ public final class Workspace {
             let updatedExecs = terminals.execs.filter(\.tty).sorted {
                 if ($0.primary == true) != ($1.primary == true) { return $0.primary == true }
                 return $0.id < $1.id
+            }
+            if terminals.observedAt == nil, selectedBox?.isRunning == true {
+                let inventory = TerminalInventory(project: projectID, box: sandboxID,
+                    execIDs: Set(updatedExecs.filter(\.acceptsInput).map(\.id)))
+                if terminalInventory != inventory { terminalInventory = inventory }
             }
             if execs != updatedExecs { execs = updatedExecs }
             inventoryLoadedAt = now()
@@ -447,8 +497,11 @@ public final class Workspace {
         let current = revision
         do {
             let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt), as: Sandbox.self)
-            guard current == revision else { return }
+            guard current == revision else { throw CancellationError() }
+            filter = .all
+            searchText = ""
             await refresh()
+            guard current == revision else { throw CancellationError() }
             await selectBox(box.id)
         } catch {
             if current == revision { await refresh() }

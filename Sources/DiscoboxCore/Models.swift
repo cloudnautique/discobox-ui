@@ -170,7 +170,7 @@ public struct Harness: Decodable, Identifiable, Sendable, Equatable {
     public let configured: Bool
 }
 public struct HarnessList: Decodable, Sendable { public let harnessConfigs: [Harness]? }
-public struct AuditRecord: Decodable, Identifiable, Sendable {
+public struct AuditRecord: Decodable, Identifiable, Sendable, Equatable {
     public let id: String
     public let source: String
     public let time: String

@@ -214,24 +214,42 @@ func runAttach(endpoint string, req request) error {
 	signal.Notify(resize, syscall.SIGWINCH)
 	defer signal.Stop(resize)
 	sizes := make(chan frame.ResizePayload, 1)
-	sendSize := func() {
-		cols, rows, err := term.GetSize(fd)
-		if err == nil && cols > 0 && rows > 0 {
-			enqueueLatestSize(sizes, frame.ResizePayload{Cols: uint16(cols), Rows: uint16(rows)})
-		}
-	}
+	// Match the CLI's changed-size polling. SIGWINCH can be coalesced or
+	// delivered before the embedded child's signal handler is ready.
+	sendSize := changedTerminalSize(func() (int, int, error) { return term.GetSize(fd) }, sizes)
 	sendSize()
 	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-resize:
 				sendSize()
+			case <-ticker.C:
+				sendSize()
 			}
 		}
 	}()
 	return pumpAttach(ctx, c, os.Stdin, os.Stdout, sizes)
+}
+
+// One watcher owns the previous size and the latest-only queue. Polling reads
+// the local PTY only; unchanged dimensions produce no network frames.
+func changedTerminalSize(read func() (int, int, error), sizes chan frame.ResizePayload) func() {
+	var previous frame.ResizePayload
+	return func() {
+		cols, rows, err := read()
+		if err != nil || cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
+			return
+		}
+		next := frame.ResizePayload{Cols: uint16(cols), Rows: uint16(rows)}
+		if next != previous {
+			enqueueLatestSize(sizes, next)
+			previous = next
+		}
+	}
 }
 
 // One producer owns this single-slot queue. A slow socket must receive the

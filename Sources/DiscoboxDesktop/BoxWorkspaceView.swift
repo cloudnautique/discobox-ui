@@ -172,7 +172,7 @@ struct BoxWorkspaceView: View {
                 if let terminal = companions.first(where: { "exec:" + $0.id == layout.selected }) {
                     ConsoleView(terminal: terminal, focused: !layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = false })
                 } else if layout.selected == "audit" { AuditView(boxID: box.id, focusSearch: !layout.agentFocused) }
-                else if layout.selected == "services" { ServicesView() }
+                else if layout.selected == "services" { ServicesView(box: box) }
                 else if layout.selected == "files" { FilesView() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -3,13 +3,17 @@ import AppKit
 import DiscoboxCore
 
 struct ServicesView: View {
+    let box: Sandbox
     @Environment(Workspace.self) private var workspace
     @Environment(ServiceForwards.self) private var forwards
     @Environment(DesktopWindows.self) private var desktops
-    @State private var session: ServiceForwardSession?
-    private var live: Bool { workspace.selectedBox?.isRunning == true && !workspace.pendingBoxActions.contains(workspace.sandboxID ?? "") }
+    private var session: ServiceForwardSession? {
+        live ? forwards.existingSession(box: box.id, workspace: workspace) : nil
+    }
+    private var live: Bool { workspace.sandboxID == box.id && box.isRunning && !workspace.pendingBoxActions.contains(box.id) }
+    private var services: [Service] { workspace.sandboxID == box.id ? workspace.services : [] }
     private var declaredServices: [Service] {
-        workspace.services.filter { service in
+        services.filter { service in
             service.id != "ai.discobox.desktop" || session?.ports.contains(where: \.isDesktop) != true
         }
     }
@@ -55,21 +59,20 @@ struct ServicesView: View {
                     }
                     Divider()
                 }
-                let discovered = session?.ports.filter { port in !port.isDesktop && !workspace.services.contains { $0.id == port.serviceId } } ?? []
+                let discovered = session?.ports.filter { port in !port.isDesktop && !services.contains { $0.id == port.serviceId } } ?? []
                 if !discovered.isEmpty {
                     serviceHeading("Other ports", symbol: "network")
                     ForEach(discovered) { port in portRow(port) }
                 }
-                if workspace.services.isEmpty && session?.ports.isEmpty != false && session?.loading != true {
+                if services.isEmpty && session?.ports.isEmpty != false && session?.loading != true {
                     Text("No services or ports reported.").foregroundStyle(.secondary)
                 }
                 Text("Desktop opens in the app. Other web ports open in your browser. Other ports provide a local address to copy. Forwards stay available while this app is connected.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task(id: live) {
-            if live, let box = workspace.sandboxID { session = forwards.session(box: box, workspace: workspace) }
-            else { session = nil }
+        .task(id: "\(workspace.connectionID)-\(workspace.projectID ?? "")-\(box.id)-\(live)") {
+            if live { _ = forwards.session(box: box.id, workspace: workspace) }
         }
     }
     private func serviceHeading(_ title: String, symbol: String) -> some View {
@@ -77,15 +80,15 @@ struct ServicesView: View {
     }
     private func portRow(_ port: ServicePort) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            if !port.serviceName.isEmpty && !workspace.services.contains(where: { $0.id == port.serviceId }) && !port.isDesktop {
+            if !port.serviceName.isEmpty && !services.contains(where: { $0.id == port.serviceId }) && !port.isDesktop {
                 Text(port.serviceName).font(.subheadline.weight(.medium))
             }
             HStack {
-                Text("\(port.port == port.local ? String(port.port) : "\(port.port) → \(port.local)") · \(port.protocol.uppercased())").font(.system(.callout, design: .monospaced))
+                Text("Box \(String(port.port)) · \(port.protocol.uppercased())").font(.system(.callout, design: .monospaced))
                 Spacer()
                 if let url = port.browserURL {
                     Button {
-                        if port.isDesktop, let box = workspace.selectedBox { desktops.open(url: url, box: box) }
+                        if port.isDesktop { desktops.open(url: url, box: box) }
                         else { NSWorkspace.shared.open(url) }
                     } label: {
                         Label(port.isDesktop ? "Open Desktop" : "Open", systemImage: "arrow.up.right.square")
@@ -112,13 +115,13 @@ struct ServicesView: View {
                     NSPasteboard.general.setString(port.browserURL?.absoluteString ?? port.address, forType: .string)
                 } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless).help("Copy local address")
             }
-            Text(port.browserURL?.absoluteString ?? port.address).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("On this computer: " + (port.browserURL?.absoluteString ?? port.address)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }.padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
     private func reconnect() {
-        guard let box = workspace.sandboxID else { return }
-        desktops.close(box: box)
-        forwards.close(box: box)
-        session = forwards.session(box: box, workspace: workspace)
+        guard live else { return }
+        desktops.close(box: box.id)
+        forwards.close(box: box.id)
+        _ = forwards.session(box: box.id, workspace: workspace)
     }
 }

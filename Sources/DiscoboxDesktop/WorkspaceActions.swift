@@ -3,7 +3,11 @@ import AppKit
 import DiscoboxCore
 
 struct NewBoxSheet: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
+    @Environment(Workspace.self) private var initialWorkspace
+    @Environment(Connections.self) private var connections: Connections?
+    @State private var targetComputer = ""
+    private var workspace: Workspace { connections?.session(targetComputer)?.workspace ?? initialWorkspace }
     @Environment(\.dismiss) private var dismiss
     private var harnesses: [Harness] { workspace.cachedHarnesses }
     @State private var harness = ""
@@ -17,6 +21,11 @@ struct NewBoxSheet: View {
             Text("New box").font(.title2.bold())
             Text("Choose an agent harness and, optionally, a Git repository.").foregroundStyle(.secondary)
             Form {
+                if let connections {
+                    Picker("Computer", selection: $targetComputer) {
+                        ForEach(connections.sessions.filter { $0.workspace.isConnected }) { host in Text(host.profile.displayName).tag(host.id) }
+                    }
+                }
                 Picker("Harness", selection: $harness) {
                     Text("Choose a harness").tag("")
                     ForEach(harnesses) { item in Text(item.name + (item.configured ? "" : " — not configured")).tag(item.id).disabled(!item.configured) }
@@ -38,23 +47,41 @@ struct NewBoxSheet: View {
                 Spacer()
                 Button("Create Box") {
                     creating = true; error = nil
+                    let target = workspace, hostID = targetComputer
                     Task {
-                        do { try await workspace.createBox(harness: harness, repository: repository.trimmingCharacters(in: .whitespacesAndNewlines), prompt: prompt); dismiss() }
+                        do {
+                            let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if let connections {
+                                try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt)
+                            } else {
+                                try await target.createBox(harness: harness, repository: repository, prompt: prompt)
+                            }
+                            commands?.showCreateBox = false
+                            dismiss()
+                        }
                         catch { self.error = error.localizedDescription }
                         creating = false
                     }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("newBox.create")
                     .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }))
             }
-        }.padding(24).frame(width: 520).interactiveDismissDisabled(creating)
-        .task {
+        }.padding(24).frame(width: 520, height: connections == nil ? 430 : 480).interactiveDismissDisabled(creating)
+        .onAppear { if targetComputer.isEmpty { targetComputer = connections?.activeID ?? "" } }
+        .task(id: workspace.connectionID) {
+            let target = workspace, generation = workspace.connectionID
+            error = nil
             harness = harnesses.first(where: \.configured)?.id ?? ""
             loading = harnesses.isEmpty
             do {
-                let refreshed = try await workspace.harnesses()
+                let refreshed = try await target.harnesses()
+                guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
                 if !refreshed.contains(where: { $0.id == harness && $0.configured }) { harness = refreshed.first(where: \.configured)?.id ?? "" }
             }
-            catch { self.error = error.localizedDescription }
+            catch {
+                guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
+                self.error = error.localizedDescription
+            }
             loading = false
         }
     }
@@ -66,6 +93,18 @@ struct AuditView: View {
     @FocusState private var searchFocused: Bool
     @Environment(Workspace.self) private var workspace
     @State private var records: [AuditRecord] = []
+    @State private var filteredRecords: [AuditRecord] = []
+    @State private var buffer = AuditBuffer()
+    @State private var recordsVersion = 0
+    @State private var retentionLimited = false
+    @State private var historyGeneration = UUID()
+    private struct SearchKey: Equatable {
+        let generation: UUID
+        let version: Int
+        let source: String
+        let query: String
+    }
+    private var searchKey: SearchKey { .init(generation: historyGeneration, version: recordsVersion, source: source, query: search) }
     @State private var missing: [String] = []
     @State private var limited: [String] = []
     @State private var error: String?
@@ -95,9 +134,10 @@ struct AuditView: View {
             if let error { Notice(text: error, symbol: "exclamationmark.triangle") }
             if !missing.isEmpty { Notice(text: "Unavailable trails: " + missing.joined(separator: "; "), symbol: "exclamationmark.triangle") }
             if !limited.isEmpty { Notice(text: "Recent-event limit reached: " + limited.joined(separator: ", ") + ". Earlier events may be missing.", symbol: "clock") }
+            if retentionLimited { Notice(text: "Audit history reached its 32 MiB or 50,000-event limit. Oldest events are removed as new events arrive.", symbol: "clock") }
             VSplitView {
                 List(selection: $selected) {
-                    ForEach(records.filter { (source == "All" || $0.source == source) && (search.isEmpty || $0.summary.localizedCaseInsensitiveContains(search) || $0.detail.localizedCaseInsensitiveContains(search)) }) { record in
+                    ForEach(filteredRecords) { record in
                         VStack(alignment: .leading, spacing: 5) {
                             HStack { Text(record.source).font(.caption.weight(.semibold)); Spacer(); Text(record.time).font(.caption2.monospaced()).foregroundStyle(.secondary) }
                             Text(record.summary).font(.callout).lineLimit(3)
@@ -131,7 +171,7 @@ struct AuditView: View {
             }
             HStack {
                 Text("\(records.count) retained events").font(.caption2)
-                Button(paging ? "Loading…" : "Load older") { loadOlder() }.disabled(paging || before.isEmpty)
+                Button(paging ? "Loading…" : "Load older") { loadOlder() }.disabled(paging || before.isEmpty || retentionLimited)
                 Spacer()
                 if let lastRead { Text(lastRead, style: .time).font(.caption2) }
             }.foregroundStyle(.secondary).padding(10)
@@ -141,7 +181,22 @@ struct AuditView: View {
             guard !Task.isCancelled else { return }
             searchFocused = focusSearch
         }
+        .task(id: searchKey) {
+            let key = searchKey, input = records
+            do {
+                if !key.query.isEmpty { try await Task.sleep(for: .milliseconds(180)) }
+                let work = Task.detached(priority: .userInitiated) {
+                    try AuditBuffer.filter(input, source: key.source, query: key.query)
+                }
+                let result = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+                guard !Task.isCancelled, key == searchKey else { return }
+                filteredRecords = result
+            } catch is CancellationError { return }
+            catch { return }
+        }
         .task(id: boxID) {
+            buffer = AuditBuffer(); recordsVersion = 0; retentionLimited = false
+            historyGeneration = UUID(); filteredRecords = []
             records = []; missing = []; limited = []; selected = nil; lastRead = nil
             before = [:]; since = [:]; after = [:]
             while !Task.isCancelled {
@@ -150,11 +205,10 @@ struct AuditView: View {
                         let cursor: JSONValue? = lastRead == nil ? nil : .object(["since": .object(since.mapValues { .string($0) }), "after": .object(after.mapValues { .string($0) })])
                         let snapshot = try await workspace.auditSnapshot(box: boxID, cursor: cursor)
                         guard !Task.isCancelled else { return }
-                        var merged = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-                        for record in snapshot.records { merged[record.id] = record }
-                        records = Array(merged.values.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order > $1.order }.prefix(50000))
+                        let update = await buffer.merge(snapshot.records)
+                        guard !Task.isCancelled else { return }
+                        apply(update)
                         if lastRead == nil { before = snapshot.before ?? [:] }
-                        if merged.count > 50000 { error = "The view retains 50,000 events." }
                         since.merge(snapshot.since ?? [:]) { _, next in next }
                         after.merge(snapshot.after ?? [:]) { _, next in next }
                         missing = snapshot.missing; limited = snapshot.limited; error = nil; lastRead = Date()
@@ -164,18 +218,28 @@ struct AuditView: View {
             }
         }
     }
+    private func apply(_ update: AuditBuffer.Snapshot) {
+        guard update.version >= recordsVersion else { return }
+        retentionLimited = update.limited
+        if update.version != recordsVersion {
+            records = update.records
+            recordsVersion = update.version
+            if let selected, !records.contains(where: { $0.id == selected }) { self.selected = nil }
+        }
+    }
     private func loadOlder() {
         paging = true
+        let generation = historyGeneration, target = buffer
         Task {
             defer { paging = false }
             do {
                 let snapshot = try await workspace.auditSnapshot(box: boxID, cursor: .object(["before": .object(before.mapValues { .string($0) })]))
-                guard !Task.isCancelled else { return }
-                var merged = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-                for record in snapshot.records { merged[record.id] = record }
-                if merged.count == records.count { error = "No older rows returned. Timestamp-only trails cannot advance past a full page of equal timestamps." }
-                if merged.count > 50000 { error = "The view retains 50,000 events. Narrow the source/time range in the CLI for a larger export." }
-                records = Array(merged.values.sorted { $0.order > $1.order }.prefix(50000))
+                guard !Task.isCancelled, generation == historyGeneration else { return }
+                let previousVersion = recordsVersion
+                let update = await target.merge(snapshot.records)
+                guard !Task.isCancelled, generation == historyGeneration else { return }
+                apply(update)
+                if update.version == previousVersion && !update.limited { error = "No older rows returned. Timestamp-only trails cannot advance past a full page of equal timestamps." }
                 before.merge(snapshot.before ?? [:]) { _, next in next }
                 missing = snapshot.missing
             } catch { self.error = error.localizedDescription }

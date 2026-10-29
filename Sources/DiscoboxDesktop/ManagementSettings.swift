@@ -163,6 +163,11 @@ struct CredentialSettings: View {
 @MainActor final class HarnessSetupWindows {
     static let shared = HarnessSetupWindows()
     private var windows: [String: HarnessSetupWindow] = [:]
+    func close(connection: UUID) {
+        for key in Array(windows.keys) where key.hasPrefix(connection.uuidString + ":") {
+            windows.removeValue(forKey: key)?.window.close()
+        }
+    }
     func closeAll() {
         for controller in Array(windows.values) { controller.window.close() }
         windows.removeAll()

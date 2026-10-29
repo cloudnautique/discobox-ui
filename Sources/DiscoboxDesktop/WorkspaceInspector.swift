@@ -56,7 +56,7 @@ struct WorkspaceInspector: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                 }
-            default: ServicesView()
+            default: ServicesView(box: box)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -68,8 +68,10 @@ struct ServiceRail: View {
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(ServiceForwards.self) private var forwards
     @Environment(DesktopWindows.self) private var desktops
-    @State private var session: ServiceForwardSession?
-    private var live: Bool { box.isRunning && !workspace.pendingBoxActions.contains(box.id) }
+    private var session: ServiceForwardSession? {
+        live ? forwards.existingSession(box: box.id, workspace: workspace) : nil
+    }
+    private var live: Bool { workspace.sandboxID == box.id && box.isRunning && !workspace.pendingBoxActions.contains(box.id) }
     var body: some View {
         HStack(spacing: 0) {
             Divider()
@@ -89,12 +91,12 @@ struct ServiceRail: View {
                                 VStack(spacing: 3) {
                                     Image(systemName: port.isDesktop ? "desktopcomputer" : port.protocol == "udp" ? "network" : "globe")
                                         .font(.system(size: 15))
-                                    if !port.isDesktop { Text(String(port.port)).font(.system(size: 9, design: .monospaced)) }
+                                    if !port.isDesktop { Text(String(port.local)).font(.system(size: 9, design: .monospaced)) }
                                 }.frame(width: 44, height: 36).contentShape(Rectangle())
                             }
                             .disabled(!live || workspace.isDemo)
-                            .help("\(port.serviceName.isEmpty ? "Port \(port.port)" : port.serviceName)\n\(port.protocol.uppercased()) · \(port.port) → \(port.address)")
-                            .accessibilityLabel(port.isDesktop ? "Open desktop" : "Open \(port.serviceName), port \(port.port)")
+                            .help("\(port.serviceName.isEmpty ? "Port \(port.port)" : port.serviceName)\nBox port: \(port.port) (\(port.protocol.uppercased()))\nOn this computer: \(port.address)")
+                            .accessibilityLabel(port.isDesktop ? "Open desktop" : "Open \(port.serviceName), Mac port \(port.local), box port \(port.port)")
                             .contextMenu {
                                 if port.browserURL(as: "http") != nil {
                                     Button("Open as HTTP") { open(port, scheme: "http") }
@@ -110,8 +112,8 @@ struct ServiceRail: View {
             }.frame(width: 52)
         }.background(.bar)
         .buttonStyle(.borderless)
-        .task(id: live) {
-            session = live ? forwards.session(box: box.id, workspace: workspace) : nil
+        .task(id: "\(workspace.connectionID)-\(workspace.projectID ?? "")-\(box.id)-\(live)") {
+            if live { _ = forwards.session(box: box.id, workspace: workspace) }
         }
     }
     private func copy(_ port: ServicePort) {

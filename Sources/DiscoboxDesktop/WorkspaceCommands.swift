@@ -62,6 +62,7 @@ import DiscoboxCore
 
     weak var window: NSWindow?
     private var workspace: Workspace?
+    private weak var connections: Connections?
     private var router = LeaderRouter()
     private var monitor: Any?
     private var timeout: Task<Void, Never>?
@@ -90,7 +91,8 @@ import DiscoboxCore
         return KeyboardShortcut(KeyEquivalent(key), modifiers: shortcut.swiftUIModifiers)
     }
     func performAppShortcut(_ action: AppShortcutAction) {
-        guard workspace?.isConnected == true, window?.attachedSheet == nil else { return }
+        guard window?.attachedSheet == nil,
+              workspace?.isConnected == true || (action == .switchBox && connections?.sessions.contains(where: { $0.workspace.isConnected }) == true) else { return }
         cancelPrefix()
         switch action {
         case .newBox: showCreateBox = true
@@ -102,8 +104,9 @@ import DiscoboxCore
         case .help: showCommands = true
         }
     }
-    func install(workspace: Workspace) {
+    func install(workspace: Workspace, connections: Connections? = nil) {
         self.workspace = workspace
+        self.connections = connections
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown]) { [weak self] event in
             let consumed = MainActor.assumeIsolated { guard let self else { return false }; return self.route(event) == nil }
@@ -114,7 +117,7 @@ import DiscoboxCore
     private func route(_ event: NSEvent) -> NSEvent? {
         if event.type == .keyUp, swallowed.remove(event.keyCode) != nil { return nil }
         guard let window, event.window === window, window.isKeyWindow,
-              window.attachedSheet == nil, workspace?.isConnected == true else { cancelPrefix(); return event }
+              window.attachedSheet == nil else { cancelPrefix(); return event }
         if event.type == .leftMouseDown { cancelPrefix(); return event }
         guard event.type == .keyDown else { return event }
         let flags = event.modifierFlags.intersection([.command, .shift, .control, .option])
@@ -127,7 +130,7 @@ import DiscoboxCore
                 return nil
             }
         }
-        guard !(window.firstResponder is NSTextView) else { return event }
+        guard workspace?.isConnected == true, !(window.firstResponder is NSTextView) else { return event }
         let token = Self.token(event)
         if event.isARepeat, swallowed.contains(event.keyCode) { return nil }
         let result = router.key(token, bindings: bindings)
@@ -191,7 +194,8 @@ import DiscoboxCore
             withTransaction(transaction) { toggleAgentMaximization() }
         case .refresh: Task { await workspace.refresh() }
         case .help: showCommands = true
-        case .disconnect: workspace.disconnect()
+        case .disconnect:
+            if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() }
         }
     }
     private func moveTerminal(_ delta: Int) {
@@ -228,9 +232,13 @@ struct WorkspaceWindowReader: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError() }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            // Outgoing host probes detach after the new probe has mounted.
+            // Keep the weak window reference until another visible probe takes
+            // ownership, rather than letting a late teardown clear it.
+            guard let window else { return }
             // Terminal grids and sidebar controls must occupy the content area,
             // never the unified titlebar's full-size-content extension.
-            if let window, window.styleMask.contains(.fullSizeContentView) {
+            if window.styleMask.contains(.fullSizeContentView) {
                 let frame = window.frame
                 window.styleMask.remove(.fullSizeContentView)
                 window.setFrame(frame, display: false)

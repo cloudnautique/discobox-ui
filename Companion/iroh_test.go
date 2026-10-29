@@ -112,6 +112,20 @@ func TestIrohPrivateProxyHTTPWebSocketAndRevocation(t *testing.T) {
 			http.Error(w, "peer revoked", 401)
 			return
 		}
+		switch r.URL.Path {
+		case "/projects/default":
+			_, _ = io.WriteString(w, `{"id":"p","name":"Default"}`)
+			return
+		case "/projects/p/sandboxes":
+			_, _ = io.WriteString(w, `{"sandboxes":[]}`)
+			return
+		case "/projects/p/harness-configs":
+			_, _ = io.WriteString(w, `{"harnessConfigs":[]}`)
+			return
+		case "/api/projects/p/sandboxes/b/execs":
+			_, _ = io.WriteString(w, `{"execs":[]}`)
+			return
+		}
 		if r.URL.Path == "/api/socket" {
 			ws, err := websocket.Accept(w, r, nil)
 			if err != nil {
@@ -199,6 +213,24 @@ func TestIrohPrivateProxyHTTPWebSocketAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.client.CloseIdleConnections()
+	// Exercise the actual connection/list operations, not just synthetic
+	// /api paths: the GUI starts at /projects/default before opening a PTY.
+	for _, operation := range []string{"defaultProject", "sandboxes", "harnesses", "execs"} {
+		reply, err := local.execute(ctx, request{Operation: operation, ProjectID: "p", SandboxID: "b"})
+		if err != nil || reply.Status != http.StatusOK {
+			t.Fatalf("%s over authenticated Iroh: status=%d error=%v body=%s", operation, reply.Status, err, reply.Body)
+		}
+	}
+	for _, path := range []string{"/", "/healthz", "/projects-unrelated/p", "/api-unrelated/test"} {
+		blocked, err := local.client.Get(local.base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocked.Body.Close()
+		if blocked.StatusCode != http.StatusNotFound {
+			t.Fatalf("proxy admitted unrelated path %s: %d", path, blocked.StatusCode)
+		}
+	}
 	req, _ := http.NewRequestWithContext(ctx, "POST", local.base+"/api/test?check=yes", strings.NewReader("fixture"))
 	res, err := local.client.Do(req)
 	if err != nil {
@@ -290,5 +322,45 @@ func TestIrohUnenrolledPeerCannotReachAPI(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatal("unenrolled peer reached API handler")
+	}
+}
+
+// The GUI must show the transport's reason instead of collapsing listener,
+// relay, and certificate failures into the same unhelpful 502 message.
+func TestIrohProxyPreservesTransportFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- servePrivateProxy(ctx, endpoint.LogicalHTTPBaseURL, roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("fixture: certificate refused")
+		}), "fixture", writer)
+		writer.Close()
+	}()
+	var ready struct{ Endpoint string }
+	if err := json.NewDecoder(reader).Decode(&ready); err != nil {
+		t.Fatal(err)
+	}
+	local, err := newBridge(ready.Endpoint, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.client.CloseIdleConnections()
+	reply, err := local.execute(ctx, request{Operation: "defaultProject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem struct{ Error string }
+	if err := json.Unmarshal(reply.Body, &problem); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Status != http.StatusBadGateway || !strings.Contains(problem.Error, "fixture: certificate refused") {
+		t.Fatalf("transport detail lost: %d %s", reply.Status, reply.Body)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

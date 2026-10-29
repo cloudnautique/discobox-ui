@@ -2,11 +2,34 @@ import SwiftUI
 import DiscoboxCore
 
 struct WorkspaceView: View {
+    @Environment(Connections.self) private var connections: Connections?
     @Environment(Workspace.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @State private var refreshingBoxes = false
     @State private var showInbox = false
     @State private var boxAction: BoxActionRequest?
+    @State private var archiveSelection: Set<String> = []
+    @State private var bulkPurge: BulkPurgeRequest?
+    private var sidebarSelection: Binding<Set<String>> {
+        Binding(get: {
+            workspace.filter == .archived ? archiveSelection : Set(workspace.sandboxID.map { [$0] } ?? [])
+        }, set: { ids in
+            if workspace.filter == .archived {
+                archiveSelection = ids
+            } else {
+                let id = ids.first(where: { $0 != workspace.sandboxID }) ?? ids.first
+                Task { await workspace.selectBox(id) }
+            }
+        })
+    }
+    private var selectedArchives: [Sandbox] { workspace.sandboxes.filter { archiveSelection.contains($0.id) } }
+    private var canPurgeSelection: Bool {
+        !selectedArchives.isEmpty && selectedArchives.allSatisfy { BoxAction.purge.isAvailable(for: $0) && !workspace.pendingBoxActions.contains($0.id) }
+    }
+    private func confirmBulkPurge() {
+        guard workspace.filter == .archived, canPurgeSelection else { return }
+        bulkPurge = BulkPurgeRequest(boxes: selectedArchives, connection: workspace.connectionID)
+    }
     @AppStorage("collapsedRepositoryGroups") private var collapsedRepositoryData = "[]"
     private var collapsedRepositories: Set<String> {
         get { Set((try? JSONDecoder().decode([String].self, from: Data(collapsedRepositoryData.utf8))) ?? []) }
@@ -19,9 +42,10 @@ struct WorkspaceView: View {
     @State private var selectedTags: Set<String> = []
     @State private var matchAnyTag = false
     @State private var showTagFilters = false
-    private var tagKeys: [String] { Set(workspace.sandboxes.flatMap { Array(($0.meta?.tags ?? [:]).keys) }).sorted() }
+    private var organizationBoxes: [Sandbox] { connections?.sessions.filter { $0.workspace.isConnected }.flatMap { $0.workspace.sandboxes } ?? workspace.sandboxes }
+    private var tagKeys: [String] { Set(organizationBoxes.flatMap { Array(($0.meta?.tags ?? [:]).keys) }).sorted() }
     private var tagChoices: [String] {
-        Set(workspace.sandboxes.flatMap { box in
+        Set(organizationBoxes.flatMap { box in
             (box.meta?.tags ?? [:]).flatMap { key, value in value.isEmpty ? [key] : [key, key + "=" + value] }
         }).sorted()
     }
@@ -39,7 +63,7 @@ struct WorkspaceView: View {
         let groupedBoxes = Dictionary(grouping: visibleBoxes) { BoxOrganization.group($0, by: grouping, tagKey: groupingTagKey) }
         let repositories = groupedBoxes.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         Group {
-            if workspace.isConnecting {
+            if workspace.isConnecting && connections?.sessions.contains(where: { $0.workspace !== workspace && $0.workspace.isConnected }) != true {
                 VStack(spacing: 18) {
                     ProgressView().controlSize(.large)
                     Text("Connecting to Discobox…").font(.title2.weight(.semibold))
@@ -47,10 +71,15 @@ struct WorkspaceView: View {
                         .foregroundStyle(.secondary)
                     Button("Cancel") { workspace.disconnect() }.keyboardShortcut(.cancelAction)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if workspace.isConnected {
+            } else if workspace.isConnected || connections?.sessions.contains(where: { $0.workspace.isConnected }) == true {
                 VStack(spacing: 0) {
                 HSplitView {
                     VStack(spacing: 0) {
+                        if let connections {
+                            if connections.sessions.count > 1 && workspace.filter == .archived {
+                                ComputerPicker().padding(.horizontal, 12).padding(.top, 8)
+                            }
+                        }
                         HStack {
                             Menu {
                                 Picker("Filter", selection: $workspace.filter) {
@@ -80,7 +109,9 @@ struct WorkspaceView: View {
                             Spacer()
                             Button { commands.showCreateBox = true } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New box")
                             if refreshingBoxes { ProgressView().controlSize(.small) }
-                            Text("\(visibleBoxes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            if let connections, connections.sessions.count > 1, workspace.filter != .archived {
+                                Text("\(connections.sessions.filter { $0.workspace.isConnected }.count) online").font(.caption).foregroundStyle(.secondary)
+                            } else { Text("\(visibleBoxes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
                         }.padding(.horizontal, 16).padding(.vertical, 12)
                         TextField("Find a box", text: $workspace.searchText)
                             .textFieldStyle(.roundedBorder).padding(.horizontal, 10).padding(.bottom, 8)
@@ -98,7 +129,11 @@ struct WorkspaceView: View {
                                 }
                             }.padding(.horizontal, 10).padding(.bottom, 6)
                         }
-                        List(selection: Binding(get: { workspace.sandboxID }, set: { id in Task { await workspace.selectBox(id) } })) {
+                        Group {
+                        if let connections, connections.sessions.count > 1, workspace.filter != .archived {
+                            ComputersSidebar(grouping: grouping, tagKey: groupingTagKey, tags: selectedTags, matchAnyTag: matchAnyTag)
+                        } else {
+                        List(selection: sidebarSelection) {
                             if grouping != "none" {
                                 ForEach(repositories, id: \.self) { repository in
                                     let boxes = groupedBoxes[repository] ?? []
@@ -120,11 +155,28 @@ struct WorkspaceView: View {
                             } else {
                                 ForEach(visibleBoxes) { box in sidebarRow(box) }
                             }
-                        }.listStyle(.sidebar).frame(minHeight: 120)
+                        }.listStyle(.sidebar)
+                        }
+                        }.frame(minHeight: 120)
+                        .onDeleteCommand { confirmBulkPurge() }
                         .refreshable { await refreshBoxes() }
                         .background(BoxPullToRefresh { await refreshBoxes() })
                         .help("Pull down at the top to refresh, or press ⌘R.")
                         .accessibilityAction(named: Text("Refresh boxes")) { Task { await refreshBoxes() } }
+                        if workspace.filter == .archived {
+                            Divider()
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("\(archiveSelection.count) selected").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Select All") { archiveSelection = Set(visibleBoxes.map(\.id)) }
+                                        .buttonStyle(.borderless).disabled(visibleBoxes.isEmpty)
+                                }
+                                Button(role: .destructive) { confirmBulkPurge() } label: {
+                                    Label("Purge Selected…", systemImage: "trash").frame(maxWidth: .infinity)
+                                }.disabled(!canPurgeSelection)
+                            }.padding(10)
+                        }
                         if !commands.focusMode { HarnessUsageSection().layoutPriority(1) }
                     }.frame(minWidth: commands.focusMode ? 0 : 220,
                             idealWidth: commands.focusMode ? 0 : 270,
@@ -136,7 +188,15 @@ struct WorkspaceView: View {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Group {
-                                if let box = workspace.selectedBox { BoxWorkspaceView(box: box).id(workspace.connectionID.uuidString + box.id) }
+                                if workspace.filter == .archived && archiveSelection.count != 1 {
+                                    ContentUnavailableView {
+                                        Label(archiveSelection.isEmpty ? "Archived boxes" : "\(archiveSelection.count) archived boxes selected", systemImage: "archivebox")
+                                    } description: {
+                                        Text("Command-click to select boxes, or Shift-click to select a range. Purging permanently deletes their workspace data.")
+                                    } actions: {
+                                        Button("Purge Selected…", role: .destructive) { confirmBulkPurge() }.disabled(!canPurgeSelection)
+                                    }
+                                } else if let box = workspace.selectedBox { BoxWorkspaceView(box: box).id(workspace.connectionID.uuidString + box.id) }
                                 else { ContentUnavailableView("Choose a box", systemImage: "shippingbox", description: Text("Your agent sessions, shells, and services in one workspace.")) }
                             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                             if inspectorRailVisible, let box = workspace.selectedBox {
@@ -165,13 +225,9 @@ struct WorkspaceView: View {
                             .lineLimit(1).truncationMode(.middle)
                     }
                     Spacer()
-                    Circle().fill(workspace.connectionError == nil ? Color.green : .orange).frame(width: 6, height: 6)
-                    Text(workspace.isDemo ? "Demo" : (workspace.connectionError == nil ? "Connected" : "Connection interrupted")).font(.caption).foregroundStyle(.secondary)
-                    if workspace.endpointLabel.hasPrefix("discobox://") || workspace.endpointLabel.hasPrefix("iroh://") {
-                        Text(URLComponents(string: workspace.endpointLabel)?.host ?? "Remote")
-                            .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).frame(maxWidth: 160)
-                            .help(workspace.endpointLabel)
-                    }
+                    Circle().fill(workspace.isConnected && workspace.connectionError == nil ? Color.green : .orange).frame(width: 6, height: 6)
+                    Text(workspace.isDemo ? "Demo" : (!workspace.isConnected ? "Disconnected" : workspace.connectionError == nil ? "Connected" : "Connection interrupted")).font(.caption).foregroundStyle(.secondary)
+                    if let connections { Text(connections.active.profile.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(workspace.endpointLabel) }
                     Button { Task { await workspace.reconnect() } } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless).help("Reconnect to server")
                         .disabled(workspace.isConnecting)
@@ -184,7 +240,7 @@ struct WorkspaceView: View {
                             .help("Show or hide boxes")
                     }
                     ToolbarItem(id: "workspace.title", placement: .automatic) {
-                        Text(workspace.selectedBox?.displayName ?? "Discobox")
+                        Text([connections?.active.profile.displayName, workspace.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › ").isEmpty ? "Discobox" : [connections?.active.profile.displayName, workspace.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › "))
                             .font(.headline).lineLimit(1).truncationMode(.tail)
                     }
                     if #available(macOS 26, *) {
@@ -219,11 +275,26 @@ struct WorkspaceView: View {
         }
         .background(WorkspaceWindowReader(commands: commands))
         .task(id: workspace.connectionID) {
+            guard connections == nil else { return }
             while !Task.isCancelled {
                 await workspace.refreshApprovals()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
+        .sheet(item: $bulkPurge) { request in
+            BulkPurgeSheet(request: request) { purged in archiveSelection.subtract(purged) }.environment(workspace)
+        }
+        .onChange(of: archiveSelection) { _, ids in
+            guard workspace.filter == .archived else { return }
+            let id = ids.count == 1 ? ids.first : nil
+            Task { await workspace.selectBox(id) }
+        }
+        .onChange(of: visibleBoxes.map(\.id)) { _, ids in archiveSelection.formIntersection(Set(ids)) }
+        .onChange(of: workspace.filter) { _, filter in
+            archiveSelection.removeAll()
+            if filter == .archived { Task { await workspace.selectBox(nil) } }
+        }
+        .onChange(of: workspace.connectionID) { archiveSelection.removeAll() }
         .sheet(item: $boxAction) { BoxActionSheet(request: $0).environment(workspace) }
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
         .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
@@ -249,10 +320,15 @@ struct WorkspaceView: View {
     private func sidebarRow(_ box: Sandbox) -> some View {
         BoxRow(box: box).tag(box.id)
             .contextMenu {
+                if workspace.filter == .archived, archiveSelection.count > 1, archiveSelection.contains(box.id) {
+                    Button("Purge \(archiveSelection.count) Selected Boxes…", role: .destructive) { confirmBulkPurge() }
+                        .disabled(!canPurgeSelection)
+                } else {
                 Button("Open workspace") { Task { await workspace.selectBox(box.id) } }
                 Button("Open shell") { openShell(in: box) }.disabled(!box.isRunning || workspace.pendingBoxActions.contains(box.id))
                 Divider()
                 BoxActionMenu(box: box) { choose($0, box: box) }
+                }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if workspace.filter == .archived && BoxAction.purge.isAvailable(for: box) {
@@ -285,7 +361,12 @@ struct WorkspaceView: View {
     private func refreshBoxes() async {
         guard !refreshingBoxes else { return }
         refreshingBoxes = true
-        await workspace.refresh()
+        if let connections, workspace.filter != .archived {
+            let workspaces = connections.sessions.filter { $0.workspace.isConnected }.map(\.workspace)
+            await withTaskGroup(of: Void.self) { group in
+                for target in workspaces { group.addTask { await target.refresh() } }
+            }
+        } else { await workspace.refresh() }
         refreshingBoxes = false
     }
 }
@@ -301,23 +382,35 @@ private struct WorkspaceDialogs: View {
     }
 }
 
-private struct BoxChooser: View {
+struct BoxChooser: View {
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
-    @State private var selected: String?
-    private var results: [Sandbox] { workspace.switcherBoxes.filter { $0.matchesSearch(query) } }
+    @State private var selected: BoxLocation?
+    private var results: [ConnectedBox] {
+        let waiting = Set(workspace.approvals.map(\.boxID))
+        let boxes = connections?.switcherBoxes ?? workspace.switcherBoxes.map {
+            ConnectedBox(location: .init(connection: "", box: $0.id), computer: "", box: $0, needsAttention: $0.matchesAttention || waiting.contains($0.id))
+        }
+        return boxes.filter { $0.matches(query) }
+    }
     var body: some View {
         let matches = results
-        let waiting = Set(workspace.approvals.map(\.boxID))
         VStack(alignment: .leading) {
             HStack { Text("Switch box").font(.title2.bold()); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
             BoxChooserSearch(text: $query, move: move, choose: choose, cancel: { dismiss() })
                 .frame(height: 24)
             ScrollViewReader { reader in
                 List(selection: $selected) {
-                    ForEach(matches) { box in
-                        Button { select(box.id) } label: { BoxChooserRow(box: box, needsAttention: box.matchesAttention || waiting.contains(box.id)) }.buttonStyle(.plain).tag(box.id)
+                    ForEach(matches) { item in
+                        Button { select(item.id) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                if !item.computer.isEmpty { Text(item.computer).font(.caption2).foregroundStyle(.secondary) }
+                                BoxChooserRow(box: item.box, needsAttention: item.needsAttention)
+                            }
+                        }.buttonStyle(.plain).tag(item.id)
                     }
                 }.listStyle(.inset)
                     .overlay { if matches.isEmpty { ContentUnavailableView("No matching boxes", systemImage: "magnifyingglass") } }
@@ -336,7 +429,12 @@ private struct BoxChooser: View {
         selected = matches[min(max(index + delta, 0), matches.count - 1)].id
     }
     private func choose() { if let id = selected, results.contains(where: { $0.id == id }) { select(id) } }
-    private func select(_ id: String) { Task { await workspace.selectBox(id) }; dismiss() }
+    private func select(_ id: BoxLocation) {
+        let target = workspace
+        commands?.choosingBox = false
+        dismiss()
+        Task { if let connections { await connections.selectBox(id) } else { await target.selectBox(id.box) } }
+    }
 }
 
 /// The switcher has no per-row sheets, approval buttons, or context menus.
@@ -411,7 +509,7 @@ private struct BoxChooserSearch: NSViewRepresentable {
     }
 }
 
-private struct RepositoryGroupHeader: View {
+struct RepositoryGroupHeader: View {
     let repository: String
     let count: Int
     let symbol: String
