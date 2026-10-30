@@ -85,8 +85,19 @@ The **Build preview** workflow runs on pushed tags matching `v*` (for example,
 runner with Xcode 26.6, installs the Go version in `Companion/go.mod` and
 checksum-verified Zig 0.14.1, selects Homebrew LLVM 20's Darwin archiver, and builds
 the pinned Ghostty SDK when uncached.
-It then runs `make ci` and uploads `Discobox-macos-arm64.zip` for 30 days. The run
-summary contains the commit and ZIP checksum. It does not publish a GitHub Release.
+It then runs `make ci` and uploads `Discobox-macos-arm64.zip` as an Actions artifact
+for 30 days. The run summary contains the commit and ZIP checksum.
+
+For version tags, a separate publishing job downloads that exact ZIP, verifies
+its artifact digest, and attaches it and a `.sha256` checksum to the tag's GitHub
+Release. If the release does not exist, it creates a prerelease with installation
+notes. Existing release notes, titles, and publication status are preserved;
+reruns replace only the app ZIP and its checksum. Build jobs keep read-only
+repository access; only the publishing job receives `contents: write`.
+
+Manual runs on branches produce Actions artifacts only. A manual run on a
+version tag also publishes its release assets. The app remains ad-hoc signed
+and not notarized.
 
 If the Discobox source or its `github.com/discobox-ai/*` dependencies are private,
 add a repository Actions secret named **DISCOBOX_SOURCE_TOKEN** with read-only

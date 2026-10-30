@@ -4,8 +4,42 @@ Use Iroh to connect the Mac app to Discobox on another machine. The remote serve
 must already have Iroh enabled, and you’ll need someone with access to that host
 to enroll this app.
 
-For host configuration, starting the server with its Iroh listener, and finding
-the server’s peer ID, see [Iroh setup in the README](../README.md#connect-to-another-computer-with-iroh).
+Install and configure Discobox on the server first, following the
+[upstream getting-started instructions](https://github.com/discobox-ai/discobox#getting-started).
+Then enable remote access below and add the computer in the app.
+
+## Enable Iroh on the server
+
+Edit its `server.yaml`, preserving any other settings, to enable both listeners:
+
+```yaml
+listen:
+  - unix://
+  - iroh://
+```
+
+On macOS, the default file is
+`~/Library/Application Support/discobox/server.yaml`. Restart the server with that
+config when you can interrupt its current connections:
+
+```sh
+discobox --server unix:// admin server shutdown --wait
+discobox admin server --config-file "$HOME/Library/Application Support/discobox/server.yaml"
+```
+
+The second command runs in the foreground; keep it running or use your service
+manager to launch it with the same config. The CLI’s automatic local-server
+launcher forces a Unix-only listener, so use the explicit server command for Iroh.
+An environment override such as `DISCOBOX_SERVER_LISTEN` takes precedence over YAML.
+
+In another terminal on that computer, check:
+
+```sh
+discobox --server unix:// admin server status
+```
+
+Look for **this server's own iroh listener**, with an online relay or reachable
+direct addresses. Copy the **peer** ID reported **from the server**.
 
 ## Connect
 

@@ -3,172 +3,94 @@
 > **Preview software:** Development is moving fast, and things will break.
 > Expect bugs, rough edges, and breaking changes between builds.
 
-A native Mac app for working with your Discobox coding agents. Keep the agent in
-view while you open shells, browse files, review changes, and connect to services.
+A native Mac client for [Discobox](https://github.com/discobox-ai/discobox).
+Work with your coding agents, see harness usage, and connect to several Discobox
+servers from one app.
 
-It connects to an existing Discobox server. Your boxes work in both this app and
-the Discobox CLI, and keep running when you close the app.
+## Why use it?
 
-## What you can do
+- **A native client experience.** Work in embedded Ghostty terminals with Mac
+  keyboard shortcuts and copy/paste. Keep your agent visible alongside shell
+  tabs, open services and desktops, browse files and audit logs, and answer
+  approval requests through the app or macOS notifications.
+- **Harness usage at a glance.** See available Codex and Claude Code subscription
+  quota readings, including usage percentages and reset times for supported
+  windows such as five hours and weekly. Readings are shown per harness and
+  computer, using data already observed by Discobox; they can be delayed or
+  unavailable.
+- **Multiple servers, one window.** Connect to your local computer and remote
+  Discobox servers over Iroh at the same time. View all boxes together or filter
+  by computer, then group by repository, harness, state, or tag. Each server
+  keeps its own terminals, services, and credentials while you switch.
 
-- Switch between boxes, group them by repository or harness, and filter by tags.
-- Work in Ghostty terminals with native keyboard shortcuts and copy/paste.
-- Open services and the box’s desktop, transfer files, and browse audit logs.
-- Answer approval requests and configure harnesses from macOS Settings.
-- Inspect pool and box resources, check capacity before creation, and clear pool caches.
+## 1. Install Discobox first
 
-## Get started
+**You must install and set up Discobox before using this app.** Follow the
+[official Discobox installation and getting-started instructions](https://github.com/discobox-ai/discobox#getting-started)
+to install the CLI and complete its setup on the computer that will run your boxes.
+Make sure you can use Discobox from the terminal before continuing.
 
-Preview ZIPs are built for Apple Silicon when a `v*` tag is pushed, or when
-**Actions → Build preview → Run workflow** is run manually. Download
-`Discobox-macos-arm64.zip` from a successful run’s artifacts and move the app to
-Applications. These builds are ad-hoc signed and **not notarized**. After the
-first blocked launch, use **System Settings → Privacy & Security → Open Anyway**
-if you trust the build. See [Apple’s instructions](https://support.apple.com/en-us/102445).
+This app connects to an existing server. It does not install Discobox or start
+its server for you. Your boxes remain available through the Discobox CLI and
+keep running when you quit the Mac app.
 
-To **build from source**, you’ll need macOS 14 or newer,
-Xcode with Swift 6 and the Metal Toolchain, Go 1.27.1 or newer, and Zig 0.14.1.
-See the [build guide](docs/DEVELOPMENT.md) for setup details.
+## 2. Download the Mac app
 
-From this repository’s directory, get the Discobox source used by the app:
+Preview builds require **Apple Silicon (M1 or newer)** and **macOS 14 or newer**.
 
-```sh
-git clone https://github.com/discobox-ai/discobox.git discobox
-git -C discobox checkout d61a7f405389fcc0dda68c5689397aec3a085d9e
-```
+1. Open [Releases](https://github.com/cloudnautique/discobox-ui/releases).
+2. Under a release’s **Assets**, download **`Discobox-macos-arm64.zip`**.
+   The **Source code** archives are not the app.
+3. Unzip the download and drag **Discobox.app** into **Applications**.
 
-Then build and launch:
+If a release has no app ZIP attached yet, open
+[Actions → Build preview](https://github.com/cloudnautique/discobox-ui/actions/workflows/build.yml),
+choose a successful run, and download its app ZIP from **Artifacts**. GitHub may
+require you to sign in to download an Actions artifact.
 
-```sh
-make ghostty   # First build only
-make build
-open dist/Discobox.app
-```
+## 3. Open the unsigned preview
 
-The app tries your local Discobox server automatically. If it can’t connect, it
-shows the connection screen. You can change servers in
-**Discobox → Settings → Connections**.
+Preview builds are **not signed with an Apple Developer ID and are not notarized**.
+macOS may block the first launch. If you trust the downloaded build:
 
-No server handy? Try the demo:
+1. Open **Discobox** from Applications once. If macOS blocks it, dismiss the alert.
+2. Open **System Settings → Privacy & Security** and scroll to **Security**.
+3. Find the message about Discobox and click **Open Anyway**.
+4. Confirm **Open** in the next prompt. Authenticate if macOS asks.
 
-```sh
-open dist/Discobox.app --args --demo
-```
+After that, open Discobox normally from Applications. See
+[Apple’s instructions for opening an app from an unidentified developer](https://support.apple.com/en-us/102445)
+for more detail.
+
+## 4. Connect and start working
+
+On launch, the app tries the default local Discobox server. If the server is
+running, your boxes appear automatically. Otherwise, the app shows a connection
+screen; check that you have completed Discobox’s setup and started its server.
+Manage saved computers in **Discobox → Settings → Connections**.
+
+- Press **⌘N** to create a box or **⌘K** to find and switch boxes.
+- Use the boxes menu to group and filter the list. **All computers** shows boxes
+  from every connected server.
+- Open the right-hand inspector for services, box details, and tags.
+- Expand **Harness usage** in the sidebar for quota readings and reset times.
+- Use **Settings** to choose System, Light, or Dark appearance, customize
+  shortcuts, configure harnesses, manage credentials, and enable notifications.
 
 ## Connect to another computer with Iroh
 
-**On the computer running the server:**
+Install and set up Discobox on the remote computer, then enable its Iroh listener.
+In the Mac app, choose **Settings → Connections → Add Connection**, name the
+computer, and enter its `discobox://<server-peer-id>` address. Use **Authorize
+this computer** to copy an enrollment command and run it on the server computer.
+Then save the connection and click **Connect**.
 
-Edit its `server.yaml`, preserving any other settings, to enable both listeners:
+The [remote connection guide](docs/REMOTE.md) walks through the server config,
+starting its listener, finding the correct peer ID, and enrolling the Mac app.
+Adding a remote server keeps your local connection open.
 
-```yaml
-listen:
-  - unix://
-  - iroh://
-```
+## Building from source
 
-On macOS, the default file is
-`~/Library/Application Support/discobox/server.yaml`. Restart the server with that
-config when you can interrupt its current connections:
-
-```sh
-discobox --server unix:// admin server shutdown --wait
-discobox admin server --config-file "$HOME/Library/Application Support/discobox/server.yaml"
-```
-
-The second command runs in the foreground; keep it running or use your service
-manager to launch it with the same config. The CLI’s automatic local-server
-launcher forces a Unix-only listener, so use the explicit server command for Iroh.
-An environment override such as `DISCOBOX_SERVER_LISTEN` takes precedence over YAML.
-
-In another terminal on that computer, check:
-
-```sh
-discobox --server unix:// admin server status
-```
-
-Look for **this server's own iroh listener**, with an online relay or reachable
-direct addresses. Copy the **peer** ID reported **from the server**.
-
-**In the Mac app:**
-
-1. Open **Discobox → Settings → Connections**. Set **This computer’s name** if
-   you want a different name from the system default, then choose **Add Connection**.
-2. Name the remote computer and enter `discobox://<server-peer-id>` as its address.
-3. Expand **Authorize this computer**, choose **Show My Peer ID**, then
-   **Copy Enrollment Command**. Run that command on the server computer against
-   its local server. For example, replacing the ID and name:
-
-   ```sh
-   discobox --server unix:// admin peer add <app-peer-id> --name "Studio Mac"
-   ```
-
-4. Back in the app, optionally **Test Connection**, then **Save** and **Connect**.
-
-The app’s peer ID is separate from the CLI’s client ID; enroll the ID shown by
-the app. Enrollment grants access to that server’s default user. Connecting a
-remote computer keeps your local connection open too.
-
-See the [remote connection guide](docs/REMOTE.md) for troubleshooting, custom
-relays, and using several computers together.
-
-## Find your way around
-
-**Left:** your boxes. Use the dropdown to change grouping or filter by tags.
-Choose a computer to filter the list; choose **All computers**, or click the
-selected computer again, to show boxes from every connected host.
-The collapsible usage section shows available harness quota readings; **Details…**
-shows when each reading was observed.
-
-**Center:** the agent and your shell/tool tabs. The **+** menu opens shells,
-files, audit logs, and other tools. Maximize the agent to give it more room without
-changing whether your boxes sidebar is open.
-
-**Right:** Services, Box details, and Tags. Collapse this inspector into a compact
-service rail, or hide it entirely using **Settings → Appearance**.
-Choose **System**, **Light**, or **Dark** there to set the app’s appearance.
-
-Right-click a box for actions such as start, stop, rename, and archive.
-Configure harnesses and manage stored credentials in **Discobox → Settings**.
-Shell-close confirmation can be disabled in its dialog and restored in
-**Settings → Appearance → Terminals**.
-
-Approval notifications work across connected computers while the app is running.
-macOS asks for permission when the first request arrives; configure this in
-**Settings → Notifications**. Expand the notification’s actions to **Approve**,
-**Deny**, or choose **Later** to leave it pending. Approve uses the requested
-duration and policy; certificate choices and credential updates open their form.
-Notifications from a disconnected or reconnected session cannot approve access.
-
-Click the **resource gauge beside a computer** to see its pools and box usage,
-or choose **Manage Pool Resources…** in a box’s details. **Clear Caches…** stops
-every running box on that pool and leaves it stopped; workspace files are kept.
-New Box checks the selected pool’s latest report. Existing agents do not report
-free space on separate cache disks, so that check cannot detect a full cache disk.
-
-## Handy shortcuts
-
-| Shortcut | Action |
-| --- | --- |
-| ⌘N | New box |
-| ⌘K | Find and switch boxes |
-| ⌘⇧[ / ⌘⇧] | Previous / next tab |
-| ⌘[ / ⌘] | Move between panes |
-| ⌘⌥I | Show / hide the inspector |
-| ⌘H | Workspace help |
-
-Shortcuts are customizable in **Settings → Keybindings**. The default leader is
-**Ctrl-A**; press it, then **?** to see leader commands. ⌘H opens help in this app;
-Hide Discobox is still available in the app menu.
-
-## Working on the app
-
-```sh
-make build    # Rebuild the app
-make test     # Run the tests
-make ci       # Run all checks and build
-make help     # See every target
-```
-
-See [Development](docs/DEVELOPMENT.md) for tooling and tests, or
-[Architecture](ARCHITECTURE.md) for how the app works.
+You do not need Xcode or the app’s source code to use a downloaded preview.
+To build or contribute, follow the [development guide](docs/DEVELOPMENT.md).
+See [Architecture](ARCHITECTURE.md) for implementation details.

@@ -143,3 +143,36 @@ jobs:
           archive: false # Preserve the prepared ZIP and executable permissions.
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: Attach preview to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out release helper
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/publish-preview.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Download verified app ZIP
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: Discobox-macos-arm64.zip
+          path: dist
+          skip-decompress: true # Keep the uploaded ZIP intact for the release.
+          digest-mismatch: error
+
+      - name: Publish preview assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: bash scripts/publish-preview.sh dist/Discobox-macos-arm64.zip
