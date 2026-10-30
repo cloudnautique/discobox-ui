@@ -83,7 +83,8 @@ jobs:
           printf '%s\n' "$RUNNER_TEMP/zig-aarch64-macos-0.14.1" >> "$GITHUB_PATH"
 
       - name: Cache Ghostty SDK
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: ghostty-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build/ghostty/sdk
           key: ghostty-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('scripts/build-ghostty-sdk.sh', 'scripts/find-llvm-libtool.sh', 'scripts/fetch-ghostty-deps.sh', 'scripts/prepare-ghostty-sdk-overlay.py') }}
@@ -104,6 +105,13 @@ jobs:
             make ghostty
           fi
           test "$(cat "$sdk/REVISION")" = 6d2dd585a5d87fa745d48188dd096ca6e63014d0
+
+      - name: Save verified Ghostty SDK
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .build/ghostty/sdk
+          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Test, build and verify
         env:

@@ -81,7 +81,7 @@ struct ComputersSidebar: View {
                     } else {
                         let groups = Dictionary(grouping: items) { BoxOrganization.group($0, by: grouping, tagKey: tagKey) }
                         ForEach(groups.keys.sorted(), id: \.self) { group in
-                            let key = host.id + "\n" + grouping + "\n" + tagKey + "\n" + group
+                            let key = [host.id, grouping, tagKey, group].joined(separator: "\n")
                             Button {
                                 if collapsedRepositories.contains(key) { collapsedRepositories.remove(key) } else { collapsedRepositories.insert(key) }
                             } label: {
