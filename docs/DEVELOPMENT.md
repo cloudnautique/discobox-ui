@@ -41,6 +41,11 @@ SwiftPM or Xcode can build the app. Check its prerequisites without building wit
 bash scripts/build-ghostty-sdk.sh --check
 ```
 
+Ghostty is checked out from `ghostty-org/ghostty` on GitHub. Its pinned `zg`
+dependency is prefetched from the `pfgithub/zg` GitHub mirror at the original
+commit, with its Zig package hash checked against the upstream manifest. This
+avoids Zig 0.14's failing Codeberg Git fetch without changing dependency contents.
+
 After the first build, use `make build`. The app is written to
 `dist/Discobox.app`; quit and reopen it to use a new build. Dependencies and tool
 caches live under `.build/`.

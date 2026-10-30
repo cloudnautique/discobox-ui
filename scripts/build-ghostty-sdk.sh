@@ -71,6 +71,7 @@ fi
 export ZIG_GLOBAL_CACHE_DIR="$GHOSTTY_BUILD_ROOT/global-cache"
 export ZIG_LOCAL_CACHE_DIR="$GHOSTTY_BUILD_ROOT/local-cache"
 export CLANG_MODULE_CACHE_PATH="$GHOSTTY_BUILD_ROOT/clang-cache"
+bash scripts/fetch-ghostty-deps.sh
 GHOSTTY_SDK_SHIMS="$(python3 scripts/prepare-ghostty-sdk-overlay.py)"
 if [[ -n "$GHOSTTY_SDK_SHIMS" ]]; then
     printf 'Using a workspace-local libSystem SDK overlay for Zig 0.14.\n'
