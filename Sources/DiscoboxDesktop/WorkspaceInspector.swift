@@ -3,9 +3,23 @@ import AppKit
 import DiscoboxCore
 
 struct AppearanceSettings: View {
+    @AppStorage(DiscoboxAppearance.preferenceKey) private var appearance = DiscoboxAppearance.Mode.system
     @AppStorage("inspectorCompactRail") private var compactRail = true
+    @AppStorage("confirmShellClose") private var confirmShellClose = true
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearance) {
+                    ForEach(DiscoboxAppearance.Mode.allCases) { mode in Text(mode.title).tag(mode) }
+                }.pickerStyle(.segmented)
+                    .accessibilityIdentifier("appearance.theme")
+                Text("System follows your Mac’s appearance. Applies to app windows and dialogs; terminal palettes stay independent.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Terminals") {
+                Toggle("Confirm before closing a shell", isOn: $confirmShellClose)
+                Text("Closing a shell ends its running process. Additional agent terminals always require confirmation.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Inspector") {
                 Picker("When inspector is collapsed", selection: $compactRail) {
                     Text("Show compact rail").tag(true)
@@ -58,7 +72,7 @@ struct WorkspaceInspector: View {
                 }
             default: ServicesView(box: box)
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
     }
 }
 

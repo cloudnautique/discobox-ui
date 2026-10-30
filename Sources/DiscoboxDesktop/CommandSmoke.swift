@@ -31,8 +31,8 @@ import DiscoboxCore
             let harness = terminalViews(window.contentView!).first!
             let terminalRect = harness.convert(harness.bounds, to: nil)
             print("COMMAND: terminal rect \(terminalRect), content \(window.contentLayoutRect), window \(window.frame), view \(window.contentView!.bounds)"); fflush(stdout)
-            guard abs(terminalRect.maxY - (window.contentLayoutRect.maxY - 42)) < 1,
-                  abs(terminalRect.minY - (window.contentLayoutRect.minY + 31)) < 1 else {
+            guard abs(terminalRect.maxY - (window.contentLayoutRect.maxY - 42 - DiscoboxAppearance.terminalInset)) < 1,
+                  abs(terminalRect.minY - (window.contentLayoutRect.minY + 31 + DiscoboxAppearance.terminalInset)) < 1 else {
                 throw Failure("terminal obscures tab header or status footer: \(terminalRect), content \(window.contentLayoutRect)")
             }
             func toolbarFrames() -> [String: NSRect] {
@@ -58,7 +58,7 @@ import DiscoboxCore
                     }
                 }
                 let rect = harness.convert(harness.bounds, to: nil)
-                guard abs(rect.minY - (window.contentLayoutRect.minY + 31)) < 1 else {
+                guard abs(rect.minY - (window.contentLayoutRect.minY + 31 + DiscoboxAppearance.terminalInset)) < 1 else {
                     throw Failure("footer height changed with sidebar/inspector")
                 }
             }
@@ -84,30 +84,34 @@ import DiscoboxCore
             print("COMMAND: approval and leader status preserve terminal geometry"); fflush(stdout)
             window.makeFirstResponder(harness)
             commands.bindings = CommandBindings(leader: "ctrl+d")
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
-            try await wait { commands.hint != nil }
-            post(window, code: 1, text: "S", plain: "s", flags: .shift)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            do { try await wait { commands.hint != nil } }
+            catch { throw Failure("Leader event not routed: key=\(window.isKeyWindow), active=\(NSApp.isActive), connected=\(workspace.isConnected), sheet=\(window.attachedSheet != nil), responder=\(String(describing: window.firstResponder)), bindings=\(commands.bindings.leader)") }
+            try await post(window, code: 1, text: "S", plain: "s", flags: .shift)
             try await Task.sleep(for: .milliseconds(100))
-            post(window, code: 29, text: "0")
+            try await post(window, code: 29, text: "0")
             try await wait { commands.showInspector && commands.inspectorSection == "services" }
             commands.showInspector = false
+            // Let the inspector's deferred terminal-focus restoration finish
+            // before the fixture begins editing an unrelated native text field.
+            try await Task.sleep(for: .milliseconds(150))
             print("COMMAND: services"); fflush(stdout)
             // Bindings are active across the workspace, not in editable fields.
             let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
             window.contentView!.addSubview(field)
             window.makeFirstResponder(field)
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await Task.sleep(for: .milliseconds(150))
             guard commands.hint == nil else { throw Failure("leader captured in text field") }
             field.removeFromSuperview()
             window.makeFirstResponder(nil)
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
-            post(window, code: 0, text: "a")
+            try await post(window, code: 0, text: "a")
             try await wait { commands.tab == .terminal && workspace.selectedExec?.primary == true && window.firstResponder is GhosttyTerminalView }
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
-            post(window, code: 1, text: "s")
+            try await post(window, code: 1, text: "s")
             try await wait { workspace.execID == "shell-1" && !workspace.isOpeningShell }
             try await wait { terminalViews(window.contentView!).count == 2 }
             let splitViews = terminalViews(window.contentView!)
@@ -168,14 +172,14 @@ import DiscoboxCore
             try await wait { window.firstResponder is GhosttyTerminalView }
             commands.cancelPrefix()
             // Unknown chords are consumed; Escape cancels the prefix.
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
-            post(window, code: 53, text: "\u{1b}")
+            try await post(window, code: 53, text: "\u{1b}")
             try await wait { commands.hint == nil }
             // Audit binding uses the current leader; help is a native app shortcut.
-            post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
+            try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
-            post(window, code: 0, text: "A", plain: "a", flags: .shift)
+            try await post(window, code: 0, text: "A", plain: "a", flags: .shift)
             try await wait { commands.currentLayout?.selected == "audit" }
             try await wait { terminalViews(window.contentView!).count == 1 }
             guard terminalViews(window.contentView!).first === splitViews[0] else { throw Failure("audit replaced the harness") }
@@ -199,23 +203,24 @@ import DiscoboxCore
             detailWindow.orderOut(nil)
             print("COMMAND: Audit search focus and one-third detail sizing OK"); fflush(stdout)
             // With the agent pinned, wraparound stays in the tool tabs.
-            post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
+            try await post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "exec:shell-1" }
             guard terminalViews(window.contentView!).contains(where: { $0 === splitViews[0] }) else { throw Failure("pinned agent remounted on tab wrap") }
-            post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
-            try await wait { commands.currentLayout?.selected == "audit" && window.firstResponder is NSTextView }
+            try await post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
+            do { try await wait { commands.currentLayout?.selected == "audit" && window.firstResponder is NSTextView } }
+            catch { throw Failure("Audit return: selected=\(commands.currentLayout?.selected ?? "none"), key=\(window.isKeyWindow), responder=\(String(describing: window.firstResponder))") }
             // Cmd-{ returns to the shell; Cmd-[ moves focus
             // between its two panes without changing the selected tab.
-            post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
+            try await post(window, code: 33, text: "{", plain: "[", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "exec:shell-1" && terminalViews(window.contentView!).count == 2 }
             guard terminalViews(window.contentView!).contains(where: { $0 === splitViews[1] }) else { throw Failure("tab switch replaced retained shell") }
             try await wait { window.firstResponder === splitViews[1] }
-            post(window, code: 33, text: "[", flags: .command)
+            try await post(window, code: 33, text: "[", flags: .command)
             try await wait { window.firstResponder === splitViews[0] }
             guard commands.currentLayout?.selected == "exec:shell-1" else { throw Failure("pane navigation changed tab") }
-            post(window, code: 30, text: "]", flags: .command)
+            try await post(window, code: 30, text: "]", flags: .command)
             try await wait { window.firstResponder === splitViews[1] }
-            post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
+            try await post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "audit" && terminalViews(window.contentView!).count == 1 }
             try await wait { !(window.firstResponder is GhosttyTerminalView) }
             // Layout controls support side-by-side and a single maximized tab.
@@ -239,34 +244,34 @@ import DiscoboxCore
             print("COMMAND: tabs, pane shortcuts, keep-agent and layout modes OK"); fflush(stdout)
             let snapshot = try await workspace.auditSnapshot(box: workspace.sandboxID!)
             guard snapshot.records.count == 2 else { throw Failure("audit fixture missing") }
-            post(window, code: 4, text: "h", flags: .command)
+            try await post(window, code: 4, text: "h", flags: .command)
             try await wait { commands.showCommands }
             commands.showCommands = false
             try await wait { window.attachedSheet == nil }
-            post(window, code: 45, text: "n", flags: .command)
+            try await post(window, code: 45, text: "n", flags: .command)
             try await wait { commands.showCreateBox && window.attachedSheet != nil }
             commands.showCreateBox = false
             try await wait { window.attachedSheet == nil }
-            post(window, code: 40, text: "k", flags: .command)
+            try await post(window, code: 40, text: "k", flags: .command)
             try await wait { commands.choosingBox && window.attachedSheet != nil }
             let chooser = window.attachedSheet!
             try await wait { chooser.firstResponder is NSTextView }
             let candidates = workspace.switcherBoxes
             guard candidates.map(\.id) == ["demo-tests", "demo-ui", "demo-api"] else { throw Failure("switcher state priority incorrect") }
-            post(chooser, code: 125, text: "\u{f701}")
-            post(chooser, code: 125, text: "\u{f701}")
-            post(chooser, code: 36, text: "\r")
+            try await post(chooser, code: 125, text: "\u{f701}")
+            try await post(chooser, code: 125, text: "\u{f701}")
+            try await post(chooser, code: 36, text: "\r")
             try await wait { window.attachedSheet == nil && workspace.sandboxID == candidates[2].id }
-            post(window, code: 40, text: "k", flags: .command)
+            try await post(window, code: 40, text: "k", flags: .command)
             try await wait { window.attachedSheet?.firstResponder is NSTextView }
             let searchSheet = window.attachedSheet!
             (searchSheet.firstResponder as! NSTextView).insertText("claude discobox-ui", replacementRange: NSRange(location: NSNotFound, length: 0))
             try await Task.sleep(for: .milliseconds(150))
-            post(searchSheet, code: 36, text: "\r")
+            try await post(searchSheet, code: 36, text: "\r")
             try await wait { window.attachedSheet == nil && workspace.sandboxID == "demo-ui" }
             print("COMMAND: box chooser arrows, Return, harness/repository search OK"); fflush(stdout)
             commands.appShortcuts[.newBox] = "cmd+option+n"
-            post(window, code: 45, text: "n", flags: [.command, .option])
+            try await post(window, code: 45, text: "n", flags: [.command, .option])
             try await wait { commands.showCreateBox && window.attachedSheet != nil }
             commands.showCreateBox = false
             try await wait { window.attachedSheet == nil }
@@ -290,7 +295,7 @@ import DiscoboxCore
             try await Task.sleep(for: .milliseconds(400))
             if let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"] { capture(approvalWindow, path: directory + "/approval.png") }
             approvalWindow.makeFirstResponder(nil)
-            post(approvalWindow, code: 36, text: "\r")
+            try await post(approvalWindow, code: 36, text: "\r")
             try await wait { workspace.approvals.isEmpty && window.attachedSheet == nil }
             guard await client.lastApprovalAction == "deny" else { throw Failure("approval form default was not Deny") }
             print("COMMAND: single request opens directly; Return denies without review step"); fflush(stdout)
@@ -337,9 +342,13 @@ import DiscoboxCore
             print("Saved view snapshot (Metal content may be omitted): \(path)")
         }
     }
-    private static func post(_ window: NSWindow, code: UInt16, text: String, plain: String? = nil, flags: NSEvent.ModifierFlags = []) {
+    private static func post(_ window: NSWindow, code: UInt16, text: String, plain: String? = nil, flags: NSEvent.ModifierFlags = []) async throws {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Sheet teardown and native first-responder restoration complete on
+        // the next run-loop turn. Do not inject events into a closing window.
+        try await wait { window.isKeyWindow && NSApp.isActive && window.attachedSheet == nil }
+        try await Task.sleep(for: .milliseconds(25))
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: plain ?? text, isARepeat: false, keyCode: code)!
             NSApp.postEvent(event, atStart: false)

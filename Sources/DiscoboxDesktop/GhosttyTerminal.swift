@@ -399,7 +399,7 @@ struct TerminalSurface: NSViewRepresentable {
         let text = inputText ?? []; inputText = nil
         if text.isEmpty {
             key(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
-                text: event.characters, composing: wasMarked || hasMarkedText())
+                text: event.terminalCharacters, composing: wasMarked || hasMarkedText())
         } else {
             for value in text { key(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS, text: value) }
         }
@@ -470,4 +470,21 @@ struct TerminalSurface: NSViewRepresentable {
         return window?.convertToScreen(convert(NSRect(x: x, y: y, width: w, height: h), to: nil)) ?? .zero
     }
     override func doCommand(by selector: Selector) {} // Ghostty encodes control/navigation keys.
+}
+
+private extension NSEvent {
+    /// Match Ghostty's AppKit adapter: arrows and function keys carry private
+    /// use characters, not typed text. With extended keyboard reporting enabled,
+    /// passing these as text bypasses navigation encoding for unmodified keys.
+    var terminalCharacters: String? {
+        guard let characters else { return nil }
+        if characters.count == 1, let scalar = characters.unicodeScalars.first {
+            if (0xF700...0xF8FF).contains(scalar.value) { return nil }
+            // Ghostty applies Control itself; supply the underlying character.
+            if scalar.value < 0x20 {
+                return self.characters(byApplyingModifiers: modifierFlags.subtracting(.control))
+            }
+        }
+        return characters
+    }
 }

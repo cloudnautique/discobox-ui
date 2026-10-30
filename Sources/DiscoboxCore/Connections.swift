@@ -27,6 +27,11 @@ import Observation
             }
         }, Task(priority: .utility) {
             while !Task.isCancelled {
+                if workspace.isConnected { await workspace.refreshResources() }
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }, Task(priority: .utility) {
+            while !Task.isCancelled {
                 if workspace.isConnected { await workspace.refreshUsage() }
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
@@ -60,10 +65,16 @@ public struct ConnectedBox: Identifiable, Sendable {
 /// Active selection never owns the transports: every computer keeps its own
 /// workspace, client, caches, polling and connection generation while hidden.
 @MainActor @Observable public final class Connections {
+    public let browser = BoxBrowser()
     public private(set) var sessions: [ConnectionSession]
     public private(set) var activeID: String
     @ObservationIgnored private let pollingEnabled: Bool
     public var active: ConnectionSession { sessions.first { $0.id == activeID } ?? sessions[0] }
+    public var suggestedCreationComputerID: String {
+        if let id = browser.computerID, session(id)?.workspace.isConnected == true { return id }
+        if active.workspace.isConnected { return activeID }
+        return sessions.first(where: { $0.workspace.isConnected })?.id ?? activeID
+    }
     public init(polling: Bool = true) {
         let local = ConnectionSession(profile: .thisComputer)
         sessions = [local]; activeID = local.id; pollingEnabled = polling
@@ -79,11 +90,13 @@ public struct ConnectedBox: Identifiable, Sendable {
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }
     }
-    public func createBox(on id: String, harness: String, repository: String, prompt: String = "") async throws {
+    public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws {
         guard let host = session(id), host.workspace.isConnected else { throw DiscoboxError("Connect to the selected computer first.") }
         let generation = host.workspace.connectionID
-        try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt)
+        try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection)
         guard host.workspace.connectionID == generation, host.workspace.isConnected else { throw CancellationError() }
+        browser.filter = .all; browser.searchText = ""; browser.selectedTags.removeAll(); browser.archivedSelection.removeAll()
+        if browser.computerID != nil { browser.computerID = host.id }
         activate(host.id)
     }
     @discardableResult public func connect(_ profile: ConnectionProfile, demo: Bool = false, select: Bool = true, client: () throws -> any DiscoboxClient) async throws -> ConnectionSession {
@@ -103,7 +116,11 @@ public struct ConnectedBox: Identifiable, Sendable {
     }
     public func selectBox(_ location: BoxLocation) async {
         guard let host = session(location.connection), host.workspace.isConnected,
-              host.workspace.sandboxes.contains(where: { $0.id == location.box }) else { return }
+              let box = host.workspace.sandboxes.first(where: { $0.id == location.box }) else { return }
+        if browser.filter == .archived {
+            if box.isArchived { browser.selectArchives([location]) }
+            else { browser.filter = .all; browser.archivedSelection.removeAll() }
+        }
         activate(host.id)
         await host.workspace.selectBox(location.box)
     }

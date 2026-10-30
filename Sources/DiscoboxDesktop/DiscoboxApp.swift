@@ -3,10 +3,12 @@ import DiscoboxCore
 
 @main
 struct DiscoboxApp: App {
+    @NSApplicationDelegateAdaptor(DiscoboxApplicationDelegate.self) private var applicationDelegate
     @State private var connections = Connections()
     @State private var runtimes = ConnectionRuntimes()
     @AppStorage("savedConnections") private var savedConnections = "[]"
     @AppStorage("computerName") private var computerName = ""
+    @AppStorage(DiscoboxAppearance.preferenceKey) private var appearance = DiscoboxAppearance.Mode.system
     private var localProfile: ConnectionProfile { .localComputer(name: computerName) }
     private var workspace: Workspace { connections.active.workspace }
     private var terminals: TerminalStore { runtimes.runtime(connections.activeID).terminals }
@@ -18,8 +20,12 @@ struct DiscoboxApp: App {
     var body: some Scene {
         Window("Discobox", id: "workspace") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
+                .onChange(of: appearance, initial: true) { DiscoboxAppearance.apply(appearance) }
                 .onChange(of: savedConnections) { connections.syncProfiles(ConnectionProfiles.decode(savedConnections) ?? []) }
                 .onChange(of: computerName, initial: true) { connections.syncProfiles([localProfile]) }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    Task { await ApprovalNotifications.shared.refreshAuthorization() }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in connections.disconnectAll(); CompanionClient.cancelAllRequests(); runtimes.closeAll(); HarnessSetupWindows.shared.closeAll() }
                 .frame(minWidth: 1000, minHeight: 650)
                 .task {
@@ -53,7 +59,7 @@ struct DiscoboxApp: App {
                     if ProcessInfo.processInfo.arguments.contains("--dialog-smoke") {
                         await DialogSmoke.run(workspace: workspace, commands: commands, terminals: terminals)
                     }
-
+                    ApprovalNotifications.shared.configure(connections)
                 }
         }
         .defaultSize(width: 1320, height: 850)
@@ -89,6 +95,7 @@ struct DiscoboxApp: App {
         Settings {
             TabView {
                 AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintpalette") }
+                ApprovalNotificationSettings().tabItem { Label("Notifications", systemImage: "bell") }
                 ConnectionSettings().tabItem { Label("Connections", systemImage: "network") }
                 KeybindingSettings().tabItem { Label("Keybindings", systemImage: "keyboard") }
                 VStack { ComputerPicker().padding([.horizontal, .top]); HarnessSettings().id(connections.activeID) }.tabItem { Label("Harnesses", systemImage: "terminal") }
@@ -100,6 +107,7 @@ struct DiscoboxApp: App {
             .tint(DiscoboxAppearance.accent)
             .accentColor(DiscoboxAppearance.accent)
             .frame(width: 640, height: 680)
+            .onChange(of: appearance, initial: true) { DiscoboxAppearance.apply(appearance) }
         }
     }
 }
@@ -117,5 +125,34 @@ enum CompanionLocation {
 
 /// A restrained version of the brand purple for native controls and focus.
 enum DiscoboxAppearance {
-    static let accent = Color(red: 0.73, green: 0.48, blue: 0.86)
+    static let preferenceKey = "appAppearance"
+    enum Mode: String, CaseIterable, Identifiable {
+        case system, light, dark
+        var id: String { rawValue }
+        var title: String {
+            switch self { case .system: "System"; case .light: "Light"; case .dark: "Dark" }
+        }
+    }
+    /// AppKit owns the override so existing SwiftUI sheets, native alerts,
+    /// and separately-created desktop/setup windows all inherit it. Nil lets
+    /// macOS propagate automatic appearance changes without another observer.
+    @MainActor static func apply(_ mode: Mode) {
+        let name: NSAppearance.Name?
+        switch mode { case .system: name = nil; case .light: name = .aqua; case .dark: name = .darkAqua }
+        guard NSApp.appearance?.name != name else { return }
+        NSApp.appearance = name.flatMap { NSAppearance(named: $0) }
+    }
+    static let accent = adaptive(light: NSColor(red: 0.50, green: 0.37, blue: 0.72, alpha: 1), dark: NSColor(red: 0.74, green: 0.64, blue: 0.90, alpha: 1))
+    static let canvas = adaptive(light: NSColor(red: 0.985, green: 0.985, blue: 0.993, alpha: 1), dark: NSColor(red: 0.125, green: 0.125, blue: 0.14, alpha: 1))
+    static let chrome = adaptive(light: NSColor(red: 0.972, green: 0.972, blue: 0.98, alpha: 1), dark: NSColor(red: 0.162, green: 0.16, blue: 0.18, alpha: 1))
+    static let sidebar = adaptive(light: NSColor(red: 0.943, green: 0.939, blue: 0.96, alpha: 1), dark: NSColor(red: 0.147, green: 0.145, blue: 0.164, alpha: 1))
+    static let surface = adaptive(light: NSColor(red: 0.958, green: 0.954, blue: 0.973, alpha: 1), dark: NSColor(red: 0.18, green: 0.175, blue: 0.20, alpha: 1))
+    static let border = adaptive(light: NSColor(red: 0.86, green: 0.85, blue: 0.89, alpha: 1), dark: NSColor(red: 0.225, green: 0.22, blue: 0.25, alpha: 1))
+    static let selection = accent.opacity(0.14)
+    static let terminalInset: CGFloat = 8
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
 }

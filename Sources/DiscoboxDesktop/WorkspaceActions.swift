@@ -6,11 +6,14 @@ struct NewBoxSheet: View {
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @Environment(Workspace.self) private var initialWorkspace
     @Environment(Connections.self) private var connections: Connections?
+    @Environment(ConnectionRuntimes.self) private var runtimes: ConnectionRuntimes?
     @State private var targetComputer = ""
     private var workspace: Workspace { connections?.session(targetComputer)?.workspace ?? initialWorkspace }
     @Environment(\.dismiss) private var dismiss
     private var harnesses: [Harness] { workspace.cachedHarnesses }
     @State private var harness = ""
+    @State private var poolID = ""
+    @State private var showResources = false
     @State private var repository = ""
     @State private var prompt = ""
     @State private var loading = true
@@ -26,6 +29,12 @@ struct NewBoxSheet: View {
                         ForEach(connections.sessions.filter { $0.workspace.isConnected }) { host in Text(host.profile.displayName).tag(host.id) }
                     }
                 }
+                Picker("Pool", selection: $poolID) {
+                    Text("Automatic placement").tag("")
+                    ForEach(workspace.resources.pools) { pool in
+                        Text(pool.name + (pool.id == workspace.resources.defaultPoolID ? " (default)" : "")).tag(pool.id)
+                    }
+                }
                 Picker("Harness", selection: $harness) {
                     Text("Choose a harness").tag("")
                     ForEach(harnesses) { item in Text(item.name + (item.configured ? "" : " — not configured")).tag(item.id).disabled(!item.configured) }
@@ -36,6 +45,27 @@ struct NewBoxSheet: View {
                 TextEditor(text: $prompt).frame(height: 90).border(.quaternary)
                 Text("Leave blank to start without a task.").font(.caption).foregroundStyle(.secondary)
             }.disabled(creating)
+            TimelineView(.periodic(from: .now, by: 15)) { context in
+                let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
+                let health = workspace.resources.health(destination, now: context.date)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Pool resources").font(.headline)
+                        Spacer()
+                        if workspace.resources.isRefreshing { ProgressView().controlSize(.mini) }
+                        Button("Manage Resources…") { showResources = true }.disabled(creating)
+                    }
+                    ResourceHealthNotice(health: health, reportedAt: workspace.resources.pools.first { $0.id == destination }?.reportedAt)
+                    if let pool = workspace.resources.pools.first(where: { $0.id == destination }) {
+                        HStack(spacing: 16) {
+                            Text("Memory: " + ResourceValue.bytes(pool.memoryAvailable) + " available")
+                            Text("CPU: " + ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes)) + " / " + ResourceValue.cpu(pool.cpuCapacity) + " cores")
+                        }.font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let error = workspace.resources.error { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                    Text(PoolResourceHealth.cacheLimitation).font(.caption).foregroundStyle(.secondary)
+                }.padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            }
             if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
             if loading && harnesses.isEmpty { ProgressView("Loading harnesses…") }
             if !loading && harnesses.filter(\.configured).isEmpty { Text("No configured harnesses are available. Configure a harness in Discobox first.").foregroundStyle(.secondary) }
@@ -47,14 +77,15 @@ struct NewBoxSheet: View {
                 Spacer()
                 Button("Create Box") {
                     creating = true; error = nil
-                    let target = workspace, hostID = targetComputer
+                    let target = workspace, hostID = targetComputer, generation = workspace.connectionID
+                    let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
                     Task {
                         do {
                             let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
                             if let connections {
-                                try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt)
+                                try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
                             } else {
-                                try await target.createBox(harness: harness, repository: repository, prompt: prompt)
+                                try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
                             }
                             commands?.showCreateBox = false
                             dismiss()
@@ -64,10 +95,28 @@ struct NewBoxSheet: View {
                     }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("newBox.create")
-                    .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }))
+                    .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
             }
-        }.padding(24).frame(width: 520, height: connections == nil ? 430 : 480).interactiveDismissDisabled(creating)
-        .onAppear { if targetComputer.isEmpty { targetComputer = connections?.activeID ?? "" } }
+        }.padding(24).frame(width: 560).interactiveDismissDisabled(creating)
+        .sheet(isPresented: $showResources) {
+            if let host = connections?.session(targetComputer), let runtimes {
+                PoolResourcesView(computer: host.profile.displayName, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID)
+                    .environment(host.workspace)
+                    .environment(runtimes.runtime(host.id).terminals)
+                    .environment(runtimes.runtime(host.id).forwards)
+                    .environment(runtimes.runtime(host.id).desktops)
+            } else {
+                PoolResourcesView(computer: workspace.endpointLabel, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).environment(workspace)
+            }
+        }
+        .onAppear { if targetComputer.isEmpty { targetComputer = connections?.suggestedCreationComputerID ?? "" } }
+        .task(id: workspace.connectionID) {
+            let target = workspace, generation = workspace.connectionID
+            poolID = ""
+            await target.refreshResources()
+            guard !Task.isCancelled, workspace === target, generation == target.connectionID else { return }
+            if poolID.isEmpty { poolID = target.resources.defaultPoolID ?? "" }
+        }
         .task(id: workspace.connectionID) {
             let target = workspace, generation = workspace.connectionID
             error = nil
@@ -90,7 +139,6 @@ struct NewBoxSheet: View {
 struct AuditView: View {
     let boxID: String
     var focusSearch = true
-    @FocusState private var searchFocused: Bool
     @Environment(Workspace.self) private var workspace
     @State private var records: [AuditRecord] = []
     @State private var filteredRecords: [AuditRecord] = []
@@ -129,7 +177,7 @@ struct AuditView: View {
                 Spacer()
                 Toggle("Follow", isOn: $following).toggleStyle(.switch).controlSize(.small)
                 }
-                TextField("Search audit", text: $search).textFieldStyle(.roundedBorder).focused($searchFocused)
+                AuditSearchField(text: $search, focusRequested: focusSearch).frame(height: 22)
             }.padding(12)
             if let error { Notice(text: error, symbol: "exclamationmark.triangle") }
             if !missing.isEmpty { Notice(text: "Unavailable trails: " + missing.joined(separator: "; "), symbol: "exclamationmark.triangle") }
@@ -176,11 +224,6 @@ struct AuditView: View {
                 if let lastRead { Text(lastRead, style: .time).font(.caption2) }
             }.foregroundStyle(.secondary).padding(10)
         }.onChange(of: selected) { recording = nil }
-        .task(id: focusSearch) {
-            if focusSearch { await Task.yield() }
-            guard !Task.isCancelled else { return }
-            searchFocused = focusSearch
-        }
         .task(id: searchKey) {
             let key = searchKey, input = records
             do {
@@ -275,4 +318,46 @@ struct AuditView: View {
         }
     }
 
+}
+
+/// Focus only after the native search field is attached to its window. A
+/// SwiftUI focus-state update can otherwise precede the retained terminal's
+/// reparenting when returning to Audit from a shell tab.
+private struct AuditSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let focusRequested: Bool
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.placeholderString = "Search audit"
+        field.sendsSearchStringImmediately = true
+        field.delegate = context.coordinator
+        field.setAccessibilityIdentifier("audit.search")
+        return field
+    }
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.text = $text
+        if field.stringValue != text { field.stringValue = text }
+        let changed = field.focusRequested != focusRequested
+        field.focusRequested = focusRequested
+        if changed && focusRequested { field.requestFocus() }
+    }
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+    final class Field: NSSearchField {
+        var focusRequested = false
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if focusRequested { requestFocus() } }
+        func requestFocus() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.focusRequested, let window = self.window, window.isKeyWindow else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+    }
 }

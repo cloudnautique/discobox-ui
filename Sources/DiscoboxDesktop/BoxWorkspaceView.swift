@@ -8,7 +8,8 @@ struct BoxWorkspaceView: View {
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(TerminalStore.self) private var terminals
     @State private var showInbox = false
-    @State private var closing: Exec?
+    @State private var closing: TerminalCloseRequest?
+    @AppStorage("confirmShellClose") private var confirmShellClose = true
     private var harness: Exec? { workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first(where: { !$0.isShell }) }
     private var companions: [Exec] { workspace.execs.filter { $0.id != harness?.id } }
     private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionID.uuidString + box.id) }
@@ -46,22 +47,17 @@ struct BoxWorkspaceView: View {
                                             project: workspace.projectID ?? "", box: box.id, exec: exec, demo: workspace.isDemo)
             terminals.focus(identity)
         }
+        .onChange(of: commands.agentFocusRequest) {
+            guard workspace.sandboxID == box.id, let harness else { return }
+            let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint,
+                                            project: workspace.projectID ?? "", box: box.id, exec: harness.id, demo: workspace.isDemo)
+            terminals.focus(identity)
+        }
         .onChange(of: commands.showFiles) { _, show in if show { layout.open("files") } }
         .onChange(of: commands.showAudit) { _, show in if show { layout.open("audit") } }
 
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
-        .confirmationDialog("Close this terminal and end its running process?", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }), titleVisibility: .visible) {
-            if let closing {
-                Button("Close Terminal", role: .destructive) {
-                    let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box.id, exec: closing.id, demo: workspace.isDemo)
-                    Task {
-                        do { try await workspace.closeShell(closing.id); terminals.reconnect(identity) }
-                        catch { workspace.commandError = error.localizedDescription }
-                    }
-                    self.closing = nil
-                }
-            }
-        }
+        .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
     }
 
     @ViewBuilder private var panes: some View {
@@ -85,8 +81,8 @@ struct BoxWorkspaceView: View {
                                 }
                             }
                             .padding(.horizontal, 10).padding(.vertical, 7)
-                            .background(layout.selected == id ? DiscoboxAppearance.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(layout.selected == id ? DiscoboxAppearance.accent.opacity(0.3) : .clear, lineWidth: 1) }
+                            .background(layout.selected == id ? DiscoboxAppearance.surface : .clear, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(layout.selected == id ? DiscoboxAppearance.border : .clear, lineWidth: 1) }
                             .accessibilityElement(children: .contain)
                             .accessibilityAddTraits(layout.selected == id ? .isSelected : [])
                             .id(id)
@@ -143,7 +139,8 @@ struct BoxWorkspaceView: View {
         VStack(spacing: 0) {
             if layout.keepAgent {
             HStack {
-                Label("Agent", systemImage: "sparkles")
+                Label("Agent", systemImage: "sparkles").fontWeight(.semibold).foregroundStyle(.primary)
+                Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 if workspace.approvals.contains(where: { $0.boxID == box.id }) {
                     Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
@@ -152,25 +149,25 @@ struct BoxWorkspaceView: View {
                 if !layout.isSplit { tabControls }
                 maximizeAgentButton
             }.workspacePaneHeader()
-                .overlay(alignment: .bottom) { if layout.agentFocused { DiscoboxAppearance.accent.frame(height: 2) } }
+                .overlay(alignment: .bottom) { (layout.agentFocused ? DiscoboxAppearance.accent.opacity(0.35) : DiscoboxAppearance.border).frame(height: 1) }
                 .onTapGesture { layout.agentFocused = true }
             } else {
                 tabBar
-                    .overlay(alignment: .bottom) { DiscoboxAppearance.accent.frame(height: 2) }
+                    .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
             }
             if let harness {
-                ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true })
+                ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
             } else { ContentUnavailableView("No harness terminal", systemImage: "terminal") }
         }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
     }
     private var selectedPane: some View {
         VStack(spacing: 0) {
             tabBar
-                .overlay(alignment: .bottom) { if !layout.agentFocused { DiscoboxAppearance.accent.frame(height: 2) } }
+                .overlay(alignment: .bottom) { (!layout.agentFocused ? DiscoboxAppearance.accent.opacity(0.35) : DiscoboxAppearance.border).frame(height: 1) }
                 .onTapGesture { layout.agentFocused = false }
             Group {
                 if let terminal = companions.first(where: { "exec:" + $0.id == layout.selected }) {
-                    ConsoleView(terminal: terminal, focused: !layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = false })
+                    ConsoleView(terminal: terminal, focused: !layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = false }).studioTerminalFrame()
                 } else if layout.selected == "audit" { AuditView(boxID: box.id, focusSearch: !layout.agentFocused) }
                 else if layout.selected == "services" { ServicesView(box: box) }
                 else if layout.selected == "files" { FilesView() }
@@ -199,8 +196,56 @@ struct BoxWorkspaceView: View {
         }
     }
     private func close(_ id: String) {
-        if let exec = companions.first(where: { "exec:" + $0.id == id }) { closing = exec }
+        if let exec = companions.first(where: { "exec:" + $0.id == id }) {
+            let request = TerminalCloseRequest(terminal: exec, box: box.id, connection: workspace.connectionID)
+            if exec.isShell && !confirmShellClose { closeTerminal(request) } else { closing = request }
+        }
         else { layout.close(id) }
+    }
+    private func closeTerminal(_ request: TerminalCloseRequest) {
+        let target = workspace
+        Task {
+            guard target.connectionID == request.connection, target.sandboxID == request.box else {
+                target.commandError = "The terminal or connection changed. Close the terminal again from its current box."
+                return
+            }
+            let identity = TerminalIdentity(connection: request.connection, endpoint: target.transportEndpoint, project: target.projectID ?? "", box: request.box, exec: request.terminal.id, demo: target.isDemo)
+            do { try await target.closeShell(request.terminal.id); terminals.reconnect(identity) }
+            catch { target.commandError = error.localizedDescription }
+        }
+    }
+}
+
+struct TerminalCloseRequest: Identifiable {
+    let id = UUID()
+    let terminal: Exec
+    let box: String
+    let connection: UUID
+}
+
+struct TerminalCloseSheet: View {
+    let request: TerminalCloseRequest
+    let confirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("confirmShellClose") private var confirmShellClose = true
+    @State private var dontAskAgain = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Close \(request.terminal.title)?", systemImage: "terminal").font(.title2.weight(.semibold))
+            Text("This ends the terminal’s running process. Other terminals and the box stay running.").foregroundStyle(.secondary)
+            if request.terminal.isShell {
+                Toggle("Don’t ask again when closing shells", isOn: $dontAskAgain)
+                Text("Turn confirmation back on in Settings → Appearance → Terminals.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Close Terminal", role: .destructive) {
+                    if request.terminal.isShell && dontAskAgain { confirmShellClose = false }
+                    confirm(); dismiss()
+                }.keyboardShortcut(.defaultAction).accessibilityIdentifier("terminal.confirmClose")
+            }
+        }.padding(24).frame(width: 420)
     }
 }
 
@@ -230,8 +275,13 @@ private struct ToolPaneFocus: NSViewRepresentable {
 
 private extension View {
     func workspacePaneHeader() -> some View {
-        self.font(.callout).buttonStyle(.borderless)
-            .padding(.horizontal, 10).frame(height: 42).background(.bar)
+        self.font(.system(size: 12)).buttonStyle(.borderless)
+            .padding(.horizontal, 14).frame(height: 42).background(DiscoboxAppearance.chrome)
+    }
+    func studioTerminalFrame() -> some View {
+        self.clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(DiscoboxAppearance.border.opacity(0.5), lineWidth: 1) }
+            .padding(DiscoboxAppearance.terminalInset).background(DiscoboxAppearance.canvas)
     }
 }
 
@@ -275,6 +325,9 @@ struct ConsoleView: View {
 
 struct BoxInspector: View {
     let box: Sandbox
+    @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
+    @State private var showResources = false
     var body: some View {
         Form {
             Section("Box") {
@@ -286,6 +339,14 @@ struct BoxInspector: View {
             Section("Agent") {
                 detail("Model", box.config.model)
                 detail("Harness", box.config.harnessConfigId)
+            }
+            Section("Resources") {
+                LabeledContent("CPU cores", value: ResourceValue.cpu(box.resourceCPU))
+                LabeledContent("Memory", value: ResourceValue.bytes(box.resourceMemory))
+                LabeledContent("Disk", value: ResourceValue.bytes(box.resourceDisk))
+                if let observed = box.resourceObservedAt { Text("Measured \(observed, style: .relative) ago").font(.caption).foregroundStyle(.secondary) }
+                Text("Disk includes workspace data. Shared caches belong to the pool.").font(.caption).foregroundStyle(.secondary)
+                Button("Manage Pool Resources…") { showResources = true }
             }
             Section("Observed state") {
                 detail("Existence", box.runtime.state)
@@ -303,6 +364,9 @@ struct BoxInspector: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showResources) {
+            PoolResourcesView(computer: connections?.sessions.first { $0.workspace === workspace }?.profile.displayName ?? workspace.endpointLabel, initialPoolID: box.poolId)
+        }
     }
 
     @ViewBuilder private func detail(_ title: String, _ value: String?) -> some View {

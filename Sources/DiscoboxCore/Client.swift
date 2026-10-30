@@ -42,7 +42,7 @@ public actor CompanionClient: DiscoboxClient {
         let destination = try await prepareConnection() ?? endpoint
         let payload = try JSONEncoder().encode(request)
         let job = ProcessRequest(executable: executable, endpoint: destination,
-                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
+                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await Task.detached(priority: Task.currentPriority) { try job.run() }.value

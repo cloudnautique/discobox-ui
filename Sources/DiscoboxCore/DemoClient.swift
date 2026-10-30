@@ -15,6 +15,33 @@ public actor DemoClient: DiscoboxClient {
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
+        case .poolResources:
+            let gib = 1_073_741_824.0
+            let report: [String: Any] = [
+                "reportedAt": Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(Date()),
+                "cpu": ["vcpus": 0.2, "capacityVcpus": 8],
+                "memory": ["currentBytes": gib, "capacityBytes": 16 * gib, "availableBytes": 10 * gib],
+                "total": ["cpuVcpus": 1.4, "capacityVcpus": 8, "memoryBytes": 3 * gib, "capacityBytes": 16 * gib],
+                "storage": ["filesystem": ["totalBytes": 100 * gib, "usedBytes": 40 * gib, "freeBytes": 55 * gib],
+                            "walk": ["observedAt": Date().ISO8601Format(), "dataBytes": 8 * gib, "cacheBytes": 18 * gib, "buildBytes": 5 * gib]]
+            ]
+            return try JSONSerialization.data(withJSONObject: ["defaultPoolId": "local", "pools": [
+                ["id": "local", "name": "Development", "platform": "linux/arm64", "ready": true, "schedulable": true, "resources": report],
+                ["id": "remote", "name": "Experiments", "platform": "linux/arm64", "ready": false, "schedulable": true]
+            ]])
+        case .clearPoolCache:
+            let list = try JSONSerialization.jsonObject(with: Data(Self.boxes.utf8)) as! [String: Any]
+            let boxes = ((list["sandboxes"] as! [[String: Any]]) + newBoxes).map { boxOverrides[$0["id"] as! String] ?? $0 }
+            var stopped: [String] = []
+            for var box in boxes where box["poolId"] as? String == request.poolID {
+                let runtime = box["runtime"] as? [String: Any]
+                if runtime?["runtimeState"] as? String == "running" {
+                    stopped.append(box["id"] as! String)
+                    box["runtime"] = ["state": "ready", "runtimeState": "stopped"]
+                    boxOverrides[box["id"] as! String] = box
+                }
+            }
+            return try JSONSerialization.data(withJSONObject: ["stoppedSandboxIds": stopped])
         case .boxAction:
             let list = try JSONSerialization.jsonObject(with: Data(Self.boxes.utf8)) as! [String: Any]
             let all = (list["sandboxes"] as! [[String: Any]]) + newBoxes
@@ -52,6 +79,7 @@ public actor DemoClient: DiscoboxClient {
             var box = (list["sandboxes"] as! [[String: Any]])[0]
             box["id"] = "demo-" + UUID().uuidString
             box["displayName"] = "New demo box"
+            box["poolId"] = request.poolID ?? "local"
             newBoxes.append(box)
             return try JSONSerialization.data(withJSONObject: box)
         case .closeShell, .closeTerminal:
@@ -63,7 +91,13 @@ public actor DemoClient: DiscoboxClient {
             return Data(#"{"id":"demo","name":"Personal workspace","default":true}"#.utf8)
         case .sandboxes:
             var list = try JSONSerialization.jsonObject(with: Data(Self.boxes.utf8)) as! [String: Any]
-            list["sandboxes"] = ((list["sandboxes"] as! [[String: Any]]) + newBoxes).filter { !purgedBoxes.contains($0["id"] as! String) }.map { boxOverrides[$0["id"] as! String] ?? $0 }
+            list["sandboxes"] = ((list["sandboxes"] as! [[String: Any]]) + newBoxes).filter { !purgedBoxes.contains($0["id"] as! String) }.map { item in
+                var box = boxOverrides[item["id"] as! String] ?? item
+                var runtime = box["runtime"] as! [String: Any]
+                runtime["resources"] = ["observedAt": Date().ISO8601Format(), "cpu": ["vcpus": 1.2], "memory": ["currentBytes": 2_147_483_648.0, "residentBytes": 1_610_612_736.0], "processCount": 12, "storage": ["totalBytes": 4_294_967_296.0, "sourcesBytes": 3_221_225_472.0], "processes": [["pid": 42, "command": "agent", "vcpus": 1.1, "residentBytes": 1_073_741_824.0]]]
+                box["runtime"] = runtime
+                return box
+            }
             return try JSONSerialization.data(withJSONObject: list)
         case .execs:
             let stopped = request.sandboxID == "demo-api"

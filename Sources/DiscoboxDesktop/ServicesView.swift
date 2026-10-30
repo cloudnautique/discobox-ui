@@ -76,7 +76,7 @@ struct ServicesView: View {
         }
     }
     private func serviceHeading(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol).font(.headline)
+        Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold))
     }
     private func portRow(_ port: ServicePort) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -116,7 +116,8 @@ struct ServicesView: View {
                 } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless).help("Copy local address")
             }
             Text("On this computer: " + (port.browserURL?.absoluteString ?? port.address)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-        }.padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(12).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 7))
+            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(DiscoboxAppearance.border, lineWidth: 1) }
     }
     private func reconnect() {
         guard live else { return }

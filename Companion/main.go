@@ -34,6 +34,7 @@ type request struct {
 	SandboxID  string          `json:"sandboxID"`
 	ExecID     string          `json:"execID"`
 	HarnessID  string          `json:"harnessID,omitempty"`
+	PoolID     string          `json:"poolID,omitempty"`
 	Repository string          `json:"repository,omitempty"`
 	Prompt     string          `json:"prompt,omitempty"`
 	RequestID  string          `json:"requestID,omitempty"`
@@ -153,11 +154,11 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	b.allowManage = allowManage
 	defer b.client.CloseIdleConnections()
 	duration := 15 * time.Second
-	if req.Operation == "boxAction" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
+	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
 		duration = 30 * time.Minute
 		b.client.Timeout = 0
 	}
-	if req.Operation == "boxAction" {
+	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" {
 		// Purge waits for confirmed removal; rename can wait for a stopped box
 		// to wake. Bound the whole request by context, not a 10-second header wait.
 		b.client.Transport.(*http.Transport).ResponseHeaderTimeout = 0
@@ -311,6 +312,8 @@ func validateInput(parts []inputPart) error {
 
 func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
+	case "poolResources", "clearPoolCache":
+		return b.poolOperation(ctx, req)
 	case "boxAction":
 		return b.boxAction(ctx, req)
 	case "deleteSecret", "approvals", "secrets", "answer", "createSecret", "ruleProposals":

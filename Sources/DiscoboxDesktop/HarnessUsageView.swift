@@ -5,7 +5,7 @@ struct HarnessUsageSection: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(Workspace.self) private var workspace
     @AppStorage("harnessUsageExpanded") private var expanded = true
-    @AppStorage("harnessUsageShelfHeight") private var height = 210.0
+    @AppStorage("harnessUsageShelfHeight") private var height = 150.0
     @State private var dragHeight: Double?
     @State private var showDetails = false
     var body: some View {
@@ -30,7 +30,7 @@ struct HarnessUsageSection: View {
                     HStack(spacing: 7) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10, weight: .semibold)).frame(width: 12)
-                        Text("HARNESS USAGE").font(.caption.weight(.semibold))
+                        Text("Harness usage").font(.system(size: 11, weight: .semibold))
                         if let connections { Text(connections.active.profile.displayName).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Spacer()
                     }.contentShape(Rectangle())
@@ -52,7 +52,7 @@ struct HarnessUsageSection: View {
                     }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.65))
+        .background(DiscoboxAppearance.sidebar)
         .tint(DiscoboxAppearance.accent)
         .sheet(isPresented: $showDetails) { UsageDetails().environment(workspace) }
     }

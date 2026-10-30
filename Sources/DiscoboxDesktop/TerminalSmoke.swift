@@ -35,6 +35,12 @@ import DiscoboxCore
                 catch { throw Failure("Missing \(marker), received: \(text(session.view))") }
             }
             print("SMOKE: Shift-Enter and Ctrl-Enter bytes OK")
+            try await checkArrows(session.view, window: window, application: false)
+            session.view.sendLiteral("\u{5}")
+            try await wait { text(session.view).contains("Extended keyboard protocol enabled") }
+            try await checkArrows(session.view, window: window, application: false)
+            session.view.sendLiteral("\u{6}")
+            try await wait { text(session.view).contains("Extended keyboard protocol disabled") }
             window.setContentSize(NSSize(width: 1000, height: 600))
             try await wait { ghostty_surface_size(surface).columns > size.columns }; print("SMOKE: resize OK")
             let mountedSize = ghostty_surface_size(surface)
@@ -48,9 +54,16 @@ import DiscoboxCore
             window.contentView = session.view
             try await wait { ghostty_surface_size(surface).columns == mountedSize.columns }
             print("SMOKE: detached transient geometry ignored")
-            // These control bytes affect only the synthetic child, never a shell.
-            "\u{1}".withCString { ghostty_surface_text(surface, $0, 1) }
+            // Control-A must reach the fixture as byte 1, then arrows must
+            // remain navigation events. This child is synthetic, never a shell.
+            let controlA = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .control, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "\u{1}", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)!
+            session.view.keyDown(with: controlA)
             try await wait { text(session.view).contains("Alternate screen fixture") }; print("SMOKE: alternate OK")
+            // Full-screen TUIs can enable application cursor mode. Test both
+            // encodings, including navigation after a literal Control-A.
+            session.view.sendLiteral("\u{4}")
+            try await wait { text(session.view).contains("Application cursor keys enabled") }
+            try await checkArrows(session.view, window: window, application: true)
             "\u{2}".withCString { ghostty_surface_text(surface, $0, 1) }
             try await wait { text(session.view).contains("zINPUT-é") }; print("SMOKE: text OK")
             let selectAll = "select_all"
@@ -77,7 +90,7 @@ import DiscoboxCore
             session.close()
             window.orderOut(nil)
             store.closeAll()
-            print("TERMINAL_SMOKE_OK: PTY output, Unicode, keyboard input, text insertion, resize, alternate screen, selection, retained session identity, process exit, surface teardown")
+            print("TERMINAL_SMOKE_OK: PTY output, Unicode, keyboard input, text insertion, navigation in legacy/application/extended modes, Control-A, resize, alternate screen, selection, retained session identity, process exit, surface teardown")
             fflush(stdout)
             exit(0)
         } catch {
@@ -86,6 +99,23 @@ import DiscoboxCore
             store.closeAll()
             exit(1)
         }
+    }
+    private static func checkArrows(_ view: GhosttyTerminalView, window: NSWindow, application: Bool) async throws {
+        let arrows: [(UInt16, String, String)] = [(123, "\u{F702}", "D"), (124, "\u{F703}", "C"), (125, "\u{F701}", "B"), (126, "\u{F700}", "A")]
+        for (flags, prefix): (NSEvent.ModifierFlags, String) in [([], application ? "O" : "["), (.shift, "[1;2"), (.control, "[1;5")] {
+            for (code, characters, suffix) in arrows {
+                let marker = "<ESC>" + prefix + suffix
+                let count = text(view).components(separatedBy: marker).count
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+                    if type == .keyDown { view.keyDown(with: event) } else { view.keyUp(with: event) }
+                }
+                do { try await wait { text(view).components(separatedBy: marker).count > count } }
+                catch { throw Failure("Missing arrow bytes \(marker), received: \(text(view))") }
+                guard !text(view).unicodeScalars.contains(where: { (0xF700...0xF8FF).contains($0.value) }) else { throw Failure("AppKit function-key character leaked into terminal") }
+            }
+        }
+        print("SMOKE: plain, Shift and Control arrows OK (application=\(application))"); fflush(stdout)
     }
     private static func text(_ view: GhosttyTerminalView) -> String {
         guard let surface = view.surface else { return "" }

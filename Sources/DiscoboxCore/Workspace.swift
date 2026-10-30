@@ -5,6 +5,8 @@ import Observation
 public final class Workspace {
     public private(set) var connectionID = UUID()
     public private(set) var usage = HarnessUsage()
+    public private(set) var resources = PoolResources()
+    public private(set) var clearingPools: Set<String> = []
     public private(set) var cachedHarnesses: [Harness] = []
     @ObservationIgnored private var harnessesReadAt: Date?
     @ObservationIgnored private var harnessLoad: Task<[Harness], Error>?
@@ -168,6 +170,7 @@ public final class Workspace {
         terminalInventory = nil
         transportEndpoint = ""
         usage = HarnessUsage()
+        resources.cancel(); resources = PoolResources(); clearingPools = []
         harnessLoad?.cancel(); harnessLoad = nil
         cachedHarnesses = []; harnessesReadAt = nil
         approvals = []; approvalError = nil; approvalRequest = UUID()
@@ -246,6 +249,7 @@ public final class Workspace {
             throw DiscoboxError("This action is no longer available. Refresh the box and try again.")
         }
         guard !pendingBoxActions.contains(boxID) else { throw DiscoboxError("An action is already in progress for this box.") }
+        guard !clearingPools.contains(box.poolId ?? "") else { throw DiscoboxError("This pool is clearing its caches. Wait for cleanup to finish.") }
         recentBoxes.removeValue(forKey: boxID)
         pendingBoxActions.insert(boxID)
         defer { if connection == connectionID { pendingBoxActions.remove(boxID) } }
@@ -380,6 +384,18 @@ public final class Workspace {
         let body = try await operation(.secrets)
         return body["secrets"].array
     }
+    /// An action needs its own fresh result: the UI polling refresh can be
+    /// superseded by another poll and intentionally leave its previous snapshot.
+    public func validateApproval(_ item: ApprovalItem, connection: UUID) async throws {
+        guard isConnected, connectionID == connection, let client, let projectID else {
+            throw DiscoboxError("The computer reconnected or disconnected. Open the current request in Discobox.")
+        }
+        let result = try await client.decode(.init(.approvals, projectID: projectID), as: ApprovalInbox.self)
+        guard connectionID == connection, isConnected, item.request["status"].string == "pending",
+              result.approvalRequests.contains(item) else {
+            throw DiscoboxError("The request changed or was answered elsewhere. Check the approval inbox.")
+        }
+    }
     public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil) async throws -> JSONValue {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, action: action, payload: payload, localPath: localPath))
@@ -492,11 +508,63 @@ public final class Workspace {
         harnessesReadAt = now()
         return result
     }
-    public func createBox(harness: String, repository: String, prompt: String = "") async throws {
-        guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
-        let current = revision
+    public func refreshResources(force: Bool = false) async {
+        guard let client, let projectID, isConnected else { return }
+        _ = try? await resources.refresh(client: client, project: projectID, force: force, now: now())
+    }
+
+    public struct CacheClearResult: Decodable, Sendable { public let stoppedSandboxIds: [String] }
+
+    /// Confirmation is for the whole captured pool, including boxes another
+    /// client starts during review. Never retry a possibly committed clear.
+    public func clearPoolCache(poolID: String, connection: UUID, beforeRequest: ([String]) -> Void = { _ in }) async throws -> CacheClearResult {
+        guard connection == connectionID, let client, let projectID, isConnected,
+              resources.pools.contains(where: { $0.id == poolID }), !clearingPools.contains(poolID) else {
+            throw DiscoboxError("This pool or connection changed. Reopen Resources before clearing caches.")
+        }
+        let boxes = sandboxes.filter { $0.poolId == poolID }.map(\.id)
+        guard pendingBoxActions.isDisjoint(with: boxes) else { throw DiscoboxError("A box action is in progress on this pool.") }
+        clearingPools.insert(poolID); pendingBoxActions.formUnion(boxes)
+        for id in boxes { recentBoxes.removeValue(forKey: id) }
+        if boxes.contains(sandboxID ?? "") { clearSelection() }
+        beforeRequest(boxes)
+        defer {
+            if connection == connectionID {
+                clearingPools.remove(poolID); pendingBoxActions.subtract(boxes)
+            }
+        }
         do {
-            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt), as: Sandbox.self)
+            let result = try await client.decode(.init(.clearPoolCache, projectID: projectID, poolID: poolID), as: CacheClearResult.self)
+            guard connection == connectionID else { throw CancellationError() }
+            resources.invalidate(poolID, at: now())
+            await refresh()
+            guard connection == connectionID else { throw CancellationError() }
+            await refreshResources(force: true)
+            guard connection == connectionID else { throw CancellationError() }
+            return result
+        } catch {
+            if connection == connectionID { resources.invalidate(poolID, at: now()); await refresh() }
+            throw error
+        }
+    }
+
+    public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws {
+        guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
+        guard connection == nil || connection == connectionID else { throw DiscoboxError("The destination computer reconnected. Review the new box settings again.") }
+        let current = revision
+        await refreshResources(force: true)
+        guard current == revision, !Task.isCancelled else { throw CancellationError() }
+        let destination = poolID ?? resources.defaultPoolID
+        if let destination, !destination.isEmpty {
+            guard !clearingPools.contains(destination) else { throw DiscoboxError("This pool is clearing its caches. Wait for cleanup to finish.") }
+            if resources.error == nil && !resources.pools.contains(where: { $0.id == destination }) {
+                throw DiscoboxError("The selected pool is no longer available. Choose a pool again.")
+            }
+            let health = resources.health(destination, now: now())
+            guard health.canCreate else { throw DiscoboxError(health.messages.joined(separator: " ")) }
+        }
+        do {
+            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, poolID: destination), as: Sandbox.self)
             guard current == revision else { throw CancellationError() }
             filter = .all
             searchText = ""

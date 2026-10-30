@@ -10,6 +10,7 @@ import DiscoboxCore
     var showApprovals = false
     var showAudit = false
     var tab = WorkspaceTab.terminal
+    var agentFocusRequest = UUID()
     var showInspector = false
     var inspectorSection = UserDefaults.standard.string(forKey: "inspectorSection") ?? "services" {
         didSet { UserDefaults.standard.set(inspectorSection, forKey: "inspectorSection") }
@@ -179,7 +180,16 @@ import DiscoboxCore
             if let layout = currentLayout, layout.isSplit { layout.agentFocused = true }
             else { currentLayout?.open("agent") }
             tab = .terminal
-            if let exec = (workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first) { Task { await workspace.selectExec(exec.id) } }
+            if let exec = (workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first) {
+                let generation = workspace.connectionID, box = workspace.sandboxID
+                Task {
+                    await workspace.selectExec(exec.id)
+                    guard workspace.connectionID == generation, workspace.sandboxID == box else { return }
+                    // An already-selected agent still needs keyboard ownership
+                    // after a text field, inspector, or dialog had focus.
+                    agentFocusRequest = UUID()
+                }
+            }
         case .previousTerminal: moveTerminal(-1)
         case .nextTerminal: moveTerminal(1)
         case .newShell: tab = .terminal; Task { await workspace.openShell() }
@@ -207,6 +217,16 @@ import DiscoboxCore
         Task { await workspace.selectExec(terminal.id) }
     }
     private func moveBox(_ delta: Int) {
+        if let connections {
+            let boxes = connections.browserBoxes
+            guard !boxes.isEmpty else { return }
+            let current = workspace?.sandboxID.map { BoxLocation(connection: connections.activeID, box: $0) }
+            let index = boxes.firstIndex { $0.location == current } ?? 0
+            let location = boxes[(index + delta + boxes.count) % boxes.count].location
+            tab = .terminal
+            Task { await connections.selectBox(location) }
+            return
+        }
         guard let workspace, !workspace.visibleBoxes.isEmpty else { return }
         let boxes = workspace.visibleBoxes
         let index = boxes.firstIndex { $0.id == workspace.sandboxID } ?? 0
@@ -236,6 +256,8 @@ struct WorkspaceWindowReader: NSViewRepresentable {
             // Keep the weak window reference until another visible probe takes
             // ownership, rather than letting a late teardown clear it.
             guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = NSColor(DiscoboxAppearance.chrome)
             // Terminal grids and sidebar controls must occupy the content area,
             // never the unified titlebar's full-size-content extension.
             if window.styleMask.contains(.fullSizeContentView) {
@@ -244,6 +266,7 @@ struct WorkspaceWindowReader: NSViewRepresentable {
                 window.setFrame(frame, display: false)
             }
             commands.window = window
+            ApprovalNotifications.shared.window = window
         }
     }
 }

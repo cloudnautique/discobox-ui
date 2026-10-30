@@ -15,6 +15,7 @@ the Discobox CLI, and keep running when you close the app.
 - Work in Ghostty terminals with native keyboard shortcuts and copy/paste.
 - Open services and the box’s desktop, transfer files, and browse audit logs.
 - Answer approval requests and configure harnesses from macOS Settings.
+- Inspect pool and box resources, check capacity before creation, and clear pool caches.
 
 ## Get started
 
@@ -114,6 +115,8 @@ relays, and using several computers together.
 ## Find your way around
 
 **Left:** your boxes. Use the dropdown to change grouping or filter by tags.
+Choose a computer to filter the list; choose **All computers**, or click the
+selected computer again, to show boxes from every connected host.
 The collapsible usage section shows available harness quota readings; **Details…**
 shows when each reading was observed.
 
@@ -123,9 +126,25 @@ changing whether your boxes sidebar is open.
 
 **Right:** Services, Box details, and Tags. Collapse this inspector into a compact
 service rail, or hide it entirely using **Settings → Appearance**.
+Choose **System**, **Light**, or **Dark** there to set the app’s appearance.
 
 Right-click a box for actions such as start, stop, rename, and archive.
 Configure harnesses and manage stored credentials in **Discobox → Settings**.
+Shell-close confirmation can be disabled in its dialog and restored in
+**Settings → Appearance → Terminals**.
+
+Approval notifications work across connected computers while the app is running.
+macOS asks for permission when the first request arrives; configure this in
+**Settings → Notifications**. Expand the notification’s actions to **Approve**,
+**Deny**, or choose **Later** to leave it pending. Approve uses the requested
+duration and policy; certificate choices and credential updates open their form.
+Notifications from a disconnected or reconnected session cannot approve access.
+
+Click the **resource gauge beside a computer** to see its pools and box usage,
+or choose **Manage Pool Resources…** in a box’s details. **Clear Caches…** stops
+every running box on that pool and leaves it stopped; workspace files are kept.
+New Box checks the selected pool’s latest report. Existing agents do not report
+free space on separate cache disks, so that check cannot detect a full cache disk.
 
 ## Handy shortcuts
 

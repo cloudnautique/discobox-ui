@@ -59,6 +59,12 @@ closes the app’s connection and forwards; the remote boxes keep running.
 
 - **Access refused:** check that the app’s peer ID is enrolled on the intended
   server and has not been revoked.
+- **Keychain authorization failed:** preview builds are ad-hoc signed, so a
+  rebuild can change which binary Keychain trusts. In Keychain Access, find
+  **Discobox remote connection identity**, open **Access Control**, and add the
+  current Discobox app to its allowed applications. Save with your local
+  Keychain password, then reopen the app. Keep the existing item: deleting it
+  changes your peer identity and requires enrolling it again on each server.
 - **Connection failure:** check the address, network, and server’s Iroh listener.
 - **Custom relays:** the advanced HTTPS relay settings must match the server.
 - **Direct-only mode:** requires a reachable `?addr=IP:port` in the server address;
@@ -70,8 +76,10 @@ but do not add client authentication. Discobot authentication is not supported.
 
 ## Use several computers together
 
-The sidebar groups boxes by computer, with separate connection and approval
-indicators. Click any box to open it. Terminals, tabs, port forwards, and desktop
+The sidebar shows all connected computers by default. Choose a computer to filter
+the boxes, or click it again to return to **All computers**. Group by repository,
+harness, state, or tag still applies across the visible computers. Opening a box
+preserves the list's computer filter, search, and tag filters. Terminals, tabs, port forwards, and desktop
 windows remain attached to their own computer while you switch.
 
 - **⌘K** searches boxes across connected computers, including computer names,

@@ -28,7 +28,10 @@ struct ConnectionLifecycle: View {
             .onChange(of: workspace.connectionID) { old, _ in
                 runtime.close()
                 HarnessSetupWindows.shared.close(connection: old)
+                ApprovalNotifications.shared.synchronize(session)
             }
+            .onChange(of: workspace.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
+            .onChange(of: workspace.isConnected) { ApprovalNotifications.shared.synchronize(session) }
             .onChange(of: workspace.pendingBoxActions) {
                 for box in workspace.pendingBoxActions { runtime.forwards.close(box: box); runtime.desktops.close(box: box) }
             }
@@ -58,6 +61,7 @@ struct ConnectedWorkspace: View {
     let connections: Connections
     let runtimes: ConnectionRuntimes
     let commands: WorkspaceCommands
+    @State private var notifications = ApprovalNotifications.shared
     private var workspace: Workspace { connections.active.workspace }
     var body: some View {
         let runtime = runtimes.runtime(connections.activeID)
@@ -80,5 +84,11 @@ struct ConnectedWorkspace: View {
             }
             .onChange(of: workspace.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in commands.cancelPrefix() }
+            .sheet(item: $notifications.presentation) { target in
+                ApprovalSheet(item: target.item).environment(target.workspace).environment(connections)
+            }
+            .alert("Approval notification", isPresented: Binding(get: { notifications.actionError != nil }, set: { if !$0 { notifications.actionError = nil } })) {
+                Button("OK") { notifications.actionError = nil }
+            } message: { Text(notifications.actionError ?? "") }
     }
 }

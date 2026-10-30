@@ -4,6 +4,7 @@ public struct Project: Codable, Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let `default`: Bool?
+    public let defaultPoolId: String?
 }
 
 public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
@@ -31,6 +32,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         public let lastActiveAt: String?
         public let displayState: String?
         public let agentStatus: JSONValue?
+        public let resources: JSONValue?
     }
     public struct Metadata: Codable, Sendable, Equatable {
         public let name: String?
@@ -128,12 +130,13 @@ public struct InputPart: Codable, Sendable, Equatable {
 }
 
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public enum Operation: String, Encodable, Sendable { case poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
     public let operation: Operation
     public let projectID: String?
     public let sandboxID: String?
     public let execID: String?
     public let harnessID: String?
+    public let poolID: String?
     public let repository: String?
     public let remotePath: String?
     public let localPath: String?
@@ -145,7 +148,8 @@ public struct BridgeRequest: Encodable, Sendable {
     public let input: [InputPart]?
 
     public init(_ operation: Operation, projectID: String? = nil, sandboxID: String? = nil,
-                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil) {
+                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil) {
+        self.poolID = poolID
  self.remotePath = remotePath; self.localPath = localPath
  self.prompt = prompt; self.requestID = requestID; self.kind = kind; self.action = action; self.payload = payload
         self.harnessID = harnessID

@@ -12,6 +12,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"time"
 
 	api "github.com/discobox-ai/discobox/api/gen"
 	model "github.com/discobox-ai/discobox/api/model"
@@ -62,19 +63,31 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 	if project.Status != 200 || json.Unmarshal(project.Body, &p) != nil {
 		return response{}, errors.New("could not read project placement")
 	}
-	if p.DefaultPoolID != "" {
-		if validID(p.DefaultPoolID) != nil {
-			return response{}, errors.New("invalid default pool")
+	poolID := req.PoolID
+	if poolID == "" {
+		poolID = p.DefaultPoolID
+	}
+	if poolID != "" {
+		if validID(poolID) != nil {
+			return response{}, errors.New("invalid destination pool")
 		}
-		pool, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/pools/"+p.DefaultPoolID, nil)
+		pool, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/pools/"+poolID, nil)
 		if err != nil {
 			return response{}, err
 		}
 		var data struct {
-			Platform string `json:"platform"`
+			Platform    string          `json:"platform"`
+			Resources   json.RawMessage `json:"resources"`
+			Schedulable *bool           `json:"schedulable"`
 		}
 		if pool.Status != 200 || json.Unmarshal(pool.Body, &data) != nil {
-			return response{}, errors.New("could not read default pool platform")
+			return response{}, errors.New("could not read destination pool")
+		}
+		if data.Schedulable != nil && !*data.Schedulable {
+			return response{}, errors.New("the selected pool is not accepting new boxes")
+		}
+		if reportedDataDiskFull(data.Resources, time.Now()) {
+			return response{}, errors.New("the selected pool reports no available data disk space; manage its resources before creating a box (cache free space is not reported)")
 		}
 		if data.Platform != "" {
 			target, err = platform.Parse(data.Platform)
@@ -87,7 +100,7 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	options := sandboxcreate.PromptOptions{Source: source, NoSource: source == "", Platform: target, IncludeDirty: sandboxcreate.IncludeDirtyNever}
+	options := sandboxcreate.PromptOptions{Source: source, NoSource: source == "", Platform: target, PoolID: poolID, IncludeDirty: sandboxcreate.IncludeDirtyNever}
 	if strings.TrimSpace(req.Prompt) != "" {
 		options.Prompt = []string{req.Prompt}
 	}

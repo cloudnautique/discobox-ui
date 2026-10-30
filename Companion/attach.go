@@ -291,6 +291,12 @@ func terminalDemo() error {
 				fmt.Print("\x1b[?1049l")
 			case 3:
 				return nil
+			case 4:
+				fmt.Print("\x1b[?1hApplication cursor keys enabled\r\n")
+			case 5:
+				fmt.Print("\x1b[?1l\x1b[>1uExtended keyboard protocol enabled\r\n")
+			case 6:
+				fmt.Print("\x1b[<uExtended keyboard protocol disabled\r\n")
 			case 10:
 				fmt.Print("<LF>")
 			case 27:
