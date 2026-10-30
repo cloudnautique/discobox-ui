@@ -44,7 +44,7 @@ Three local build fixes were necessary:
   and frameworks. A build-only xcrun shim points Zig there. Installed SDK and Zig
   files remain untouched. Both the build-runner and framework link now pass.
 - Apple's archiver skipped some Zig archive members because of their alignment.
-  A workspace-local `libtool` shim uses Xcode's `llvm-libtool-darwin` to combine
+  A workspace-local `libtool` shim uses LLVM's `llvm-libtool-darwin` to combine
   them correctly. The old archive's Zig cache manifest was invalidated once;
   subsequent cached builds also pass the link probe.
 - The pinned optional theme archive returns HTTP 404. Themes are disabled for the

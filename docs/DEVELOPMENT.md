@@ -8,10 +8,14 @@ Use a Mac with:
 - Full Xcode with Swift 6 and its Metal Toolchain component installed.
 - Go 1.27.1 or newer on your PATH.
 - Zig **0.14.1** on your PATH for the pinned Ghostty SDK.
+- LLVM's `llvm-libtool-darwin` archiver (`brew install llvm@20`).
 - Python 3 for build helpers and script checks.
 
 The scripts use your installed tools; they don’t install them for you.
 If Metal is missing, install it through Xcode’s component settings.
+The Ghostty build discovers the LLVM archiver on PATH, through Xcode, or in
+Homebrew's `llvm@20`/`llvm` installations. Set `GHOSTTY_LLVM_LIBTOOL` to an absolute
+executable path to choose it explicitly; Xcode does not always include this tool.
 
 ## First build
 
@@ -74,7 +78,8 @@ not launch the GUI.
 The **Build preview** workflow runs on pushed tags matching `v*` (for example,
 `v0.1.0-preview.1`) and through **Run workflow**. It uses an Apple Silicon macOS 26
 runner with Xcode 26.6, installs the Go version in `Companion/go.mod` and
-checksum-verified Zig 0.14.1, and builds the pinned Ghostty SDK when uncached.
+checksum-verified Zig 0.14.1, selects Homebrew LLVM 20's Darwin archiver, and builds
+the pinned Ghostty SDK when uncached.
 It then runs `make ci` and uploads `Discobox-macos-arm64.zip` for 30 days. The run
 summary contains the commit and ZIP checksum. It does not publish a GitHub Release.
 

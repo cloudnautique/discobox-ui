@@ -35,6 +35,9 @@ if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
     printf 'Missing Apple Metal Toolchain. Install it through Xcode, or run: xcodebuild -downloadComponent MetalToolchain\n' >&2
     failed=1
 fi
+if ! GHOSTTY_LLVM_LIBTOOL=$(bash scripts/find-llvm-libtool.sh); then
+    failed=1
+fi
 if [[ -d "$GHOSTTY_SOURCE/.git" ]]; then
     if [[ "$(git -C "$GHOSTTY_SOURCE" rev-parse HEAD)" != "$GHOSTTY_REVISION" ]]; then
         printf 'Ghostty source is not at the pinned revision. It will not be overwritten.\n' >&2
@@ -74,10 +77,10 @@ if [[ -n "$GHOSTTY_SDK_SHIMS" ]]; then
 fi
 # Apple's current libtool skips older Zig archive members with 2-byte padding.
 # LLVM's Darwin archiver reads them and emits a correctly aligned combined .a.
-xcrun --find llvm-libtool-darwin >/dev/null
 GHOSTTY_TOOL_SHIMS="$GHOSTTY_BUILD_ROOT/tool-shims"
 mkdir -p "$GHOSTTY_TOOL_SHIMS"
-printf '#!/bin/bash\nexec /usr/bin/xcrun llvm-libtool-darwin "$@"\n' > "$GHOSTTY_TOOL_SHIMS/libtool"
+printf '#!/bin/bash\nexec %q "$@"\n' "$GHOSTTY_LLVM_LIBTOOL" > "$GHOSTTY_TOOL_SHIMS/libtool"
+printf 'Using LLVM archiver: %s\n' "$GHOSTTY_LLVM_LIBTOOL"
 chmod +x "$GHOSTTY_TOOL_SHIMS/libtool"
 export PATH="$GHOSTTY_TOOL_SHIMS:$PATH"
 (
