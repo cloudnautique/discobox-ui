@@ -11,6 +11,7 @@ import UserNotifications
             try await verifyAppearance()
             try await verifyNotifications()
             try await verifyNotificationPermissionRecovery()
+            try await verifyComputerUsage()
             let workspace = Workspace()
             await workspace.connect(client: DemoClient(pendingRequests: true), label: "Offline panels", demo: true)
             await workspace.selectBox("demo-ui")
@@ -72,6 +73,10 @@ import UserNotifications
                 ("cache-clear", AnyView(PoolCacheClearSheet(request: .init(pool: resourcePool, connection: workspace.connectionID), computer: "Fixture computer").environment(workspace))),
                 ("computers", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults))),
                 ("new-box-computer", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers))),
+                ("new-box-light", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers).preferredColorScheme(.light))),
+                ("new-box-dark", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers).preferredColorScheme(.dark))),
+                ("switch-box-light", AnyView(BoxChooser().environment(localComputer.workspace).environment(computers).preferredColorScheme(.light))),
+                ("switch-box-dark", AnyView(BoxChooser().environment(localComputer.workspace).environment(computers).preferredColorScheme(.dark))),
                 ("archived-sidebar", AnyView(WorkspaceView().environment(archivedWorkspace).environment(WorkspaceCommands()).defaultAppStorage(settingsDefaults))),
                 ("bulk-purge", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace))),
                 ("connections", AnyView(ConnectionSettings().environment(workspace).defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
@@ -145,6 +150,49 @@ import UserNotifications
         }
         workspace.disconnect()
         print("NOTIFICATION_SMOKE_OK: native Approve/Deny/Later actions, authentication options, review category, private payload and Notifications settings; no OS notifications posted")
+    }
+
+    private static func verifyComputerUsage() async throws {
+        let suite = "ai.discobox.smoke.usage-computers." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.set(true, forKey: "harnessUsageExpanded")
+        let computers = Connections(polling: false)
+        let localClient = ComputerUsageFixture(percent: 12), remoteClient = ComputerUsageFixture(percent: 83)
+        let local = try await computers.connect(.thisComputer, demo: true) { localClient }
+        let remote = try await computers.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { remoteClient }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil); computers.disconnectAll(); defaults.removePersistentDomain(forName: suite) }
+        await local.workspace.refreshUsage(); await remote.workspace.refreshUsage()
+        let groups = UsageComputer.connected(computers, fallback: local.workspace)
+        guard groups.map(\.id) == [local.id, remote.id], groups[1].name == "Studio",
+              groups[0].workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12,
+              groups[1].workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 83 else {
+            throw DiscoboxError("Computer usage merged hosts with identical harness IDs")
+        }
+        let localReads = await localClient.usageReads, remoteReads = await remoteClient.usageReads
+        for host in [local, remote, local] {
+            computers.activate(host.id)
+            let panel = VStack {
+                HarnessUsageSection()
+                HarnessUsageDetails()
+            }.environment(computers).environment(host.workspace).defaultAppStorage(defaults)
+            let view = NSHostingView(rootView: panel)
+            window.contentView = view; window.orderFront(nil)
+            try await Task.sleep(for: .milliseconds(100))
+            view.layoutSubtreeIfNeeded()
+            guard UsageComputer.connected(computers, fallback: host.workspace).map(\.id) == groups.map(\.id), view.bounds.width > 0 else {
+                throw DiscoboxError("Computer usage changed scope when selecting another host")
+            }
+        }
+        guard await localClient.usageReads == localReads, await remoteClient.usageReads == remoteReads else {
+            throw DiscoboxError("Rendering usage summaries or Details started extra usage reads")
+        }
+        computers.disconnect(remote.id)
+        guard UsageComputer.connected(computers, fallback: local.workspace).map(\.id) == [local.id],
+              local.workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12 else {
+            throw DiscoboxError("Usage disconnect affected the wrong computer")
+        }
+        print("COMPUTER_USAGE_SMOKE_OK: per-computer names and separate readings for identical harness IDs, selection-independent scope, no extra UI usage reads, disconnected-host cleanup")
     }
 
     private static func verifyNotificationPermissionRecovery() async throws {
@@ -226,6 +274,20 @@ import UserNotifications
         }
         print("APPEARANCE_SMOKE_OK: Light, Dark, System; existing SwiftUI/native windows and new windows follow the app setting")
         fflush(stdout)
+    }
+}
+
+private actor ComputerUsageFixture: DiscoboxClient {
+    let demo = DemoClient()
+    let percent: Int
+    var usageReads = 0
+    init(percent: Int) { self.percent = percent }
+    func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .usage { usageReads += 1 }
+        if request.operation == .auditBody, request.requestID == "demo-quota" {
+            return try JSONSerialization.data(withJSONObject: ["text": "{\"rate_limit\":{\"primary_window\":{\"used_percent\":\(percent),\"limit_window_seconds\":18000}}}", "truncated": false])
+        }
+        return try await demo.perform(request)
     }
 }
 

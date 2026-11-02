@@ -18,6 +18,7 @@ import DiscoboxCore
 
 /// Always mounted, including for computers whose workspace is off screen.
 struct ConnectionLifecycle: View {
+    let connections: Connections
     let session: ConnectionSession
     let runtime: ConnectionRuntime
     var body: some View {
@@ -29,6 +30,7 @@ struct ConnectionLifecycle: View {
                 runtime.close()
                 HarnessSetupWindows.shared.close(connection: old)
                 ApprovalNotifications.shared.synchronize(session)
+                connections.reconcileCreations()
             }
             .onChange(of: workspace.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
             .onChange(of: workspace.isConnected) { ApprovalNotifications.shared.synchronize(session) }
@@ -42,6 +44,7 @@ struct ConnectionLifecycle: View {
                 runtime.terminals.retainRunningBoxes(workspace.sandboxes, connection: workspace.connectionID)
                 runtime.forwards.retainRunningBoxes(workspace.sandboxes)
                 runtime.desktops.retainRunningBoxes(workspace.sandboxes)
+                connections.reconcileCreations()
             }
     }
 }
@@ -76,7 +79,7 @@ struct ConnectedWorkspace: View {
             .environment(commands)
             .tint(DiscoboxAppearance.accent)
             .background {
-                ZStack { ForEach(connections.sessions) { host in ConnectionLifecycle(session: host, runtime: runtimes.runtime(host.id)) } }
+                ZStack { ForEach(connections.sessions) { host in ConnectionLifecycle(connections: connections, session: host, runtime: runtimes.runtime(host.id)) } }
             }
             .onChange(of: connections.activeID, initial: true) {
                 commands.restoreAgentLayout(); commands.cancelPrefix()

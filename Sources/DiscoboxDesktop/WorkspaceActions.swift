@@ -19,85 +19,86 @@ struct NewBoxSheet: View {
     @State private var loading = true
     @State private var creating = false
     @State private var error: String?
+    @FocusState private var focusedField: Field?
+    private enum Field: Hashable { case repository, prompt }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("New box").font(.title2.bold())
-            Text("Choose an agent harness and, optionally, a Git repository.").foregroundStyle(.secondary)
-            Form {
-                if let connections {
-                    Picker("Computer", selection: $targetComputer) {
-                        ForEach(connections.sessions.filter { $0.workspace.isConnected }) { host in Text(host.profile.displayName).tag(host.id) }
-                    }
-                }
-                Picker("Pool", selection: $poolID) {
-                    Text("Automatic placement").tag("")
-                    ForEach(workspace.resources.pools) { pool in
-                        Text(pool.name + (pool.id == workspace.resources.defaultPoolID ? " (default)" : "")).tag(pool.id)
-                    }
-                }
-                Picker("Harness", selection: $harness) {
-                    Text("Choose a harness").tag("")
-                    ForEach(harnesses) { item in Text(item.name + (item.configured ? "" : " — not configured")).tag(item.id).disabled(!item.configured) }
-                }
-                TextField("Repository (optional)", text: $repository, prompt: Text("https://github.com/owner/repo or owner/repo"))
-                    .textFieldStyle(.roundedBorder)
-                Text("Starting prompt (optional)")
-                TextEditor(text: $prompt).frame(height: 90).border(.quaternary)
-                Text("Leave blank to start without a task.").font(.caption).foregroundStyle(.secondary)
-            }.disabled(creating)
-            TimelineView(.periodic(from: .now, by: 15)) { context in
-                let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
-                let health = workspace.resources.health(destination, now: context.date)
+        VStack(spacing: 0) {
+            StudioDialogHeader(title: "New box", symbol: "shippingbox", subtitle: "Create a workspace for your agent.", shortcut: commands?.appShortcuts[.newBox])
+                .padding(24)
+            Divider().overlay(DiscoboxAppearance.border)
+            VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Pool resources").font(.headline)
-                        Spacer()
-                        if workspace.resources.isRefreshing { ProgressView().controlSize(.mini) }
-                        Button("Manage Resources…") { showResources = true }.disabled(creating)
+                    Text("DESTINATION & AGENT").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+                    VStack(spacing: 0) {
+                        if let connections {
+                            StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
+                                StudioMenuPicker(title: "Computer", selection: $targetComputer, options:
+                                    connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) })
+                            }
+                            Divider().padding(.leading, 38)
+                        }
+                        StudioDestinationRow(title: "Pool", symbol: "server.rack") {
+                            StudioMenuPicker(title: "Pool", selection: $poolID, options:
+                                [.init(id: "", title: "Automatic placement")] + workspace.resources.pools.map { .init(id: $0.id, title: $0.name) })
+                        }
+                        Divider().padding(.leading, 38)
+                        StudioDestinationRow(title: "Harness", symbol: "sparkles") {
+                            StudioMenuPicker(title: "Harness", selection: $harness, options:
+                                [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
+                        }
                     }
-                    ResourceHealthNotice(health: health, reportedAt: workspace.resources.pools.first { $0.id == destination }?.reportedAt)
-                    if let pool = workspace.resources.pools.first(where: { $0.id == destination }) {
-                        HStack(spacing: 16) {
-                            Text("Memory: " + ResourceValue.bytes(pool.memoryAvailable) + " available")
-                            Text("CPU: " + ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes)) + " / " + ResourceValue.cpu(pool.cpuCapacity) + " cores")
-                        }.font(.caption).foregroundStyle(.secondary)
+                    .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    StudioFieldLabel(title: "Repository")
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
+                        TextField("Repository", text: $repository, prompt: Text("owner/repository or Git URL"))
+                            .textFieldStyle(.plain).focused($focusedField, equals: .repository)
                     }
-                    if let error = workspace.resources.error { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                    Text(PoolResourceHealth.cacheLimitation).font(.caption).foregroundStyle(.secondary)
-                }.padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-            }
-            if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            if loading && harnesses.isEmpty { ProgressView("Loading harnesses…") }
-            if !loading && harnesses.filter(\.configured).isEmpty { Text("No configured harnesses are available. Configure a harness in Discobox first.").foregroundStyle(.secondary) }
-            if creating { ProgressView("Preparing source and creating your box…").controlSize(.small)
-                Text("Repository delivery can take several minutes. This window stays open until it finishes.").font(.caption).foregroundStyle(.secondary)
-            }
+                    .padding(12).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .repository ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .repository ? 1 : 0.5))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    StudioFieldLabel(title: "Starting prompt")
+                    TextEditor(text: $prompt).font(.system(size: 12))
+                        .scrollContentBackground(.hidden).focused($focusedField, equals: .prompt)
+                        .padding(8).frame(height: 100)
+                        .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(alignment: .topLeading) {
+                            if prompt.isEmpty {
+                                Text("What would you like the agent to work on?").font(.system(size: 12)).foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 13).padding(.vertical, 16).allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .prompt ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .prompt ? 1 : 0.5))
+                }
+                NewBoxResourceSummary(poolID: poolID, creating: creating, manage: { showResources = true })
+                    .environment(workspace)
+                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if loading && harnesses.isEmpty { ProgressView("Loading harnesses…").controlSize(.small) }
+                if !loading && harnesses.filter(\.configured).isEmpty {
+                    Text("No configured harnesses are available. Configure a harness in Settings → Harnesses.").font(.callout).foregroundStyle(.secondary)
+                }
+                if creating {
+                    ProgressView("Preparing source and creating your box…").controlSize(.small)
+                    Text("Repository delivery can take several minutes. This window stays open until it finishes.").font(.caption).foregroundStyle(.secondary)
+                }
+            }.padding(24).disabled(creating)
+            Divider().overlay(DiscoboxAppearance.border)
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(creating)
                 Spacer()
-                Button("Create Box") {
-                    creating = true; error = nil
-                    let target = workspace, hostID = targetComputer, generation = workspace.connectionID
-                    let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
-                    Task {
-                        do {
-                            let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if let connections {
-                                try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
-                            } else {
-                                try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
-                            }
-                            commands?.showCreateBox = false
-                            dismiss()
-                        }
-                        catch { self.error = error.localizedDescription }
-                        creating = false
-                    }
-                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button("Create Box", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("newBox.create")
                     .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
-            }
-        }.padding(24).frame(width: 560).interactiveDismissDisabled(creating)
+            }.controlSize(.large).padding(.horizontal, 24).padding(.vertical, 16).background(DiscoboxAppearance.chrome)
+        }
+        .frame(width: 560).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
+        .interactiveDismissDisabled(creating)
+        .onAppear { focusedField = .repository }
         .sheet(isPresented: $showResources) {
             if let host = connections?.session(targetComputer), let runtimes {
                 PoolResourcesView(computer: host.profile.displayName, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID)
@@ -132,6 +133,90 @@ struct NewBoxSheet: View {
                 self.error = error.localizedDescription
             }
             loading = false
+        }
+    }
+
+    private func create() {
+        creating = true; error = nil
+        let target = workspace, hostID = targetComputer, generation = workspace.connectionID
+        let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
+        Task {
+            do {
+                let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let connections {
+                    try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
+                } else {
+                    try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
+                }
+                commands?.showCreateBox = false
+                dismiss()
+            }
+            catch { self.error = error.localizedDescription }
+            creating = false
+        }
+    }
+
+}
+
+/// Summarizes cached reports without adding resource reads to the creation flow.
+private struct NewBoxResourceSummary: View {
+    @Environment(Workspace.self) private var workspace
+    let poolID: String
+    let creating: Bool
+    let manage: () -> Void
+    @State private var expanded = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
+            let pool = workspace.resources.pools.first { $0.id == destination }
+            let health = workspace.resources.health(destination, now: context.date)
+            let warning = health.level == .warning || health.level == .blocked
+            VStack(alignment: .leading, spacing: 12) {
+                Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: warning ? "exclamationmark.triangle" : "internaldrive")
+                        .foregroundStyle(warning ? Color.orange : .secondary)
+                    Text(summary(health, pool: pool)).font(.system(size: 11))
+                    Spacer(minLength: 8)
+                    if workspace.resources.isRefreshing { ProgressView().controlSize(.mini) }
+                    Button { expanded.toggle() } label: {
+                        HStack(spacing: 4) {
+                            Text("Details")
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold))
+                        }.font(.system(size: 11))
+                    }.buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
+                        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                }
+                // Warnings remain visible even when the optional details are closed.
+                if warning {
+                    ResourceHealthNotice(health: health).padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
+                if let error = workspace.resources.error { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                if expanded {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let pool {
+                            Text("Memory: " + ResourceValue.bytes(pool.memoryAvailable) + " available · CPU: " + ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes)) + " / " + ResourceValue.cpu(pool.cpuCapacity) + " cores")
+                            if let reportedAt = pool.reportedAt { Text("Reported \(reportedAt, style: .relative) ago") }
+                        }
+                        Text(PoolResourceHealth.cacheLimitation)
+                        Button("Manage Resources…", action: manage).disabled(creating)
+                    }.font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    private func summary(_ health: PoolResourceHealth, pool: ResourcePool?) -> String {
+        if health.level == .healthy, let available = pool?.dataAvailable {
+            return ResourceValue.bytes(available) + " data disk available"
+        }
+        switch health.level {
+        case .warning: return "Pool resources need attention"
+        case .blocked: return "Pool cannot accept a new box"
+        case .stale: return "Resource measurements are out of date"
+        default: return "Resource availability is unverified"
         }
     }
 }

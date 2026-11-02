@@ -61,6 +61,10 @@ struct WorkspaceView: View {
     private var tagBinding: Binding<Set<String>> { Binding(get: { selectedTags }, set: { selectedTags = $0 }) }
     private var matchAnyBinding: Binding<Bool> { Binding(get: { matchAnyTag }, set: { matchAnyTag = $0 }) }
     private var archiveCount: Int { connections?.browser.archivedSelection.count ?? archiveSelection.count }
+    private var selectedCreation: Bool {
+        guard let connections else { return false }
+        return connections.creationPins.contains { $0.connection == workspace.connectionID && $0.id.box == workspace.sandboxID }
+    }
     private var organizationBoxes: [Sandbox] { connections?.sessions.filter { $0.workspace.isConnected }.flatMap { $0.workspace.sandboxes } ?? workspace.sandboxes }
     private var tagKeys: [String] { Set(organizationBoxes.flatMap { Array(($0.meta?.tags ?? [:]).keys) }).sorted() }
     private var tagChoices: [String] {
@@ -202,7 +206,7 @@ struct WorkspaceView: View {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Group {
-                                if currentFilter == .archived && archiveCount != 1 {
+                                if currentFilter == .archived && archiveCount != 1 && !selectedCreation {
                                     ContentUnavailableView {
                                         Label(archiveCount == 0 ? "Archived boxes" : "\(archiveCount) archived boxes selected", systemImage: "archivebox")
                                     } description: {
@@ -402,38 +406,101 @@ struct BoxChooser: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var computerID = ""
     @State private var selected: BoxLocation?
+
     private var results: [ConnectedBox] {
         let waiting = Set(workspace.approvals.map(\.boxID))
         let boxes = connections?.switcherBoxes ?? workspace.switcherBoxes.map {
             ConnectedBox(location: .init(connection: "", box: $0.id), computer: "", box: $0, needsAttention: $0.matchesAttention || waiting.contains($0.id))
         }
-        return boxes.filter { $0.matches(query) }
+        return boxes.filter { (computerID.isEmpty || $0.location.connection == computerID) && $0.matches(query) }
+            .sorted { group($0).precedes(group($1)) }
     }
+    private struct Group: Hashable {
+        let title: String
+        let rank: Int
+        func precedes(_ other: Group) -> Bool {
+            rank == other.rank ? title < other.title : rank < other.rank
+        }
+    }
+    private func group(_ item: ConnectedBox) -> Group {
+        if item.needsAttention { return .init(title: "Needs attention", rank: 0) }
+        if item.box.isRunning { return .init(title: "Running", rank: 1) }
+        if item.box.status == "Stopped" { return .init(title: "Stopped", rank: 3) }
+        return .init(title: item.box.status, rank: 2)
+    }
+
     var body: some View {
         let matches = results
-        VStack(alignment: .leading) {
-            HStack { Text("Switch box").font(.title2.bold()); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
-            BoxChooserSearch(text: $query, move: move, choose: choose, cancel: { dismiss() })
-                .frame(height: 24)
+        let groups: [Group] = Array(Set(matches.map { group($0) })).sorted { $0.precedes($1) }
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                StudioDialogHeader(title: "Switch box", symbol: "square.grid.2x2", shortcut: commands?.appShortcuts[.switchBox])
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    BoxChooserSearch(text: $query, move: move, choose: choose, cancel: { dismiss() })
+                        .frame(height: 22)
+                }
+                .padding(10).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.accent.opacity(0.7), lineWidth: 1))
+                HStack {
+                    if let connections {
+                        StudioMenuPicker(title: "Computer scope", selection: $computerID, options:
+                            [.init(id: "", title: "All computers")] + connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) }, alignment: .left)
+                            .frame(width: 200, height: 20)
+                    } else { Text("All boxes") }
+                    Spacer()
+                    Text("\(matches.count) \(matches.count == 1 ? "box" : "boxes")").monospacedDigit()
+                }.font(.system(size: 11)).foregroundStyle(.secondary)
+            }.padding(20)
+            Divider().overlay(DiscoboxAppearance.border)
             ScrollViewReader { reader in
-                List(selection: $selected) {
-                    ForEach(matches) { item in
-                        Button { select(item.id) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                if !item.computer.isEmpty { Text(item.computer).font(.caption2).foregroundStyle(.secondary) }
-                                BoxChooserRow(box: item.box, needsAttention: item.needsAttention)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(groups, id: \.self) { section in
+                            let items = matches.filter { group($0) == section }
+                            HStack(spacing: 6) {
+                                Text(section.title.uppercased()).tracking(0.8)
+                                Text("\(items.count)").monospacedDigit()
                             }
-                        }.buttonStyle(.plain).tag(item.id)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(section.rank == 0 ? Color.orange : Color.secondary)
+                            .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)
+                            ForEach(items) { item in
+                                Button { select(item.id) } label: {
+                                    BoxChooserRow(item: item, selected: selected == item.id)
+                                }.buttonStyle(.plain).focusable(false).id(item.id)
+                                    .accessibilityAddTraits(selected == item.id ? .isSelected : [])
+                            }
+                        }
+                    }.padding(.horizontal, 10).padding(.bottom, 12)
+                }
+                .overlay {
+                    if matches.isEmpty {
+                        ContentUnavailableView("No matching boxes", systemImage: "magnifyingglass", description: Text("Try another name, harness, repository, or computer."))
                     }
-                }.listStyle(.inset)
-                    .overlay { if matches.isEmpty { ContentUnavailableView("No matching boxes", systemImage: "magnifyingglass") } }
-                    .onChange(of: selected) { _, id in if let id { reader.scrollTo(id) } }
+                }
+                .onChange(of: selected) { _, id in if let id { reader.scrollTo(id) } }
             }
-            Text("↑ ↓ Select   ·   Return Switch   ·   Esc Cancel").font(.caption).foregroundStyle(.secondary)
-        }.padding(20).frame(width: 460, height: 480)
+            Divider().overlay(DiscoboxAppearance.border)
+            HStack(spacing: 6) {
+                StudioKeycap(text: "↑")
+                StudioKeycap(text: "↓")
+                Text("Navigate").padding(.trailing, 12)
+                StudioKeycap(text: "↵")
+                Text("Open").padding(.trailing, 12)
+                StudioKeycap(text: "esc")
+                Text("Close")
+                Spacer()
+            }.font(.system(size: 10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 20).padding(.vertical, 10).background(DiscoboxAppearance.chrome)
+        }.frame(width: 560, height: 580).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
             .onChange(of: matches.map(\.id), initial: true) { _, ids in
                 if selected == nil || !ids.contains(selected!) { selected = ids.first }
+            }
+            .onChange(of: connections?.sessions.filter { $0.workspace.isConnected }.map(\.id) ?? []) { _, ids in
+                if !computerID.isEmpty && !ids.contains(computerID) { computerID = "" }
             }
     }
     private func move(_ delta: Int) {
@@ -442,7 +509,12 @@ struct BoxChooser: View {
         let index = matches.firstIndex { $0.id == selected } ?? 0
         selected = matches[min(max(index + delta, 0), matches.count - 1)].id
     }
-    private func choose() { if let id = selected, results.contains(where: { $0.id == id }) { select(id) } }
+    private func choose() {
+        // Return can arrive before SwiftUI reconciles the highlighted row after
+        // a query/scope edit. Resolve against the current results immediately.
+        let matches = results
+        if let item = matches.first(where: { $0.id == selected }) ?? matches.first { select(item.id) }
+    }
     private func select(_ id: BoxLocation) {
         let target = workspace
         commands?.choosingBox = false
@@ -453,25 +525,34 @@ struct BoxChooser: View {
 
 /// The switcher has no per-row sheets, approval buttons, or context menus.
 private struct BoxChooserRow: View {
-    let box: Sandbox
-    let needsAttention: Bool
+    let item: ConnectedBox
+    let selected: Bool
+    private var metadata: String {
+        [item.box.harnessName == item.box.displayName ? nil : item.box.harnessName, item.box.repository, item.box.branch]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if needsAttention {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.caption)
-                    .accessibilityLabel("Needs attention").padding(.top, 3)
-            } else {
-                Circle().fill(box.isRunning ? Color.green : .secondary.opacity(0.5))
-                    .frame(width: 7, height: 7).padding(.top, 5)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(box.displayName).fontWeight(.medium).lineLimit(2)
-                Text([box.harnessName, box.repository, box.branch].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        HStack(spacing: 10) {
+            Circle().fill(item.needsAttention ? Color.orange : item.box.isRunning ? .green : .secondary.opacity(0.5))
+                .frame(width: 5, height: 5).accessibilityLabel(item.needsAttention ? "Needs attention" : item.box.status)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.box.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                if !metadata.isEmpty { Text(metadata).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
             }
             Spacer(minLength: 8)
-            Text(box.status).font(.caption).foregroundStyle(.secondary)
-        }.padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            if !item.computer.isEmpty {
+                Text(item.computer).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 4))
+                    .frame(maxWidth: 125, alignment: .trailing)
+            }
+            Image(systemName: "return").font(.system(size: 10)).foregroundStyle(DiscoboxAppearance.accent)
+                .opacity(selected ? 1 : 0).frame(width: 14).accessibilityHidden(true)
+        }
+        .padding(.horizontal, 12).frame(minHeight: 56)
+        .background(selected ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(selected ? DiscoboxAppearance.accent.opacity(0.45) : .clear, lineWidth: 0.5))
+        .contentShape(Rectangle())
     }
 }
 
@@ -486,7 +567,10 @@ private struct BoxChooserSearch: NSViewRepresentable {
     func makeNSView(context: Context) -> Field {
         let field = Field()
         field.placeholderString = "Find a box, harness, or repository"
-        field.bezelStyle = .roundedBezel
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13)
         field.delegate = context.coordinator
         return field
     }

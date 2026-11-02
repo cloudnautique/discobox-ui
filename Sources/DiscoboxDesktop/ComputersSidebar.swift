@@ -12,7 +12,11 @@ struct ComputersSidebar: View {
     @AppStorage("sidebarComputersExpanded") private var computersExpanded = true
     @AppStorage("collapsedComputerRepositoryGroups") private var collapsedData = "[]"
     private var browser: BoxBrowser { connections.browser }
-    private var items: [ConnectedBox] { connections.browserBoxes }
+    private var pins: [BoxCreation] { connections.creationPins }
+    private var items: [ConnectedBox] {
+        let pinned = Set(pins.map(\.id))
+        return connections.browserBoxes.filter { !pinned.contains($0.location) }
+    }
     private var collapsed: Set<String> {
         get { Set((try? JSONDecoder().decode([String].self, from: Data(collapsedData.utf8))) ?? []) }
         nonmutating set { collapsedData = String(data: (try? JSONEncoder().encode(newValue.sorted())) ?? Data(), encoding: .utf8) ?? "[]" }
@@ -24,7 +28,13 @@ struct ComputersSidebar: View {
         }, set: { ids in
             // Ignore selection callbacks from the outgoing host's native List.
             guard connections.active.workspace === workspace else { return }
-            if browser.filter == .archived { browser.selectArchives(ids) }
+            if browser.filter == .archived {
+                let archives = Set(items.filter { $0.box.isArchived }.map(\.location))
+                browser.selectArchives(ids.intersection(archives))
+                if let location = ids.first(where: { id in pins.contains { $0.id == id } }) {
+                    Task { await connections.selectBox(location) }
+                }
+            }
             else if let location = ids.first(where: { $0.box != workspace.sandboxID || $0.connection != connections.activeID }) ?? ids.first {
                 Task { await connections.selectBox(location) }
             }
@@ -39,28 +49,56 @@ struct ComputersSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             computerSection
-            List(selection: selection) {
-                if grouping == "none" {
-                    ForEach(items) { item in row(item) }
-                } else {
-                    let groups = Dictionary(grouping: items) { BoxOrganization.group($0.box, by: grouping, tagKey: tagKey) }
-                    ForEach(groups.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { group in
-                        let key = collapseKey(group)
-                        Button {
-                            if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
-                        } label: {
-                            RepositoryGroupHeader(repository: group, count: groups[group]?.count ?? 0,
-                                symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
-                                expanded: !collapsed.contains(key))
-                        }.buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 5, trailing: 0))
-                            .listRowSeparator(.hidden)
-                        if !collapsed.contains(key) { ForEach(groups[group] ?? []) { item in row(item) } }
+            ScrollViewReader { reader in
+                List(selection: selection) {
+                    if !pins.isEmpty {
+                        Section("New boxes") {
+                            ForEach(pins) { creation in
+                                CreatedBoxRow(creation: creation)
+                                    .id(creation.id)
+                                    .listRowInsets(EdgeInsets(top: 5, leading: 7, bottom: 5, trailing: 7))
+                                    .listRowSeparator(.hidden)
+                            }
+                        }
                     }
-                }
-            }.listStyle(.sidebar).scrollContentBackground(.hidden)
-                .overlay { if items.isEmpty { emptyState } }
-                .onDeleteCommand { confirmPurge() }
+                    if grouping == "none" {
+                        ForEach(items) { item in row(item) }
+                    } else {
+                        let groups = Dictionary(grouping: items) { BoxOrganization.group($0.box, by: grouping, tagKey: tagKey) }
+                        ForEach(groups.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { group in
+                            let key = collapseKey(group)
+                            Button {
+                                if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
+                            } label: {
+                                RepositoryGroupHeader(repository: group, count: groups[group]?.count ?? 0,
+                                    symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
+                                    expanded: !collapsed.contains(key))
+                            }.buttonStyle(.plain)
+                                .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 5, trailing: 0))
+                                .listRowSeparator(.hidden)
+                            if !collapsed.contains(key) { ForEach(groups[group] ?? []) { item in row(item) } }
+                        }
+                    }
+                }.listStyle(.sidebar).scrollContentBackground(.hidden)
+                    .overlay { if items.isEmpty && pins.isEmpty { emptyState } }
+                    .onDeleteCommand { confirmPurge() }
+                    .onChange(of: connections.browserBoxes.map(\.location)) { connections.reconcileCreations() }
+                    .onChange(of: browser.revealRevision, initial: true) {
+                        guard let location = browser.revealLocation,
+                              connections.activeID == location.connection, workspace.sandboxID == location.box else { return }
+                        if let item = items.first(where: { $0.location == location }) {
+                            let group = BoxOrganization.group(item.box, by: grouping, tagKey: tagKey)
+                            collapsed.remove(collapseKey(group))
+                        } else if !pins.contains(where: { $0.id == location }) { return }
+                        let generation = workspace.connectionID
+                        Task { @MainActor in
+                            await Task.yield()
+                            guard workspace.connectionID == generation, connections.active.workspace === workspace,
+                                  workspace.sandboxID == location.box else { return }
+                            reader.scrollTo(location, anchor: .center)
+                        }
+                    }
+            }
             if browser.filter == .archived { archiveActions }
         }
         .background(DiscoboxAppearance.sidebar)
@@ -182,6 +220,39 @@ struct ComputersSidebar: View {
     private func connect(_ host: ConnectionSession) {
         Task { do { _ = try await connections.connect(host.profile) { try ConnectionClients.make(host.profile) } }
             catch { host.workspace.commandError = error.localizedDescription } }
+    }
+}
+
+private struct CreatedBoxRow: View {
+    let creation: BoxCreation
+    @Environment(Connections.self) private var connections
+    private var selected: Bool { connections.activeID == creation.id.connection && connections.active.workspace.sandboxID == creation.id.box }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { Task { await connections.selectBox(creation.id) } } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(creation.item.box.displayName).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    Text(creation.item.computer).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(alignment: .top, spacing: 6) {
+                        if creation.phase == .starting { ProgressView().controlSize(.mini) }
+                        else { Image(systemName: creation.phase == .failed ? "exclamationmark.circle" : "line.3.horizontal.decrease.circle") }
+                        Text(creation.message).font(.caption).lineLimit(3)
+                    }.foregroundStyle(creation.phase == .failed ? Color.orange : .secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            HStack {
+                if creation.phase == .ready {
+                    Button("Reveal") { Task { await connections.revealCreatedBox(creation.id) } }
+                        .help("Show this box by adjusting only the filters that hide it.")
+                }
+                Spacer()
+                Button { connections.dismissCreation(creation.id) } label: { Image(systemName: "xmark").font(.system(size: 9)) }
+                    .help("Dismiss this temporary row. The box keeps running.")
+                    .accessibilityLabel("Dismiss new box reminder")
+            }.font(.caption).buttonStyle(.borderless)
+        }.padding(8)
+            .background(selected ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("box.creation." + creation.id.box)
     }
 }
 

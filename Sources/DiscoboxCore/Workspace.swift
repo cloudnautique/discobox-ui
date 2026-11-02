@@ -548,7 +548,7 @@ public final class Workspace {
         }
     }
 
-    public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws {
+    @discardableResult public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws -> Sandbox {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         guard connection == nil || connection == connectionID else { throw DiscoboxError("The destination computer reconnected. Review the new box settings again.") }
         let current = revision
@@ -566,11 +566,14 @@ public final class Workspace {
         do {
             let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, poolID: destination), as: Sandbox.self)
             guard current == revision else { throw CancellationError() }
-            filter = .all
-            searchText = ""
             await refresh()
             guard current == revision else { throw CancellationError() }
+            // Keep the accepted box selectable even if this first list refresh
+            // failed or has not included it yet.
+            if !sandboxes.contains(where: { $0.id == box.id }) { sandboxes.append(box) }
             await selectBox(box.id)
+            guard current == revision else { throw CancellationError() }
+            return sandboxes.first(where: { $0.id == box.id }) ?? box
         } catch {
             if current == revision { await refresh() }
             throw error

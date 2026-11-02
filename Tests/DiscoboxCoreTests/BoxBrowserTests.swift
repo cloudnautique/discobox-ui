@@ -99,14 +99,15 @@ import Testing
     hub.disconnectAll()
 }
 
-@MainActor @Test func creationKeepsAllComputersVisibleAndClearsFiltersThatHideTheNewBox() async throws {
+@MainActor @Test func creationPreservesFiltersAndPinsTheNewBoxOutsideTheView() async throws {
     let (hub, _, remote) = try await browsingComputers()
     hub.browser.filter = .archived
     hub.browser.searchText = "old work"
     hub.browser.selectedTags = ["branch=old"]
     try await hub.createBox(on: remote.id, harness: "demo-harness", repository: "")
     #expect(hub.browser.computerID == nil)
-    #expect(hub.browser.filter == .all && hub.browser.searchText.isEmpty && hub.browser.selectedTags.isEmpty)
-    #expect(hub.browserBoxes.contains { $0.location.connection == remote.id && $0.box.id == remote.workspace.sandboxID })
+    #expect(hub.browser.filter == .archived && hub.browser.searchText == "old work" && hub.browser.selectedTags == ["branch=old"])
+    #expect(!hub.browserBoxes.contains { $0.location.connection == remote.id && $0.box.id == remote.workspace.sandboxID })
+    #expect(hub.creationPins.first?.id == BoxLocation(connection: remote.id, box: remote.workspace.sandboxID!))
     hub.disconnectAll()
 }

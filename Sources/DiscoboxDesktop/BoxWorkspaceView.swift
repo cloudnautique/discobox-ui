@@ -4,15 +4,20 @@ import DiscoboxCore
 
 struct BoxWorkspaceView: View {
     let box: Sandbox
+    @Environment(Connections.self) private var connections: Connections?
     @Environment(Workspace.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(TerminalStore.self) private var terminals
     @State private var showInbox = false
     @State private var closing: TerminalCloseRequest?
+    @State private var creationAction: BoxActionRequest?
     @AppStorage("confirmShellClose") private var confirmShellClose = true
     private var harness: Exec? { workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first(where: { !$0.isShell }) }
     private var companions: [Exec] { workspace.execs.filter { $0.id != harness?.id } }
     private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionID.uuidString + box.id) }
+    private var creation: BoxCreation? {
+        connections?.creationPins.first { $0.connection == workspace.connectionID && $0.id.box == box.id }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +63,7 @@ struct BoxWorkspaceView: View {
 
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
         .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
+        .sheet(item: $creationAction) { BoxActionSheet(request: $0).environment(workspace) }
     }
 
     @ViewBuilder private var panes: some View {
@@ -155,8 +161,26 @@ struct BoxWorkspaceView: View {
                 tabBar
                     .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
             }
-            if let harness {
+            if let creation, creation.phase == .failed {
+                ContentUnavailableView {
+                    Label("Box needs attention", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(creation.message)
+                } actions: {
+                    Menu("Box Actions") {
+                        BoxActionMenu(box: box) { creationAction = .init(box: box, action: $0, connection: workspace.connectionID) }
+                    }
+                }
+            } else if let creation, creation.phase == .starting {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Starting your box…").font(.headline)
+                    Text(box.status).font(.callout).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let harness {
                 ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
+            } else if creation != nil {
+                ProgressView("Waiting for the agent…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else { ContentUnavailableView("No harness terminal", systemImage: "terminal") }
         }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
     }

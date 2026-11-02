@@ -25,7 +25,7 @@ private actor HostFixture: DiscoboxClient {
     func count(_ operation: BridgeRequest.Operation) -> Int { requests.filter { $0.operation == operation }.count }
 }
 
-@MainActor @Test func remoteCreationLeavesArchivedAndSelectsTheDestinationComputer() async throws {
+@MainActor @Test func remoteCreationPreservesArchivedAndSelectsTheDestinationComputer() async throws {
     let connections = Connections(polling: false)
     let localClient = HostFixture(), remoteClient = HostFixture()
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
@@ -33,13 +33,16 @@ private actor HostFixture: DiscoboxClient {
     local.workspace.filter = .archived
     remote.workspace.filter = .archived
     remote.workspace.searchText = "old query"
+    connections.browser.filter = .archived
     connections.activate(local.id)
     try await connections.createBox(on: remote.id, harness: "demo-harness", repository: "", prompt: "Fixture task")
     #expect(connections.active === remote)
-    #expect(remote.workspace.filter == .all)
-    #expect(remote.workspace.searchText.isEmpty)
+    #expect(remote.workspace.filter == .archived)
+    #expect(remote.workspace.searchText == "old query")
     #expect(remote.workspace.selectedBox?.displayName == "New demo box")
-    #expect(remote.workspace.visibleBoxes.contains { $0.id == remote.workspace.sandboxID })
+    #expect(!remote.workspace.visibleBoxes.contains { $0.id == remote.workspace.sandboxID })
+    #expect(connections.browser.filter == .archived)
+    #expect(connections.creationPins.contains { $0.id.connection == remote.id && $0.id.box == remote.workspace.sandboxID })
     #expect(local.workspace.filter == .archived)
     #expect(await remoteClient.count(.createBox) == 1)
     #expect(await localClient.count(.createBox) == 0)

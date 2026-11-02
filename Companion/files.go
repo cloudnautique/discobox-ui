@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type fileStat struct {
@@ -48,7 +49,11 @@ func (b *bridge) fileOperation(ctx context.Context, req request) (response, erro
 	}
 	base := "/api/projects/" + req.ProjectID + "/sandboxes/" + req.SandboxID + "/files"
 	if req.Operation == "files" {
-		return b.call(ctx, "GET", base+"/list?path="+url.QueryEscape(req.RemotePath), nil)
+		r, err := b.call(ctx, "GET", base+"/list?path="+url.QueryEscape(req.RemotePath), nil)
+		if err == nil && r.Status >= 400 {
+			err = fileResponseError("list "+req.RemotePath, r.Status, r.Body)
+		}
+		return r, err
 	}
 	if !b.allowManage {
 		return response{}, errors.New("file transfers require explicit permission")
@@ -91,6 +96,11 @@ func (b *bridge) statFile(ctx context.Context, base, remote string) (fileStat, i
 	}
 	var s fileStat
 	if r.Status != 200 {
+		// A missing route must not be treated as an absent destination during
+		// replacement preflight. Older images can lack the Files API entirely.
+		if missingFilesAPI(r.Status, r.Body) {
+			return s, r.Status, fileResponseError("stat "+remote, r.Status, r.Body)
+		}
 		return s, r.Status, nil
 	}
 	err = json.Unmarshal(r.Body, &s)
@@ -120,7 +130,7 @@ func (b *bridge) uploadTree(ctx context.Context, base, local, remote string, rep
 			return err
 		}
 		if r.Status < 200 || r.Status >= 300 {
-			return fmt.Errorf("create directory %s: HTTP %d", remote, r.Status)
+			return fileResponseError("create directory "+remote, r.Status, r.Body)
 		}
 		entries, err := os.ReadDir(local)
 		if err != nil {
@@ -179,7 +189,8 @@ func (b *bridge) uploadTree(ctx context.Context, base, local, remote string, rep
 	}
 	defer result.Body.Close()
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
-		return fmt.Errorf("upload %s: HTTP %d (existing or changed files are not overwritten without confirmation)", remote, result.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
+		return fileResponseError("upload "+remote, result.StatusCode, body)
 	}
 	return nil
 }
@@ -203,7 +214,7 @@ func (b *bridge) downloadTree(ctx context.Context, base, remote, local string, p
 			return err
 		}
 		if result.Status != 200 {
-			return fmt.Errorf("list directory: HTTP %d", result.Status)
+			return fileResponseError("list directory", result.Status, result.Body)
 		}
 		var list fileList
 		if err := json.Unmarshal(result.Body, &list); err != nil {
@@ -232,7 +243,8 @@ func (b *bridge) downloadTree(ctx context.Context, base, remote, local string, p
 	}
 	defer result.Body.Close()
 	if result.StatusCode != 200 {
-		return fmt.Errorf("download: HTTP %d", result.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
+		return fileResponseError("download "+remote, result.StatusCode, body)
 	}
 	file, err := os.OpenFile(local, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -254,4 +266,36 @@ func (b *bridge) downloadTree(ctx context.Context, base, remote, local string, p
 		return errors.New("remote file changed during download; partial copy discarded")
 	}
 	return nil
+}
+
+func missingFilesAPI(status int, body []byte) bool {
+	return status == http.StatusNotFound && strings.TrimSpace(string(body)) == "404 page not found"
+}
+
+func fileResponseError(operation string, status int, body []byte) error {
+	if missingFilesAPI(status, body) {
+		return fmt.Errorf("%s: HTTP 404. This box, its pool, or its server does not support the Files API. Update the remote Discobox server/pool and upgrade the box to its harness's current image", operation)
+	}
+	// Keep backend explanations useful, bounded, and safe to show as plain text.
+	message := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, tunnelErrorMessage(body))
+	message = strings.Join(strings.Fields(message), " ")
+	if len([]rune(message)) > 500 {
+		message = string([]rune(message)[:500]) + "…"
+	}
+	if message != "" {
+		message = ": " + message
+	}
+	switch status {
+	case http.StatusNotFound:
+		return fmt.Errorf("%s: HTTP 404%s. Check that the destination directory and box still exist", operation, message)
+	case http.StatusPreconditionFailed:
+		return fmt.Errorf("%s: HTTP 412%s. The file already exists or changed; refresh the folder and confirm replacement before trying again", operation, message)
+	default:
+		return fmt.Errorf("%s: HTTP %d%s", operation, status, message)
+	}
 }

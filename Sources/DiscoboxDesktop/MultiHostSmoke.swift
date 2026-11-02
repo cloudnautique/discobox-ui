@@ -41,12 +41,21 @@ import GhosttyKit
             let sheet = window.attachedSheet!
             try await wait { descendants(sheet.contentView!).compactMap { $0 as? NSTextField }.contains { $0.placeholderString == "Find a box, harness, or repository" } }
             let field = descendants(sheet.contentView!).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "Find a box, harness, or repository" }!
+            try await wait { descendants(sheet.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.itemTitles.contains("All computers") } }
+            let scope = descendants(sheet.contentView!).compactMap { $0 as? NSPopUpButton }.first { $0.itemTitles.contains("All computers") }!
+            scope.menu?.performActionForItem(at: scope.indexOfItem(withTitle: "Studio"))
+            try await wait { scope.titleOfSelectedItem == "Studio" }
+            guard hub.browser.computerID == nil else { throw DiscoboxError("Switcher scope changed the main browser filter") }
             sheet.makeFirstResponder(field)
             field.stringValue = "Studio Native macOS workspace"
             field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
             try await Task.sleep(for: .milliseconds(150))
             _ = field.delegate?.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
-            try await wait { hub.activeID == studio.id && window.attachedSheet == nil }
+            do { try await wait { hub.activeID == studio.id && window.attachedSheet == nil } }
+            catch {
+                print("SWITCH DEBUG: active=\(hub.activeID) remote=\(studio.id) chooser=\(commands.choosingBox) query=\(field.stringValue) mounted=\(field.window === sheet) scope=\(scope.titleOfSelectedItem ?? "nil")")
+                throw error
+            }
             let remoteID = identity(studio)
             let remoteTerminal = resources.runtime(studio.id).terminals.session(remoteID)
             try await wait { remoteTerminal.view.window === window }
@@ -67,6 +76,8 @@ import GhosttyKit
             try await fillsPane(localTerminal.view)
             // Start in local Archived, then choose the remote destination in
             // the actual New Box sheet. Success must reveal the remote box.
+            hub.browser.filter = .archived
+            hub.browser.searchText = "does not match the new box"
             local.workspace.filter = .archived
             studio.workspace.filter = .archived
             try await Task.sleep(for: .milliseconds(150))
@@ -91,7 +102,20 @@ import GhosttyKit
                 throw error
             }
             try await Task.sleep(for: .milliseconds(300))
-            guard hub.activeID == studio.id, studio.workspace.filter == .all, local.workspace.filter == .archived else { throw DiscoboxError("Remote creation returned to Archived or changed computers") }
+            guard hub.activeID == studio.id, studio.workspace.filter == .archived, local.workspace.filter == .archived,
+                  hub.browser.filter == .archived, hub.browser.searchText == "does not match the new box",
+                  hub.creationPins.contains(where: { $0.id.connection == studio.id && $0.id.box == studio.workspace.sandboxID }) else {
+                throw DiscoboxError("Remote creation changed filters or lost the new box reminder")
+            }
+            guard let newBox = studio.workspace.sandboxID, let newExec = studio.workspace.execID else { throw DiscoboxError("Created workspace has no agent fixture") }
+            let newIdentity = TerminalIdentity(connection: studio.workspace.connectionID, endpoint: studio.workspace.transportEndpoint,
+                                               project: studio.workspace.projectID!, box: newBox, exec: newExec, demo: true)
+            let createdTerminal = resources.runtime(studio.id).terminals.session(newIdentity)
+            try await wait { createdTerminal.view.window === window }
+            await hub.revealCreatedBox(.init(connection: studio.id, box: newBox))
+            guard hub.browser.filter == .running, hub.browser.searchText.isEmpty, hub.creationPins.isEmpty else {
+                throw DiscoboxError("Reveal did not move the created box into the filtered list")
+            }
             local.workspace.filter = .all
             await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
             try await wait { localTerminal.view.window === window }

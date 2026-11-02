@@ -11,6 +11,12 @@ import Observation
     public var selectedTags: Set<String> = []
     public var matchAnyTag = false
     public var archivedSelection: Set<BoxLocation> = []
+    public private(set) var revealLocation: BoxLocation?
+    public private(set) var revealRevision = UUID()
+    public func requestReveal(_ location: BoxLocation) {
+        revealLocation = location
+        revealRevision = UUID()
+    }
     public init() {}
     public func toggleComputer(_ id: String) { computerID = computerID == id ? nil : id; archivedSelection.removeAll() }
 

@@ -68,6 +68,7 @@ public struct ConnectedBox: Identifiable, Sendable {
     public let browser = BoxBrowser()
     public private(set) var sessions: [ConnectionSession]
     public private(set) var activeID: String
+    var creations: [BoxCreation] = []
     @ObservationIgnored private let pollingEnabled: Bool
     public var active: ConnectionSession { sessions.first { $0.id == activeID } ?? sessions[0] }
     public var suggestedCreationComputerID: String {
@@ -93,11 +94,14 @@ public struct ConnectedBox: Identifiable, Sendable {
     public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws {
         guard let host = session(id), host.workspace.isConnected else { throw DiscoboxError("Connect to the selected computer first.") }
         let generation = host.workspace.connectionID
-        try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection)
+        let box = try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection)
         guard host.workspace.connectionID == generation, host.workspace.isConnected else { throw CancellationError() }
-        browser.filter = .all; browser.searchText = ""; browser.selectedTags.removeAll(); browser.archivedSelection.removeAll()
-        if browser.computerID != nil { browser.computerID = host.id }
+        let location = BoxLocation(connection: host.id, box: box.id)
+        creations.append(.init(connection: generation, item: .init(location: location, computer: host.profile.displayName, box: box, needsAttention: box.matchesAttention)))
+        browser.archivedSelection.removeAll()
         activate(host.id)
+        browser.requestReveal(location)
+        reconcileCreations()
     }
     @discardableResult public func connect(_ profile: ConnectionProfile, demo: Bool = false, select: Bool = true, client: () throws -> any DiscoboxClient) async throws -> ConnectionSession {
         syncProfiles([profile])
@@ -119,6 +123,7 @@ public struct ConnectedBox: Identifiable, Sendable {
               let box = host.workspace.sandboxes.first(where: { $0.id == location.box }) else { return }
         if browser.filter == .archived {
             if box.isArchived { browser.selectArchives([location]) }
+            else if creationPins.contains(where: { $0.id == location }) { browser.archivedSelection.removeAll() }
             else { browser.filter = .all; browser.archivedSelection.removeAll() }
         }
         activate(host.id)
@@ -127,6 +132,7 @@ public struct ConnectedBox: Identifiable, Sendable {
     public func disconnect(_ id: String) {
         guard let host = session(id) else { return }
         host.stopPolling(); host.workspace.disconnect()
+        creations.removeAll { $0.id.connection == id }
     }
     public func disconnectAll() { for host in sessions { disconnect(host.id) } }
     public var switcherBoxes: [ConnectedBox] {
