@@ -32,6 +32,8 @@ struct BoxActionSheet: View {
     @State private var confirmation = ""
     @State private var working = false
     @State private var failure: String?
+    @State private var closed = false
+    @State private var startedAt: Date?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Label("\(request.action.title) box", systemImage: request.action.symbol).font(.title2.bold())
@@ -45,23 +47,41 @@ struct BoxActionSheet: View {
                 TextField("Type DELETE to permanently delete", text: $confirmation).textFieldStyle(.roundedBorder)
             }
             if let failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
+            if working, let startedAt {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(request.action.progressTitle).controlSize(.small)
+                        if context.date.timeIntervalSince(startedAt) >= 10 {
+                            Text("Still waiting for Discobox. You can close this window while the request continues. Check the box’s state before submitting it again.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
             HStack {
-                Button(working ? "Close" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(working ? "Close" : "Cancel", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
-                if working { ProgressView().controlSize(.small) }
                 Button(request.action.title, role: request.action == .purge ? .destructive : nil) {
-                    working = true; failure = nil
+                    working = true; failure = nil; startedAt = Date()
                     Task {
                         do {
-                            try await workspace.performBoxAction(request.action, boxID: request.box.id, connection: request.connection, name: name) {
+                            try await workspace.performBoxAction(request.action, boxID: request.box.id, connection: request.connection, name: name, onAccepted: {
+                                working = false
+                                if !closed { close() }
+                            }) {
                                 if [.stop, .archive, .purge, .upgrade, .repair].contains(request.action) {
                                     terminals.closeBox(request.box.id, connection: request.connection)
                                     forwards.close(box: request.box.id)
                                 }
                             }
-                            dismiss()
+                            if !closed {
+                                working = false
+                                failure = "The computer’s connection changed. Check the box’s current state."
+                            }
                         } catch {
-                            failure = error.localizedDescription + " Check the box’s current state before trying again."
+                            let message = request.action.title + " “" + request.box.displayName + "”: " + error.localizedDescription + " Check the box’s current state before trying again."
+                            if !closed { failure = message }
+                            else if workspace.connectionID == request.connection { workspace.commandError = message }
                             working = false
                         }
                     }
@@ -70,8 +90,10 @@ struct BoxActionSheet: View {
             }
         }.padding(24).frame(width: 440)
             .onAppear { name = request.box.displayName }
+            .onDisappear { closed = true }
             .interactiveDismissDisabled(working)
     }
+    private func close() { closed = true; dismiss() }
 }
 
 struct BulkPurgeRequest: Identifiable {

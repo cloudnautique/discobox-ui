@@ -11,7 +11,7 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
 
     /// Refresh immediately before a mutation. A reconnected host, changed policy,
     /// failed refresh, or request answered elsewhere must never reuse a banner.
-    @MainActor public func respond(_ action: Action, workspace: Workspace) async throws -> Bool {
+    @MainActor public func respond(_ action: Action, workspace: Workspace, onAccepted: () -> Void = {}) async throws -> Bool {
         if action == .later { return false }
         guard workspace.isConnected, workspace.connectionID == connection else {
             throw DiscoboxError("The computer reconnected or disconnected. Open the current request in Discobox.")
@@ -24,14 +24,15 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
             guard let quick = item.notificationApprovalPayload else { return false }
             payload = quick
         }
-        try await workspace.answer(item, action: action.rawValue, payload: payload)
+        try await workspace.answer(item, action: action.rawValue, payload: payload, onAccepted: onAccepted)
         return true
     }
 }
 
 extension ApprovalItem {
-    /// Match the form's default credential approval: requested TTL and exact
-    /// policy, configured credential/gate, no new rule or changed restrictions.
+    /// Match the form's automatic credential approval: let the server fit the
+    /// duration to the current secret limit, preserving the exact policy and
+    /// configured credential/gate without rules or changed restrictions.
     /// Certificate pins, refresh tokens, delegation, and non-expiring grants
     /// need the form's explicit choices.
     public var notificationApprovalPayload: JSONValue? {
@@ -42,7 +43,7 @@ extension ApprovalItem {
         guard ttl == .null || ttl.number != nil else { return nil }
         let seconds = ttl.number ?? 3600
         guard seconds.isFinite, seconds > 0, seconds.rounded() == seconds, seconds < Double(Int.max) else { return nil }
-        var body: [String: JSONValue] = ["grantTTLSeconds": .number(seconds)]
+        var body: [String: JSONValue] = [:]
         if request["policy"] != .null { body["policy"] = request["policy"] }
         return .object(body)
     }

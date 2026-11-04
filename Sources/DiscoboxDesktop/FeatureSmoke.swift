@@ -10,6 +10,7 @@ import UserNotifications
         do {
             try await verifyAppearance()
             try await verifyNotifications()
+            try await DialogReceiptSmoke.verify()
             try await verifyNotificationPermissionRecovery()
             try await verifyComputerUsage()
             let workspace = Workspace()
@@ -63,7 +64,10 @@ import UserNotifications
             await localComputer.workspace.refreshResources()
             guard let resourcePool = workspace.resources.pools.first else { throw DiscoboxError("Resource fixture missing") }
             guard let shell = workspace.execs.first(where: \.isShell) else { throw DiscoboxError("Shell fixture missing") }
+            guard let stoppedBox = workspace.sandboxes.first(where: { $0.id == "demo-api" }) else { throw DiscoboxError("Stopped-box fixture missing") }
             let panels: [(String, AnyView)] = [
+                ("start-box-light", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.light))),
+                ("start-box-dark", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.dark))),
                 ("studio-light", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).preferredColorScheme(.light))),
                 ("studio-dark", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).preferredColorScheme(.dark))),
                 ("shell-close", AnyView(TerminalCloseSheet(request: .init(terminal: shell, box: box.id, connection: workspace.connectionID), confirm: {}).defaultAppStorage(settingsDefaults))),
@@ -125,6 +129,7 @@ import UserNotifications
     }
 
     private static func verifyNotifications() async throws {
+        try await ApprovalDurationSmoke.verify()
         // Construct SDK content/categories only. Never contact Notification
         // Center, request permissions, or post a real banner during smoke runs.
         let workspace = Workspace()

@@ -4,6 +4,18 @@ public enum BoxAction: String, CaseIterable, Identifiable, Sendable {
     case start, stop, archive, unarchive, upgrade, repair, purge, rename
     public var id: Self { self }
     public var title: String { self == .unarchive ? "Restore" : rawValue.capitalized }
+    public var progressTitle: String {
+        switch self {
+        case .start: "Starting box…"
+        case .stop: "Stopping box…"
+        case .archive: "Archiving box…"
+        case .unarchive: "Restoring box…"
+        case .upgrade: "Upgrading box…"
+        case .repair: "Repairing box…"
+        case .purge: "Deleting box…"
+        case .rename: "Renaming box…"
+        }
+    }
     public var symbol: String {
         switch self {
         case .start: "play"

@@ -243,7 +243,7 @@ public final class Workspace {
     }
 
     /// Captures the target and connection; a selection change never retargets an intent.
-    public func performBoxAction(_ action: BoxAction, boxID: String, connection: UUID, name: String = "", refreshAfter: Bool = true, beforeRequest: () -> Void = {}) async throws {
+    public func performBoxAction(_ action: BoxAction, boxID: String, connection: UUID, name: String = "", refreshAfter: Bool = true, onAccepted: () -> Void = {}, beforeRequest: () -> Void = {}) async throws {
         guard connection == connectionID, let client, let projectID,
               let box = sandboxes.first(where: { $0.id == boxID }), action.isAvailable(for: box) else {
             throw DiscoboxError("This action is no longer available. Refresh the box and try again.")
@@ -259,6 +259,9 @@ public final class Workspace {
         guard connection == connectionID else { return }
         // Avoid reconnecting to a box after an explicit stop/archive/restore.
         if sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { clearSelection() }
+        // The mutation is acknowledged. UI completion must not wait for an
+        // unrelated inventory/details refresh or dismiss a later presentation.
+        onAccepted()
         if refreshAfter { await refresh() }
     }
 
@@ -402,12 +405,13 @@ public final class Workspace {
         if data.isEmpty { return .object([:]) }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
-    public func answer(_ item: ApprovalItem, action: String, payload: JSONValue) async throws {
+    public func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
         let connection = connectionID
         _ = try await operation(.answer, requestID: item.id, kind: item.kind, action: action, payload: payload)
         guard connection == connectionID else { return }
         approvalRequest = UUID()
         approvals.removeAll { $0.id == item.id }
+        onAccepted()
         await refreshApprovals()
     }
 

@@ -39,7 +39,7 @@ struct ApprovalSheet: View {
     @State private var connection: UUID?
     @State private var secrets: [JSONValue] = []
     @State private var secret = ""
-    @State private var duration = "3600"
+    @State private var duration = ApprovalDuration.automatic
     @State private var value = ""
     @State private var newName = ""
     @State private var newCredential = false
@@ -53,15 +53,56 @@ struct ApprovalSheet: View {
     @State private var limit = "3600"
     @State private var busy = false
     @State private var error: String?
+    @State private var closed = false
+    init(item: ApprovalItem, initialDuration: String? = nil) {
+        self.item = item
+        let wanted = item.request["grantTTLSeconds"].number ?? 3600
+        let explicit = wanted.isFinite && wanted >= 0 && wanted < Double(Int.max) ? String(Int(wanted)) : "3600"
+        _duration = State(initialValue: initialDuration ?? (item.kind == "credential" ? ApprovalDuration.automatic : explicit))
+    }
     private var request: JSONValue { item.request }
     private var refresh: Bool { request["reason"].string == "refresh" }
-    private var resolved: Bool { !workspace.approvals.contains { $0.id == item.id } }
+    private var connectionChanged: Bool { connection.map { $0 != workspace.connectionID } ?? false }
+    private var resolved: Bool { connectionChanged || !workspace.approvals.contains { $0.id == item.id } }
     private var certificates: [JSONValue] { request["observedChain"].array + (request["suppliedCA"] == .null ? [] : [request["suppliedCA"]]) }
-    private var selectedSecret: JSONValue { secrets.first { $0["id"].string == secret } ?? .null }
+    private var selectedSecret: JSONValue { ApprovalDuration.selectedSecret(id: secret, request: request, secrets: secrets) }
+    private var credentialMaximum: Double? {
+        guard item.kind == "credential", !newCredential else { return nil }
+        if changeSecret { return Int(limit).flatMap { $0 >= 0 ? Double($0) : nil } }
+        return selectedSecret["maxGrantTTLSeconds"].number
+    }
+    private var durationError: String? {
+        guard !refresh else { return nil }
+        do { _ = try ApprovalDuration.fields(duration, kind: item.kind, maximum: credentialMaximum); return nil }
+        catch { return error.localizedDescription }
+    }
+    private func permitsDuration(_ value: String) -> Bool {
+        (try? ApprovalDuration.fields(value, kind: item.kind, maximum: credentialMaximum)) != nil
+    }
+    private var durationPreset: Binding<String> {
+        Binding(get: {
+            [ApprovalDuration.automatic, "900", "1800", "3600", "28800", "86400", "0"].contains(duration) ? duration : "custom"
+        }, set: { duration = $0 == "custom" ? "" : $0 })
+    }
     var body: some View {
+        Group {
+            if resolved && !busy {
+                VStack(alignment: .leading, spacing: 16) {
+                    StudioDialogHeader(title: connectionChanged ? "Connection changed" : "Request no longer pending", symbol: "checkmark.circle")
+                    Text(connectionChanged ? "Reopen the current approval inbox on this computer." : "This request was answered or withdrawn. There’s nothing left to approve here.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Text(item.title).font(.callout.weight(.medium))
+                    HStack { Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction) }
+                }.padding(24).frame(width: 480).background(DiscoboxAppearance.surface)
+                    .tint(DiscoboxAppearance.accent).onExitCommand(perform: close)
+            } else { form }
+        }.onDisappear { closed = true }
+    }
+    private func close() { closed = true; dismiss() }
+
+    private var form: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(item.title).font(.title2.bold())
-            if resolved { Label("This request was answered elsewhere.", systemImage: "checkmark.circle") }
             ScrollView {
                 Form {
                     Section("Request") {
@@ -96,17 +137,32 @@ struct ApprovalSheet: View {
                                 }.disabled(newCredential)
                                 Toggle("Store a new token credential", isOn: $newCredential)
                                 if newCredential { TextField("Name", text: $newName); SecureField("Token value", text: $value); TextField("Host", text: $host) }
-                                if let max = selectedSecret["maxGrantTTLSeconds"].number { Text(max == 0 ? "Credential permits non-expiring grants." : "Credential grant limit: \(Int(max)) seconds.").font(.caption).foregroundStyle(.secondary) }
+                                if let max = selectedSecret["maxGrantTTLSeconds"].number, max.isFinite, max >= 0 {
+                                    Text(max == 0 ? "Credential permits non-expiring grants." : "Credential grant limit: " + ApprovalDuration.label(max) + ".").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
                         Section("Duration") {
-                            Picker("Preset", selection: $duration) {
-                                Text("15 minutes").tag("900"); Text("1 hour").tag("3600"); Text("8 hours").tag("28800"); Text("1 day").tag("86400")
-                                if item.kind != "trust" { Text("Never expires").tag("0") }
-                                if !["900", "3600", "28800", "86400", "0"].contains(duration) { Text("Custom").tag(duration) }
+                            Picker("Preset", selection: durationPreset) {
+                                if item.kind == "credential", !newCredential {
+                                    Text("Automatic · respects credential limit").tag(ApprovalDuration.automatic)
+                                }
+                                Text("15 minutes").tag("900").disabled(!permitsDuration("900"))
+                                Text("30 minutes").tag("1800").disabled(!permitsDuration("1800"))
+                                Text("1 hour").tag("3600").disabled(!permitsDuration("3600"))
+                                Text("8 hours").tag("28800").disabled(!permitsDuration("28800"))
+                                Text("1 day").tag("86400").disabled(!permitsDuration("86400"))
+                                if item.kind != "trust" { Text("Never expires").tag("0").disabled(!permitsDuration("0")) }
+                                Text("Custom…").tag("custom")
                             }
-                            TextField("Duration in seconds", text: $duration)
-                            if let wanted = request["grantTTLSeconds"].number { Text("Requested: \(Int(wanted)) seconds").font(.caption) }
+                            if duration == ApprovalDuration.automatic {
+                                Text("Uses the requested duration, shortened to the credential’s current limit. The server applies that limit when you approve.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else { TextField("Duration in seconds", text: $duration) }
+                            if let wanted = request["grantTTLSeconds"].number, wanted.isFinite, wanted >= 0 {
+                                Text(wanted == 0 ? "Requested: server default" : "Requested: " + ApprovalDuration.label(wanted)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let durationError { Text(durationError).font(.caption).foregroundStyle(.orange) }
                         }
                         if item.kind == "credential" {
                             DisclosureGroup("Permissions and policy") {
@@ -130,12 +186,16 @@ struct ApprovalSheet: View {
                 }.formStyle(.grouped)
             }
             if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if busy {
+                Text("Waiting for Discobox. You can close this window; the submitted response may still complete.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
-                Button("Later") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+                Button(busy ? "Close" : "Later", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
                 Button(refresh ? "Update credential" : "Approve") { submit(deny: false) }
-                    .buttonStyle(.bordered).disabled(busy || resolved)
+                    .buttonStyle(.bordered).disabled(busy || resolved || durationError != nil)
                 Button("Deny", role: .destructive) { submit(deny: true) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent).disabled(busy || resolved)
@@ -143,10 +203,21 @@ struct ApprovalSheet: View {
         }.padding(20).frame(width: 660, height: 700).interactiveDismissDisabled(busy)
         .task {
             connection = workspace.connectionID
-            duration = String(Int(request["grantTTLSeconds"].number ?? 3600))
             newName = request["name"].string
-            do { if item.kind == "credential" { secrets = try await workspace.approvalSecrets() } }
-            catch { self.error = error.localizedDescription }
+            do {
+                if item.kind == "credential" {
+                    let loaded = try await workspace.approvalSecrets()
+                    guard !Task.isCancelled, connection == workspace.connectionID else { return }
+                    secrets = loaded
+                }
+            }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        }
+        .onChange(of: newCredential) { _, enabled in
+            if enabled && duration == ApprovalDuration.automatic {
+                let seconds = request["grantTTLSeconds"].number ?? 3600
+                duration = seconds.isFinite && seconds > 0 && seconds < Double(Int.max) ? String(Int(seconds)) : "3600"
+            }
         }
     }
     private func submit(deny: Bool) {
@@ -161,8 +232,9 @@ struct ApprovalSheet: View {
                         guard !value.isEmpty else { throw DiscoboxError("Enter the replacement token.") }
                         body = ["value": .string(value), "via": .string("entered")]
                     } else {
-                        guard let seconds = Int(duration), seconds >= 0, item.kind != "trust" || (seconds > 0 && seconds <= 2592000) else { throw DiscoboxError("Enter a valid duration. Trust must expire within 30 days.") }
-                        body["grantTTLSeconds"] = .number(Double(seconds))
+                        // Automatic deliberately omits grantTTLSeconds. Sending the
+                        // request's duration explicitly bypasses its bounded default.
+                        body.merge(try ApprovalDuration.fields(duration, kind: item.kind, maximum: credentialMaximum)) { _, new in new }
                         if item.kind == "trust" {
                             guard let i = Int(pin), certificates.indices.contains(i) else { throw DiscoboxError("Choose the certificate to trust.") }
                             let cert = certificates[i], ca = cert["isCA"] == .bool(true)
@@ -185,6 +257,7 @@ struct ApprovalSheet: View {
                             }
                             if newCredential {
                                 guard !value.isEmpty, !newName.isEmpty else { throw DiscoboxError("Enter a name and token value.") }
+                                guard let seconds = Int(duration), seconds >= 0 else { throw DiscoboxError("Choose a duration for the new credential.") }
                                 let made = try await workspace.operation(.createSecret, payload: .object(["name": .string(newName), "type": .string("token"), "host": .string(host), "value": .object(["token": .string(value)]), "maxGrantTTLSeconds": .number(Double(seconds))]))
                                 guard connection == workspace.connectionID else { throw DiscoboxError("The credential was created on the previous connection; approval was not sent.") }
                                 secret = made["id"].string
@@ -195,10 +268,17 @@ struct ApprovalSheet: View {
                         }
                     }
                 }
-                try await workspace.answer(item, action: action, payload: .object(body))
-                value = ""; dismiss()
-            } catch { self.error = error.localizedDescription; await workspace.refreshApprovals() }
-            busy = false
+                try await workspace.answer(item, action: action, payload: .object(body), onAccepted: {
+                    value = ""; busy = false
+                    if !closed { close() }
+                })
+                if !closed { busy = false }
+            } catch {
+                busy = false
+                if !closed { self.error = error.localizedDescription }
+                else if connection == workspace.connectionID { workspace.commandError = item.title + ": " + error.localizedDescription }
+                await workspace.refreshApprovals()
+            }
         }
     }
 }

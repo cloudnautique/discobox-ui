@@ -70,6 +70,8 @@ screen; check that you have completed Discobox’s setup and started its server.
 Manage saved computers in **Discobox → Settings → Connections**.
 
 - Press **⌘N** to create a box or **⌘K** to find and switch boxes.
+- Opening a stopped box offers **Start & Open** or **View Saved**. Saved terminal
+  output also has a **Start Box** button, even when your sidebar filters hide it.
 - Creating a box keeps your filters. A temporary **New boxes** row shows startup
   progress or errors; **Reveal** shows a running box hidden by your filters.
 - Use the boxes menu to group and filter the list. **All computers** shows boxes

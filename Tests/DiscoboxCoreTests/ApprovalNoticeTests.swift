@@ -10,11 +10,11 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
     return .init(kind: kind, credential: kind == "credential" ? .object(body) : nil, trust: kind == "trust" ? .object(body) : nil)
 }
 
-@Test func notificationApprovalPreservesRequestedAccessWithoutRulesOrCredentialEdits() throws {
+@Test func notificationApprovalUsesBoundedDefaultWithoutRulesOrCredentialEdits() throws {
     let item = noticeItem()
     let body = try #require(item.notificationApprovalPayload)
-    #expect(body == .object(["grantTTLSeconds": .number(900), "policy": item.request["policy"]]))
-    #expect(noticeItem(["grantTTLSeconds": .null]).notificationApprovalPayload?["grantTTLSeconds"] == .number(3600))
+    #expect(body == .object(["policy": item.request["policy"]]))
+    #expect(noticeItem(["grantTTLSeconds": .null]).notificationApprovalPayload == .object(["policy": item.request["policy"]]))
     for changes: [String: JSONValue] in [
         ["reason": .string("refresh")], ["reason": .string("future")], ["purpose": .string("delegate")],
         ["grantTTLSeconds": .number(0)], ["grantTTLSeconds": .number(-1)], ["grantTTLSeconds": .number(0.5)],

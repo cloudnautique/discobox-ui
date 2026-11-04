@@ -100,7 +100,8 @@ public actor DemoClient: DiscoboxClient {
             }
             return try JSONSerialization.data(withJSONObject: list)
         case .execs:
-            let stopped = request.sandboxID == "demo-api"
+            let runtime = boxOverrides[request.sandboxID ?? ""]?["runtime"] as? [String: Any]
+            let stopped = runtime.map { $0["runtimeState"] as? String != "running" } ?? (request.sandboxID == "demo-api")
             let rows: [[String: Any]] = [
                 ["id":"agent-1", "status": stopped ? "exited" : "running", "command":["bash"],
                  "startupCommand":["claude"], "workdir":"/workspace/discobox", "tty":true, "primary":true],

@@ -258,10 +258,31 @@ import DiscoboxCore
             try await wait { chooser.firstResponder is NSTextView }
             let candidates = workspace.switcherBoxes
             guard candidates.map(\.id) == ["demo-tests", "demo-ui", "demo-api"] else { throw Failure("switcher state priority incorrect") }
+            workspace.filter = .running
             try await post(chooser, code: 125, text: "\u{f701}")
             try await post(chooser, code: 125, text: "\u{f701}")
             try await post(chooser, code: 36, text: "\r")
+            func savedButton() -> NSButton? {
+                descendants(chooser.contentView!).compactMap { $0 as? NSButton }.first {
+                    $0.keyEquivalent.isEmpty && $0.cell !== chooser.defaultButtonCell && $0.isEnabled
+                }
+            }
+            func startButton() -> NSButton? {
+                descendants(window.contentView!).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "boxStart.selected" }
+            }
+            try await wait { chooser.defaultButtonCell != nil && savedButton() != nil }
+            guard workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw Failure("Prompt started the stopped box without confirmation") }
+            try await post(chooser, code: 53, text: "\u{1b}")
+            try await wait { chooser.firstResponder is NSTextView }
+            try await post(chooser, code: 36, text: "\r")
+            try await wait { chooser.defaultButtonCell != nil && savedButton() != nil }
+            savedButton()!.performClick(nil)
             try await wait { window.attachedSheet == nil && workspace.sandboxID == candidates[2].id }
+            try await wait { startButton() != nil }
+            guard workspace.filter == .running, !workspace.visibleBoxes.contains(where: { $0.id == "demo-api" }) else { throw Failure("Viewing saved output changed the Running filter") }
+            startButton()!.performClick(nil)
+            try await wait { workspace.selectedBox?.isRunning == true && workspace.hasLiveTerminal }
+            guard workspace.filter == .running else { throw Failure("Starting the selected box changed the filter") }
             try await post(window, code: 40, text: "k", flags: .command)
             try await wait { window.attachedSheet?.firstResponder is NSTextView }
             let searchSheet = window.attachedSheet!
@@ -269,7 +290,7 @@ import DiscoboxCore
             try await Task.sleep(for: .milliseconds(150))
             try await post(searchSheet, code: 36, text: "\r")
             try await wait { window.attachedSheet == nil && workspace.sandboxID == "demo-ui" }
-            print("COMMAND: box chooser arrows, Return, harness/repository search OK"); fflush(stdout)
+            print("COMMAND: box chooser arrows, Return, stopped-box prompt, saved-only viewing, Start bar under Running filter, harness/repository search OK"); fflush(stdout)
             commands.appShortcuts[.newBox] = "cmd+option+n"
             try await post(window, code: 45, text: "n", flags: [.command, .option])
             try await wait { commands.showCreateBox && window.attachedSheet != nil }
@@ -323,6 +344,7 @@ import DiscoboxCore
             terminals.closeAll(); exit(1)
         }
     }
+    private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private static func splits(_ view: NSView) -> [NSSplitView] {
         ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap { splits($0) }
     }

@@ -119,6 +119,24 @@ import GhosttyKit
             local.workspace.filter = .all
             await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
             try await wait { localTerminal.view.window === window }
+            // Opening a stopped remote box asks first, then starts only that
+            // host's matching ID and preserves the Running browser filter.
+            commands.performAppShortcut(.switchBox)
+            try await wait { window.attachedSheet?.contentView != nil }
+            let stoppedChooser = window.attachedSheet!
+            try await wait { descendants(stoppedChooser.contentView!).compactMap { $0 as? NSTextField }.contains { $0.placeholderString == "Find a box, harness, or repository" } }
+            let stoppedSearch = descendants(stoppedChooser.contentView!).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "Find a box, harness, or repository" }!
+            stoppedSearch.stringValue = "Studio Review API pagination"
+            stoppedSearch.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: stoppedSearch))
+            _ = stoppedSearch.delegate?.control?(stoppedSearch, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            try await wait { stoppedChooser.defaultButtonCell != nil && descendants(stoppedChooser.contentView!).compactMap { $0 as? NSButton }.contains { $0.cell === stoppedChooser.defaultButtonCell && $0.isEnabled } }
+            guard hub.activeID == local.id, studio.workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw DiscoboxError("Stopped-box prompt changed computer or started without consent") }
+            let start = descendants(stoppedChooser.contentView!).compactMap { $0 as? NSButton }.first { $0.cell === stoppedChooser.defaultButtonCell && $0.isEnabled }!
+            start.performClick(nil)
+            try await wait { window.attachedSheet == nil && hub.activeID == studio.id && studio.workspace.sandboxID == "demo-api" && studio.workspace.hasLiveTerminal }
+            guard local.workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false, hub.browser.filter == .running else { throw DiscoboxError("Start & Open targeted the wrong computer or changed filters") }
+            await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
+            try await wait { localTerminal.view.window === window }
             let localForward = resources.runtime(local.id).forwards.session(box: "demo-ui", workspace: local.workspace)
             _ = resources.runtime(studio.id).forwards.session(box: "demo-ui", workspace: studio.workspace)
             hub.disconnect(studio.id)
@@ -138,7 +156,7 @@ import GhosttyKit
             try await Task.sleep(for: .milliseconds(150))
             _ = recoveryField.delegate?.control?(recoveryField, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
             try await wait { hub.activeID == local.id && window.attachedSheet == nil && localTerminal.view.window === window }
-            print("MULTIHOST_SMOKE_OK: composite box switcher + Return, independent terminals, remote creation from Archived, command routing, retained local surface, host-scoped forwarding and disconnect")
+            print("MULTIHOST_SMOKE_OK: composite box switcher + Return, stopped-box confirmation and remote Start & Open, independent terminals, remote creation from Archived, command routing, retained local surface, host-scoped forwarding and disconnect")
             window.orderOut(nil); resources.closeAll(); hub.disconnectAll(); fflush(stdout); exit(0)
         } catch {
             print("MULTIHOST_SMOKE_FAILED: \(error)")

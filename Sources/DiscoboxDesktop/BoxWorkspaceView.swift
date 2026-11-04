@@ -22,6 +22,9 @@ struct BoxWorkspaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let error = workspace.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
+            if !box.isRunning {
+                StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id)
+            }
             // Keep the tab's container stable when hiding the pinned agent;
             // reparenting a retained NSView across two outgoing/incoming SwiftUI
             // branches can let the outgoing branch reclaim the terminal.
@@ -63,7 +66,7 @@ struct BoxWorkspaceView: View {
 
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
         .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
-        .sheet(item: $creationAction) { BoxActionSheet(request: $0).environment(workspace) }
+        .sheet(item: $creationAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
     }
 
     @ViewBuilder private var panes: some View {
@@ -327,7 +330,9 @@ struct ConsoleView: View {
                         Task { await workspace.selectExec(terminal.id) }
                     })
             } else if let screen = savedScreen {
-                Notice(text: "Saved terminal state · Read only", symbol: "clock", warning: false)
+                if workspace.selectedBox?.isRunning != false {
+                    Notice(text: "Saved terminal state · Read only", symbol: "clock", warning: false)
+                }
                 TerminalTextView(text: screen.text).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(terminal.isShell ? "Shell ended" : "Terminal unavailable", systemImage: "terminal",

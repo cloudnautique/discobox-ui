@@ -153,9 +153,8 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	b.allowShell = allowShell
 	b.allowManage = allowManage
 	defer b.client.CloseIdleConnections()
-	duration := 15 * time.Second
+	duration := requestTimeout(req)
 	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
-		duration = 30 * time.Minute
 		b.client.Timeout = 0
 	}
 	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" {
@@ -173,6 +172,17 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	}
 	*out = result
 	return nil
+}
+
+func requestTimeout(req request) time.Duration {
+	if req.Operation == "boxAction" && req.Action == "archive" {
+		// Archive records an asynchronous intent, without waiting for runtime removal.
+		return 30 * time.Second
+	}
+	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
+		return 30 * time.Minute
+	}
+	return 15 * time.Second
 }
 
 func defaultSocket() string {

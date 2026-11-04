@@ -241,9 +241,10 @@ struct NotificationApprovalPresentation: Identifiable {
         content.title = "Approval needed"
         content.subtitle = String((computer + " · " + box).prefix(180))
         let direct = notice.item.notificationApprovalPayload != nil
-        if let seconds = notice.item.notificationApprovalPayload?["grantTTLSeconds"].number {
-            let duration = Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
-            content.body = String((notice.item.title + " · " + duration + "\nOpen in Discobox to inspect the request or adjust access.").prefix(300))
+        if direct {
+            let duration = notice.item.request["grantTTLSeconds"].number.map { "Requested: " + ApprovalDuration.label($0) + "; credential limit applies." }
+                ?? "Duration respects the credential limit."
+            content.body = String((notice.item.title + "\n" + duration + "\nOpen in Discobox to inspect the request or adjust access.").prefix(300))
         } else {
             content.body = String((notice.item.title + "\nOpen in Discobox to choose the approval details.").prefix(300))
         }
@@ -284,7 +285,7 @@ struct NotificationApprovalPresentation: Identifiable {
         default: return
         }
         do {
-            let answered = try await notice.respond(selected, workspace: host.workspace)
+            let answered = try await notice.respond(selected, workspace: host.workspace, onAccepted: { remove([id]) })
             if answered { remove([id]) }
             else {
                 connections.activate(host.id)

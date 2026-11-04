@@ -313,7 +313,7 @@ struct WorkspaceView: View {
             if filter == .archived && connections == nil { Task { await workspace.selectBox(nil) } }
         }
         .onChange(of: workspace.connectionID) { archiveSelection.removeAll() }
-        .sheet(item: $boxAction) { BoxActionSheet(request: $0).environment(workspace) }
+        .sheet(item: $boxAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
         .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
         .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
@@ -409,6 +409,12 @@ struct BoxChooser: View {
     @State private var computerID = ""
     @State private var selected: BoxLocation?
 
+    private struct StoppedSelection {
+        let location: BoxLocation
+        let intent: BoxStartIntent
+    }
+    @State private var stoppedSelection: StoppedSelection?
+
     private var results: [ConnectedBox] {
         let waiting = Set(workspace.approvals.map(\.boxID))
         let boxes = connections?.switcherBoxes ?? workspace.switcherBoxes.map {
@@ -432,6 +438,18 @@ struct BoxChooser: View {
     }
 
     var body: some View {
+        SwiftUI.Group {
+            if let stoppedSelection {
+                BoxStartPrompt(intent: stoppedSelection.intent, cancel: { self.stoppedSelection = nil }, viewSaved: {
+                    open(stoppedSelection.location, in: stoppedSelection.intent.workspace, connection: stoppedSelection.intent.connection)
+                }, open: {
+                    open(stoppedSelection.location, in: stoppedSelection.intent.workspace, connection: stoppedSelection.intent.connection)
+                })
+            } else { chooser }
+        }.interactiveDismissDisabled(stoppedSelection?.intent.working == true)
+    }
+
+    @ViewBuilder private var chooser: some View {
         let matches = results
         let groups: [Group] = Array(Set(matches.map { group($0) })).sorted { $0.precedes($1) }
         VStack(spacing: 0) {
@@ -489,7 +507,7 @@ struct BoxChooser: View {
                 StudioKeycap(text: "↓")
                 Text("Navigate").padding(.trailing, 12)
                 StudioKeycap(text: "↵")
-                Text("Open").padding(.trailing, 12)
+                Text(matches.first(where: { $0.id == selected }).map { BoxAction.start.isAvailable(for: $0.box) } == true ? "Open…" : "Open").padding(.trailing, 12)
                 StudioKeycap(text: "esc")
                 Text("Close")
                 Spacer()
@@ -516,10 +534,28 @@ struct BoxChooser: View {
         if let item = matches.first(where: { $0.id == selected }) ?? matches.first { select(item.id) }
     }
     private func select(_ id: BoxLocation) {
-        let target = workspace
+        let target: Workspace
+        let computer: String
+        if let connections {
+            guard let host = connections.session(id.connection), host.workspace.isConnected else { return }
+            target = host.workspace; computer = host.profile.displayName
+        } else { target = workspace; computer = workspace.endpointLabel }
+        guard let box = target.sandboxes.first(where: { $0.id == id.box }) else { return }
+        if BoxAction.start.isAvailable(for: box) {
+            stoppedSelection = .init(location: id, intent: .init(workspace: target, box: box, computer: computer))
+        } else { open(id, in: target, connection: target.connectionID) }
+    }
+    private func open(_ id: BoxLocation, in target: Workspace, connection: UUID) {
+        guard target.isConnected, target.connectionID == connection else { return }
         commands?.choosingBox = false
         dismiss()
-        Task { if let connections { await connections.selectBox(id) } else { await target.selectBox(id.box) } }
+        Task {
+            guard target.isConnected, target.connectionID == connection else { return }
+            if let connections {
+                guard connections.session(id.connection)?.workspace === target else { return }
+                await connections.selectBox(id)
+            } else { await target.selectBox(id.box) }
+        }
     }
 }
 
