@@ -198,7 +198,11 @@ private struct NewBoxResourceSummary: View {
                 if expanded {
                     VStack(alignment: .leading, spacing: 10) {
                         if let pool {
-                            Text("Memory: " + ResourceValue.bytes(pool.memoryAvailable) + " available · CPU: " + ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes)) + " / " + ResourceValue.cpu(pool.cpuCapacity) + " cores")
+                            let memory = ResourceValue.bytes(pool.memoryAvailable)
+                            let cpuUsage = ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes))
+                            let cpuCapacity = ResourceValue.cpu(pool.cpuCapacity)
+                            let details: String = "Memory: \(memory) available · CPU: \(cpuUsage) / \(cpuCapacity) cores"
+                            Text(details)
                             if let reportedAt = pool.reportedAt { Text("Reported \(reportedAt, style: .relative) ago") }
                         }
                         Text(PoolResourceHealth.cacheLimitation)
