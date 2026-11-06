@@ -41,11 +41,8 @@ import DiscoboxCore
             if let local = ForwardedServiceURL.resolve(url, ports: forward.ports) {
                 NSWorkspace.shared.open(local)
             } else if let window, window.attachedSheet == nil {
-                let alert = NSAlert()
-                alert.messageText = "This box port isn’t forwarded"
-                alert.informativeText = forward.error ?? "Open Services to check the reported ports for this box. The original localhost address wasn’t opened because it could belong to another app on your Mac."
-                alert.addButton(withTitle: "OK")
-                alert.beginSheetModal(for: window, completionHandler: { _ in })
+                StudioAppKitDialog.message(title: "This box port isn’t forwarded", symbol: "network.slash",
+                    message: forward.error ?? "Open Services to check the reported ports for this box. The original localhost address wasn’t opened because it could belong to another app on your Mac.", for: window)
             }
         }
     }

@@ -41,6 +41,7 @@ public enum BoxAction: String, CaseIterable, Identifiable, Sendable {
         }
     }
     public func isAvailable(for box: Sandbox) -> Bool {
+        guard !box.isDeleted else { return false }
         let state = box.runtime.displayState ?? box.runtime.state
         if ["deleted", "deleting", "archiving", "repairing", "starting", "stopping"].contains(state) { return false }
         if box.isArchived { return self == .unarchive || self == .purge }

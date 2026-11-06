@@ -23,7 +23,7 @@ struct HarnessUsageSection: View {
     @Environment(Workspace.self) private var workspace
     @AppStorage("harnessUsageExpanded") private var expanded = true
     @AppStorage("harnessUsageShelfHeight") private var height = 150.0
-    @State private var dragHeight: Double?
+    @GestureState private var resize: ShelfResize?
     @State private var resizeHovered = false
     @State private var showDetails = false
     private var computers: [UsageComputer] { UsageComputer.connected(connections, fallback: workspace) }
@@ -40,10 +40,24 @@ struct HarnessUsageSection: View {
                             .background(UsageResizeCursor())
                             .onHover { resizeHovered = $0 }
                             .onDisappear { resizeHovered = false }
-                            .gesture(DragGesture().onChanged { value in
-                                if dragHeight == nil { dragHeight = height }
-                                height = min(320, max(120, (dragHeight ?? height) - value.translation.height))
-                            }.onEnded { _ in dragHeight = nil })
+                            // The handle moves as the shelf grows. Local drag
+                            // coordinates feed that movement back into the next
+                            // event and make it oscillate. Keep a global anchor,
+                            // and persist only once when the drag finishes.
+                            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                                .updating($resize) { value, state, transaction in
+                                    transaction.animation = nil
+                                    let start = state?.start ?? height
+                                    state = ShelfResize(start: start, height: min(320, max(120, start - value.translation.height)).rounded())
+                                }
+                                .onEnded { value in
+                                    let start = resize?.start ?? height
+                                    var transaction = Transaction(animation: nil)
+                                    transaction.disablesAnimations = true
+                                    withTransaction(transaction) {
+                                        height = min(320, max(120, start - value.translation.height)).rounded()
+                                    }
+                                })
                             .help("Drag to resize harness usage")
                             .accessibilityLabel("Resize harness usage")
                             .accessibilityAdjustableAction { direction in
@@ -68,8 +82,8 @@ struct HarnessUsageSection: View {
                 Button("Details…") { showDetails = true }.buttonStyle(.borderless).font(.caption)
             }.padding(.horizontal, 12).frame(height: 34)
             if expanded {
-                UsageSummary(computers: computers).padding(.horizontal, 12).padding(.bottom, 10)
-                    .frame(height: min(320, max(120, height)))
+                UsageSummary(computers: computers).equatable().padding(.horizontal, 12).padding(.bottom, 10)
+                    .frame(height: min(320, max(120, resize?.height ?? height)))
                     .task(id: workspace.connectionID, priority: .utility) {
                         guard connections == nil else { return }
                         while !Task.isCancelled {
@@ -83,12 +97,20 @@ struct HarnessUsageSection: View {
         .tint(DiscoboxAppearance.accent)
         .sheet(isPresented: $showDetails) { HarnessUsageDetails().environment(workspace) }
     }
+    private struct ShelfResize {
+        let start: Double
+        let height: Double
+    }
 }
 
 /// Cursor rectangles follow the native view's lifetime and geometry, so
 /// collapsing the shelf cannot leave a pushed resize cursor behind.
 private struct UsageResizeCursor: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { CursorView() }
+    func makeNSView(context: Context) -> NSView {
+        let view = CursorView()
+        view.identifier = .init("usage.resizeHandle")
+        return view
+    }
     func updateNSView(_ view: NSView, context: Context) { view.window?.invalidateCursorRects(for: view) }
     private final class CursorView: NSView {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -99,8 +121,13 @@ private struct UsageResizeCursor: NSViewRepresentable {
     }
 }
 
-private struct UsageSummary: View {
+private struct UsageSummary: View, @MainActor Equatable {
     let computers: [UsageComputer]
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.computers.count == rhs.computers.count && zip(lhs.computers, rhs.computers).allSatisfy {
+            $0.id == $1.id && $0.name == $1.name && $0.workspace === $1.workspace
+        }
+    }
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             ScrollView {
@@ -154,7 +181,7 @@ private struct ComputerUsageSummary: View {
                                 Text(window.title == "5-hour window" ? "5h" : window.title == "Weekly" ? "Week" : window.title)
                                     .font(.caption2).foregroundStyle(.secondary).frame(width: 40, alignment: .leading).lineLimit(1)
                                 ProgressView(value: window.usedPercent, total: 100)
-                                    .tint(window.usedPercent >= 90 ? .orange : DiscoboxAppearance.accent)
+                                    .progressViewStyle(StudioQuotaProgressStyle())
                                     .accessibilityLabel("\(harness.name), \(window.title)")
                                 Text("\(window.usedPercent, specifier: "%.0f")%")
                                     .font(.caption2).monospacedDigit().frame(width: 30, alignment: .trailing)
@@ -176,12 +203,7 @@ struct HarnessUsageDetails: View {
     @Environment(\.dismiss) private var dismiss
     private var computers: [UsageComputer] { UsageComputer.connected(connections, fallback: workspace) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Harness usage").font(.title2.bold())
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
+        StudioConfirmation(title: "Harness usage", symbol: "gauge.with.dots.needle.33percent") {
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
@@ -211,7 +233,9 @@ struct HarnessUsageDetails: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-        }.padding(24).frame(width: 520, height: 600)
+        } footer: {
+            HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction) }
+        }.frame(height: 600)
         .task(id: workspace.connectionID, priority: .utility) {
             guard connections == nil else { return }
             while !Task.isCancelled {
@@ -245,7 +269,7 @@ private struct HarnessUsageContent: View {
                                     Text(window.title == "5-hour window" ? "5 hours" : window.title)
                                         .frame(width: 54, alignment: .leading).lineLimit(1).help(window.title)
                                     ProgressView(value: window.usedPercent, total: 100)
-                                        .tint(window.usedPercent >= 90 ? .orange : DiscoboxAppearance.accent)
+                                        .progressViewStyle(StudioQuotaProgressStyle())
                                         .frame(maxWidth: .infinity)
                                         .accessibilityLabel("\(window.title), \(Int(window.usedPercent)) percent used")
                                     Text("\(window.usedPercent, specifier: "%.0f")%")

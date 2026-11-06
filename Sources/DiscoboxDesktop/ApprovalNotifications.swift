@@ -1,6 +1,7 @@
 import SwiftUI
 import DiscoboxCore
 import CryptoKit
+import OSLog
 @preconcurrency import UserNotifications
 
 /// Install the notification delegate before AppKit finishes launching, including
@@ -8,7 +9,7 @@ import CryptoKit
 final class DiscoboxApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         let arguments = ProcessInfo.processInfo.arguments
-        guard !arguments.contains(where: { $0.hasSuffix("-smoke") || $0 == "--demo" }) else { return }
+        guard !arguments.contains(where: { $0.hasSuffix("-smoke") || $0 == "--demo" || $0 == "--notification-status" }) else { return }
         ApprovalNotifications.shared.install()
     }
 }
@@ -19,8 +20,15 @@ struct NotificationApprovalPresentation: Identifiable {
     let item: ApprovalItem
 }
 
+struct ApprovalNotificationConfiguration {
+    let authorization: UNAuthorizationStatus
+    var alertsEnabled = true
+    var notificationCenterEnabled = true
+    var alertStyle = UNAlertStyle.banner
+}
+
 @MainActor protocol ApprovalNotificationService: AnyObject {
-    func authorizationStatus() async -> UNAuthorizationStatus
+    func configuration() async -> ApprovalNotificationConfiguration
     func requestAuthorization() async throws -> Bool
     func add(_ request: UNNotificationRequest) async throws
     func remove(_ ids: [String])
@@ -30,7 +38,11 @@ struct NotificationApprovalPresentation: Identifiable {
 @MainActor private final class SystemApprovalNotificationService: ApprovalNotificationService {
     let center: UNUserNotificationCenter
     init(center: UNUserNotificationCenter) { self.center = center }
-    func authorizationStatus() async -> UNAuthorizationStatus { await center.notificationSettings().authorizationStatus }
+    func configuration() async -> ApprovalNotificationConfiguration {
+        let settings = await center.notificationSettings()
+        return .init(authorization: settings.authorizationStatus, alertsEnabled: settings.alertSetting == .enabled,
+                     notificationCenterEnabled: settings.notificationCenterSetting == .enabled, alertStyle: settings.alertStyle)
+    }
     func requestAuthorization() async throws -> Bool { try await center.requestAuthorization(options: [.alert, .sound]) }
     func add(_ request: UNNotificationRequest) async throws { try await center.add(request) }
     func remove(_ ids: [String]) {
@@ -43,6 +55,7 @@ struct NotificationApprovalPresentation: Identifiable {
 @MainActor @Observable final class ApprovalNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = ApprovalNotifications()
     static let preferenceKey = "approvalNotificationsEnabled"
+    private static let logger = Logger(subsystem: "ai.discobox.desktop", category: "ApprovalNotifications")
     private static let directCategory = "discobox.approval.direct"
     private static let reviewCategory = "discobox.approval.review"
     private var center: (any ApprovalNotificationService)?
@@ -55,19 +68,26 @@ struct NotificationApprovalPresentation: Identifiable {
     private var requestedThisLaunch = false
     private var waitingForPermission: Set<String> = []
     private var permissionRejected = false
+    private var retryTask: Task<Void, Never>?
+    private let retryDelay: Duration
     @ObservationIgnored weak var window: NSWindow?
     private(set) var enabled: Bool
     private(set) var authorization: UNAuthorizationStatus = .notDetermined
     private(set) var checkingPermission = false
     private(set) var deliveryError: String?
+    private(set) var alertsEnabled = true
+    private(set) var notificationCenterEnabled = true
+    private(set) var alertStyle = UNAlertStyle.banner
     var presentation: NotificationApprovalPresentation?
     var actionError: String?
     var permissionBlocked: Bool { authorization == .denied || permissionRejected }
     var waitingCount: Int { waitingForPermission.count }
+    var bannersDisabled: Bool { canDeliver && (!alertsEnabled || alertStyle == .none) }
 
-    init(service: (any ApprovalNotificationService)? = nil, defaults: UserDefaults = .standard) {
+    init(service: (any ApprovalNotificationService)? = nil, defaults: UserDefaults = .standard, retryDelay: Duration = .seconds(30)) {
         center = service
         self.defaults = defaults
+        self.retryDelay = retryDelay
         enabled = defaults.object(forKey: Self.preferenceKey) as? Bool ?? true
         super.init()
     }
@@ -159,7 +179,31 @@ struct NotificationApprovalPresentation: Identifiable {
     private var canDeliver: Bool { authorization == .authorized || authorization == .provisional }
 
     private func readAuthorization() async {
-        if let center { authorization = await center.authorizationStatus() }
+        if let center {
+            let settings = await center.configuration()
+            authorization = settings.authorization
+            alertsEnabled = settings.alertsEnabled
+            notificationCenterEnabled = settings.notificationCenterEnabled
+            alertStyle = settings.alertStyle
+        }
+    }
+
+    /// A failed OS enqueue must not permanently consume the inbox's dedup key.
+    /// Only waiting requests have a timer; no extra Discobox server reads occur.
+    private func scheduleRetry() {
+        guard enabled, !waitingForPermission.isEmpty, retryTask == nil else { return }
+        let delay = retryDelay
+        retryTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self else { return }
+            self.retryTask = nil
+            await self.refreshAuthorization()
+            self.scheduleRetry()
+        }
+    }
+
+    private func cancelRetryIfIdle() {
+        if waitingForPermission.isEmpty { retryTask?.cancel(); retryTask = nil }
     }
 
     private func retryWaiting() {
@@ -209,12 +253,14 @@ struct NotificationApprovalPresentation: Identifiable {
         let allowed = await allowDelivery()
         guard enabled, !Task.isCancelled, inbox.notice(notice.id) == notice,
               session.workspace.connectionID == notice.connection else { return }
-        guard allowed else { waitingForPermission.insert(notice.id); return }
+        guard allowed else { waitingForPermission.insert(notice.id); scheduleRetry(); return }
         let box = session.workspace.sandboxes.first { $0.id == notice.item.boxID }?.displayName ?? "Box"
         let content = Self.content(for: notice, computer: session.profile.displayName, box: box)
         do {
             try await center?.add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
+            Self.logger.info("Approval notification submitted to macOS.")
             waitingForPermission.remove(notice.id)
+            cancelRetryIfIdle()
             // Removing a resolved request can race the asynchronous OS enqueue.
             if !enabled || Task.isCancelled || inbox.notice(notice.id) != notice { remove([notice.id]) }
         } catch {
@@ -222,13 +268,15 @@ struct NotificationApprovalPresentation: Identifiable {
                 await readAuthorization()
                 guard !Task.isCancelled, inbox.notice(notice.id) == notice else { return }
                 recordDeliveryError(error)
-                if permissionBlocked { waitingForPermission.insert(notice.id) }
+                waitingForPermission.insert(notice.id)
+                scheduleRetry()
             }
         }
     }
 
     private func recordDeliveryError(_ error: any Error) {
         let error = error as NSError
+        Self.logger.error("Notification delivery failed: domain=\(error.domain, privacy: .public) code=\(error.code).")
         if error.domain == UNErrorDomain && error.code == UNError.Code.notificationsNotAllowed.rawValue {
             permissionRejected = true
             requestedThisLaunch = false
@@ -260,6 +308,7 @@ struct NotificationApprovalPresentation: Identifiable {
         guard !ids.isEmpty else { return }
         for id in ids { deliveryTasks.removeValue(forKey: id)?.cancel() }
         waitingForPermission.subtract(ids)
+        cancelRetryIfIdle()
         center?.remove(ids)
     }
 
@@ -308,6 +357,27 @@ struct NotificationApprovalPresentation: Identifiable {
         SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Read-only support command: no authorization prompt, banner, inbox reset,
+    /// Keychain access, or server connection.
+    static func printSystemStatus() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let status: String
+        switch settings.authorizationStatus {
+        case .authorized: status = "authorized"
+        case .denied: status = "denied"
+        case .notDetermined: status = "not determined"
+        case .provisional: status = "provisional (quiet delivery)"
+        default: status = "unknown"
+        }
+        print("Approval notifications enabled: \(UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true)")
+        print("macOS authorization: \(status)")
+        print("Alerts enabled: \(settings.alertSetting == .enabled)")
+        print("Banner or alert style selected: \(settings.alertStyle != .none)")
+        print("Notification Center enabled: \(settings.notificationCenterSetting == .enabled)")
+        print("Sound enabled: \(settings.soundSetting == .enabled)")
+        print("Bundle identifier: \(Bundle.main.bundleIdentifier ?? "unknown")")
+    }
+
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         await MainActor.run { enabled ? [.banner, .list, .sound] : [] }
     }
@@ -340,7 +410,7 @@ struct ApprovalNotificationSettings: View {
                     HStack(alignment: .center, spacing: 12) {
                         Image(systemName: statusSymbol)
                             .font(.system(size: 21, weight: .regular))
-                            .foregroundStyle(notifications.permissionBlocked ? Color.orange : .secondary)
+                            .foregroundStyle(notifications.permissionBlocked || notifications.bannersDisabled ? Color.orange : .secondary)
                             .frame(width: 26)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
@@ -355,7 +425,7 @@ struct ApprovalNotificationSettings: View {
                             if notifications.authorization == .notDetermined {
                                 Button("Allow…") { Task { await notifications.setEnabled(true) } }
                                     .buttonStyle(.borderedProminent)
-                            } else if notifications.permissionBlocked {
+                            } else if notifications.permissionBlocked || notifications.bannersDisabled {
                                 Button("Open Settings…", action: openSystemSettings)
                                     .buttonStyle(.bordered)
                             } else {
@@ -374,6 +444,9 @@ struct ApprovalNotificationSettings: View {
                             Button("Check Again") { Task { await notifications.refreshAuthorization() } }
                                 .disabled(notifications.checkingPermission)
                         }
+                        if notifications.enabled && notifications.bannersDisabled {
+                            Button("Test Notification") { Task { await notifications.sendTestNotification() } }
+                        }
                     }
                     .buttonStyle(.link).font(.caption).padding(.leading, 38)
                     if let error = notifications.deliveryError, !notifications.permissionBlocked {
@@ -381,9 +454,9 @@ struct ApprovalNotificationSettings: View {
                     }
                 }.padding(.vertical, 6)
             } footer: {
-                Text("Approve or deny from the notification. Later keeps the request pending. Discobox must be running.")
+                Text("Approve or deny from the notification. Later keeps the request pending. Discobox must be running. Focus and screen sharing can hide banners.")
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).scrollContentBackground(.hidden).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
             .task { await notifications.refreshAuthorization() }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
                 Task { await notifications.refreshAuthorization() }
@@ -391,12 +464,13 @@ struct ApprovalNotificationSettings: View {
     }
 
     private var statusSymbol: String {
-        if !notifications.enabled || notifications.permissionBlocked { return "bell.slash" }
+        if !notifications.enabled || notifications.permissionBlocked || notifications.bannersDisabled { return "bell.slash" }
         return notifications.authorization == .notDetermined ? "bell.badge" : "checkmark.circle"
     }
     private var statusTitle: String {
         if !notifications.enabled { return "Notifications paused" }
         if notifications.permissionBlocked { return "Permission needed" }
+        if notifications.bannersDisabled { return "Banners are off" }
         if notifications.authorization == .notDetermined { return "Allow notifications" }
         return notifications.authorization == .provisional ? "Delivered quietly" : "Ready to notify"
     }
@@ -409,6 +483,11 @@ struct ApprovalNotificationSettings: View {
                 : "Allow Discobox in macOS notification settings."
         }
         if notifications.authorization == .notDetermined { return "macOS needs your permission to show alerts." }
+        if notifications.bannersDisabled {
+            return notifications.notificationCenterEnabled
+                ? "macOS allows notifications, but banners are off. Look in Notification Center or enable banners in settings."
+                : "macOS has banners and Notification Center delivery turned off. Enable them in notification settings."
+        }
         return "Banner style and sounds follow your macOS settings."
     }
     private func openSystemSettings() {

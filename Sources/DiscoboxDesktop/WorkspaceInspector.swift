@@ -28,7 +28,7 @@ struct AppearanceSettings: View {
                 Text("The compact rail keeps the selected box’s services one click away. Change Toggle Inspector in Keybindings to customize its shortcut.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).scrollContentBackground(.hidden).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
     }
 }
 
@@ -64,7 +64,7 @@ struct WorkspaceInspector: View {
                                     }
                                 }
                                 Spacer(minLength: 0)
-                            }.padding(8).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                            }.padding(8).studioCard()
                         }
                         Text("Use Filter by tag in the boxes menu to narrow your list.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -124,7 +124,7 @@ struct ServiceRail: View {
                 }
                 Spacer(minLength: 0)
             }.frame(width: 52)
-        }.background(.bar)
+        }.background(DiscoboxAppearance.chrome)
         .buttonStyle(.borderless)
         .task(id: "\(workspace.connectionID)-\(workspace.projectID ?? "")-\(box.id)-\(live)") {
             if live { _ = forwards.session(box: box.id, workspace: workspace) }

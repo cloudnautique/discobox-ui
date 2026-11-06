@@ -24,7 +24,7 @@ source repository is required:
 
 ```sh
 git clone https://github.com/discobox-ai/discobox.git discobox
-git -C discobox checkout d61a7f405389fcc0dda68c5689397aec3a085d9e
+git -C discobox checkout 9750837cb5122c0cf6390f68150a23fb4d62da79
 make ghostty
 make build
 open dist/Discobox.app

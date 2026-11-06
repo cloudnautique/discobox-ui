@@ -10,8 +10,7 @@ struct HarnessSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Harnesses").font(.title2.bold())
-            Text("Configure the harnesses on your connected Discobox server.").foregroundStyle(.secondary)
+            StudioDialogHeader(title: "Harnesses", symbol: "terminal", subtitle: "Configure harnesses on the selected computer.")
             if !workspace.isConnected {
                 ContentUnavailableView("Connect to Discobox", systemImage: "network", description: Text("Choose a server in Connection settings."))
             } else {
@@ -29,18 +28,18 @@ struct HarnessSettings: View {
                                 .font(.caption).foregroundStyle(harness.configured ? Color.secondary : Color.orange)
                         }
                         Spacer()
-                        Button(harness.configured ? "Reconfigure…" : "Configure…") {
+                        Button("Manage…") {
                             HarnessSetupWindows.shared.open(harness, workspace: workspace)
                         }.disabled(workspace.isDemo)
                     }.padding(.vertical, 6)
-                }
+                }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
                 HStack {
                     if loading { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("Refresh") { Task { await refresh() } }.disabled(loading)
                 }
             }
-        }.padding(24)
+        }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .task(id: workspace.connectionID) { defaultID = ""; error = nil; await refresh() }
     }
 
@@ -78,8 +77,7 @@ struct CredentialSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Credentials").font(.title2.bold())
-            Text("Stored credentials on your connected Discobox server.").foregroundStyle(.secondary)
+            StudioDialogHeader(title: "Credentials", symbol: "key", subtitle: "Stored credentials on the selected computer.")
             if !workspace.isConnected {
                 ContentUnavailableView("Connect to Discobox", systemImage: "network", description: Text("Choose a server in Connection settings."))
             } else {
@@ -102,6 +100,7 @@ struct CredentialSettings: View {
                             .disabled(busy || workspace.isDemo)
                     }.padding(.vertical, 6)
                 }
+                .listStyle(.plain).scrollContentBackground(.hidden).studioCard()
                 .overlay {
                     if matches.isEmpty && !busy {
                         Text(credentials.isEmpty ? "No stored credentials" : "No matching credentials").foregroundStyle(.secondary)
@@ -113,20 +112,19 @@ struct CredentialSettings: View {
                     Button("Refresh") { Task { await refresh() } }.disabled(busy)
                 }
             }
-        }.padding(24)
+        }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .task(id: workspace.connectionID) {
             credentials = []; pendingDelete = nil; error = nil
             await refresh()
         }
-        .alert("Delete credential?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
-            Button("Cancel", role: .cancel) { pendingDelete = nil }
-            Button("Delete", role: .destructive) {
-                guard let item = pendingDelete, let connection = pendingDeleteConnection else { return }
-                pendingDelete = nil
-                Task { await delete(item, connection: connection) }
+        .sheet(isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
+            if let item = pendingDelete, let connection = pendingDeleteConnection {
+                StudioMessageSheet(title: "Delete credential?", symbol: "key", message: "Delete \(item["name"].string) from this server? Access depending on it may stop working. This cannot be undone.",
+                    confirmTitle: "Delete", destructive: true, defaultConfirm: false, cancel: { pendingDelete = nil }) {
+                        pendingDelete = nil
+                        Task { await delete(item, connection: connection) }
+                    }
             }
-        } message: {
-            Text("Delete \(pendingDelete?["name"].string ?? "this credential") from this server? Access depending on it may stop working. This cannot be undone.")
         }
     }
 
@@ -174,7 +172,7 @@ struct CredentialSettings: View {
     }
     func open(_ harness: Harness, workspace: Workspace) {
         guard workspace.isConnected, !workspace.isDemo, let project = workspace.projectID else { return }
-        let key = "\(workspace.connectionID):\(harness.id)"
+        let key = "\(workspace.connectionID):harnesses"
         if let existing = windows[key] {
             if existing.isFinished { existing.window.close() }
             else { existing.window.makeKeyAndOrderFront(nil); return }
@@ -197,7 +195,7 @@ struct CredentialSettings: View {
         self.session = session; self.onClose = onClose
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
-        window.title = "Configure \(harness.name)"
+        window.title = "Manage Harnesses"
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 640, height: 400)
         window.delegate = self
@@ -206,12 +204,9 @@ struct CredentialSettings: View {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !isFinished else { return true }
-        let alert = NSAlert()
-        alert.messageText = "Close harness setup?"
-        alert.informativeText = "This detaches the setup terminal. Setup may remain unfinished on the server; closing does not save it."
-        alert.addButton(withTitle: "Keep Open")
-        alert.addButton(withTitle: "Close Setup")
-        return alert.runModal() == .alertSecondButtonReturn
+        return StudioAppKitDialog.confirm(title: "Close harness management?", symbol: "terminal",
+            message: "This closes the harness console. Unsaved changes in its current editor may be lost.",
+            confirmTitle: "Close Console", destructive: true, defaultConfirm: false)
     }
     func windowWillClose(_ notification: Notification) { session.close(); onClose() }
 }
@@ -225,15 +220,16 @@ private struct HarnessSetupContent: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(session.ended ? "Setup finished — see terminal for the result" : "Follow the harness setup instructions below")
+                Text(session.ended ? "Harness console closed — see terminal for the result" : "Manage saved harness files and settings in the console below")
                 Spacer()
-            }.padding(12)
+            }.font(.system(size: 12)).padding(12).background(DiscoboxAppearance.chrome)
             Divider()
             if let error = session.error ?? refreshError { Text(error).foregroundStyle(.red).padding(8) }
             TerminalSurface(view: session.view, focused: true, onFocus: nil)
             Divider()
-            HStack { Spacer(); Button("Close", action: close) }.padding(12)
+            HStack { Spacer(); Button("Close", action: close) }.padding(12).background(DiscoboxAppearance.chrome)
         }
+        .background(DiscoboxAppearance.canvas).tint(DiscoboxAppearance.accent)
         .onChange(of: session.ended) { _, ended in
             if ended, connection == workspace.connectionID {
                 Task {

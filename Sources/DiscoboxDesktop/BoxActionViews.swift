@@ -34,30 +34,39 @@ struct BoxActionSheet: View {
     @State private var failure: String?
     @State private var closed = false
     @State private var startedAt: Date?
+    @FocusState private var fieldFocused: Bool
+    private var computer: String? { connections?.sessions.first { $0.workspace === workspace }?.profile.displayName }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Label("\(request.action.title) box", systemImage: request.action.symbol).font(.title2.bold())
-            Text(request.box.displayName).font(.headline).textSelection(.enabled)
-            if let host = connections?.sessions.first(where: { $0.workspace === workspace }) { Text(host.profile.displayName).font(.callout).foregroundStyle(.secondary) }
-            Text(request.action.explanation).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if request.action == .rename {
-                TextField("Box name", text: $name).textFieldStyle(.roundedBorder)
-            }
-            if request.action == .purge {
-                TextField("Type DELETE to permanently delete", text: $confirmation).textFieldStyle(.roundedBorder)
-            }
-            if let failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
-            if working, let startedAt {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    VStack(alignment: .leading, spacing: 8) {
-                        ProgressView(request.action.progressTitle).controlSize(.small)
-                        if context.date.timeIntervalSince(startedAt) >= 10 {
-                            Text("Still waiting for Discobox. You can close this window while the request continues. Check the box’s state before submitting it again.")
-                                .font(.caption).foregroundStyle(.secondary)
+        StudioConfirmation(title: "\(request.action.title) box", symbol: request.action.symbol,
+                           subtitle: computer, destructive: request.action == .purge) {
+            VStack(alignment: .leading, spacing: 18) {
+                StudioConfirmationSubject(name: request.box.displayName)
+                Text(request.action.explanation).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if request.action == .rename {
+                    StudioConfirmationField(title: "Box name") {
+                        TextField("Box name", text: $name).focused($fieldFocused)
+                    }
+                }
+                if request.action == .purge {
+                    StudioConfirmationField(title: "Type DELETE to permanently delete this box") {
+                        TextField("DELETE", text: $confirmation).focused($fieldFocused)
+                            .accessibilityIdentifier("boxAction.confirmation")
+                    }
+                }
+                if let failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
+                if working, let startedAt {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        VStack(alignment: .leading, spacing: 8) {
+                            ProgressView(request.action.progressTitle).controlSize(.small)
+                            if context.date.timeIntervalSince(startedAt) >= 10 {
+                                Text("Still waiting for Discobox. You can close this window while the request continues. Check the box’s state before submitting it again.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
             }
+        } footer: {
             HStack {
                 Button(working ? "Close" : "Cancel", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
@@ -85,11 +94,13 @@ struct BoxActionSheet: View {
                             working = false
                         }
                     }
-                }.keyboardShortcut(.defaultAction)
+                }.buttonStyle(.borderedProminent).tint(request.action == .purge ? .red : DiscoboxAppearance.accent)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("boxAction.confirm")
                     .disabled(working || request.connection != workspace.connectionID || (request.action == .purge && confirmation != "DELETE") || (request.action == .rename && (name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.utf8.count > 128)))
             }
-        }.padding(24).frame(width: 440)
-            .onAppear { name = request.box.displayName }
+        }
+            .onAppear { name = request.box.displayName; fieldFocused = request.action == .rename || request.action == .purge }
             .onDisappear { closed = true }
             .interactiveDismissDisabled(working)
     }
@@ -113,35 +124,49 @@ struct BulkPurgeSheet: View {
     @State private var progress = 0
     @State private var error: String?
     @State private var result: Workspace.PurgeResult?
+    @FocusState private var confirmationFocused: Bool
+    private var computer: String? { connections?.sessions.first { $0.workspace === workspace }?.profile.displayName }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Purge \(request.boxes.count) archived boxes?").font(.title2.weight(.semibold))
-            if let host = connections?.sessions.first(where: { $0.workspace === workspace }) { Text(host.profile.displayName).font(.callout).foregroundStyle(.secondary) }
-            Text("Permanently delete these boxes, their workspaces, configuration, and secrets. This cannot be undone.")
-            List(request.boxes) { box in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(box.displayName).fontWeight(.medium)
-                    Text(box.id).font(.caption.monospaced()).foregroundStyle(.secondary)
-                }.padding(.vertical, 3)
-            }.frame(height: min(220, CGFloat(request.boxes.count) * 55 + 16))
-            if let result {
-                Text("Purged \(result.purged.count) of \(request.boxes.count) boxes.").font(.headline)
-                if !result.failures.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(result.failures, id: \.boxID) { failure in
-                                Text((request.boxes.first { $0.id == failure.boxID }?.displayName ?? failure.boxID) + ": " + failure.message)
-                                    .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+        StudioConfirmation(title: "Purge \(request.boxes.count) archived boxes?", symbol: "trash", subtitle: computer, destructive: true) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Permanently delete these boxes, their workspaces, configuration, and secrets. This cannot be undone.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                List(request.boxes) { box in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(box.displayName).fontWeight(.medium)
+                        Text(box.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }.padding(.vertical, 3)
+                }.listStyle(.plain).scrollContentBackground(.hidden)
+                    .frame(height: min(220, CGFloat(request.boxes.count) * 55 + 16))
+                    .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+                if let result {
+                    Text("Purged \(result.purged.count) of \(request.boxes.count) boxes.").font(.headline)
+                    if !result.failures.isEmpty {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(result.failures, id: \.boxID) { failure in
+                                    Text((request.boxes.first { $0.id == failure.boxID }?.displayName ?? failure.boxID) + ": " + failure.message)
+                                        .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                                }
                             }
-                        }
-                    }.frame(maxHeight: 140)
-                    Text("No failed request was retried. Refresh Archived to check the remaining boxes.").font(.caption).foregroundStyle(.secondary)
+                        }.frame(maxHeight: 140)
+                        Text("No failed request was retried. Refresh Archived to check the remaining boxes.").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    StudioConfirmationField(title: "Type DELETE to confirm permanent deletion") {
+                        TextField("DELETE", text: $confirmation).focused($confirmationFocused).disabled(working)
+                            .accessibilityIdentifier("bulkPurge.confirmation")
+                    }
+                    if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                    if working { ProgressView("Purging \(progress) of \(request.boxes.count)…", value: Double(progress), total: Double(request.boxes.count)) }
                 }
-                HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            }
+        } footer: {
+            if result != nil {
+                HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
             } else {
-                TextField("Type DELETE to confirm", text: $confirmation).textFieldStyle(.roundedBorder).disabled(working)
-                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                if working { ProgressView("Purging \(progress) of \(request.boxes.count)…", value: Double(progress), total: Double(request.boxes.count)) }
                 HStack {
                     Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(working)
                     Spacer()
@@ -155,11 +180,13 @@ struct BulkPurgeSheet: View {
                                 if report.failures.isEmpty { dismiss() } else { result = report }
                             } catch { self.error = error.localizedDescription }
                         }
-                    }.keyboardShortcut(.defaultAction)
+                    }.buttonStyle(.borderedProminent).tint(.red).keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("bulkPurge.confirm")
                         .disabled(working || confirmation != "DELETE" || request.connection != workspace.connectionID)
                 }
             }
-        }.padding(24).frame(width: 480)
+        }
+            .onAppear { confirmationFocused = true }
             .interactiveDismissDisabled(working)
     }
 }

@@ -72,6 +72,9 @@ public final class Workspace {
         let loadedAt: Date
     }
     @ObservationIgnored private var recentBoxes: [String: RecentBox] = [:]
+    /// A purge's successful response confirms removal. Older in-flight list
+    /// reads must not resurrect that ID on this connection generation.
+    @ObservationIgnored private var confirmedPurges: Set<String> = []
     @ObservationIgnored private var inventoryLoadedAt: Date?
     @ObservationIgnored private var selectionLoad: Task<Void, Never>?
     @ObservationIgnored private let now: () -> Date
@@ -167,6 +170,7 @@ public final class Workspace {
         client?.closeConnection()
         client = nil
         recentBoxes.removeAll()
+        confirmedPurges.removeAll()
         terminalInventory = nil
         transportEndpoint = ""
         usage = HarnessUsage()
@@ -186,6 +190,7 @@ public final class Workspace {
     }
 
     public func selectBox(_ id: String?) async {
+        if let id, !sandboxes.contains(where: { $0.id == id && !$0.isDeleted }) { return }
         guard sandboxID != id else { return }
         rememberSelection()
         clearSelection()
@@ -226,7 +231,7 @@ public final class Workspace {
         do {
             let result = try await client.decode(.init(.sandboxes, projectID: projectID), as: SandboxesResponse.self)
             guard current == revision, request == listRequest, !Task.isCancelled else { return }
-            let updatedBoxes = result.sandboxes ?? []
+            let updatedBoxes = (result.sandboxes ?? []).filter { !$0.isDeleted && !confirmedPurges.contains($0.id) }
             if sandboxes != updatedBoxes { sandboxes = updatedBoxes }
             let running = Set(updatedBoxes.filter(\.isRunning).map(\.id))
             recentBoxes = recentBoxes.filter { running.contains($0.key) && now().timeIntervalSince($0.value.loadedAt) < 30 }
@@ -257,6 +262,10 @@ public final class Workspace {
         beforeRequest()
         _ = try await client.perform(.init(.boxAction, projectID: projectID, sandboxID: boxID, prompt: name, action: action.rawValue))
         guard connection == connectionID else { return }
+        if action == .purge {
+            confirmedPurges.insert(boxID)
+            sandboxes.removeAll { $0.id == boxID }
+        }
         // Avoid reconnecting to a box after an explicit stop/archive/restore.
         if sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { clearSelection() }
         // The mutation is acknowledged. UI completion must not wait for an
@@ -552,9 +561,10 @@ public final class Workspace {
         }
     }
 
-    @discardableResult public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws -> Sandbox {
+    @discardableResult public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = []) async throws -> Sandbox {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         guard connection == nil || connection == connectionID else { throw DiscoboxError("The destination computer reconnected. Review the new box settings again.") }
+        let credentialPayload = try LaunchCredential.payload(credentials)
         let current = revision
         await refreshResources(force: true)
         guard current == revision, !Task.isCancelled else { throw CancellationError() }
@@ -568,7 +578,7 @@ public final class Workspace {
             guard health.canCreate else { throw DiscoboxError(health.messages.joined(separator: " ")) }
         }
         do {
-            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, poolID: destination), as: Sandbox.self)
+            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, payload: credentialPayload, poolID: destination), as: Sandbox.self)
             guard current == revision else { throw CancellationError() }
             await refresh()
             guard current == revision else { throw CancellationError() }

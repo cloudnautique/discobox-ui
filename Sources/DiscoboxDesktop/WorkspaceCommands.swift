@@ -318,7 +318,7 @@ struct KeybindingSettings: View {
                 Text("Tools (o), additional agents (c), and remote lifecycle commands are not implemented in this GUI yet. Their CLI bindings are not forwarded into your remote shell.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).scrollContentBackground(.hidden)
         Divider()
         VStack(alignment: .leading, spacing: 10) {
             if let error = shortcutDraft.validationError { Text(error).foregroundStyle(.red).font(.caption) }
@@ -331,8 +331,9 @@ struct KeybindingSettings: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(draft.validationError != nil || shortcutDraft.validationError != nil || (draft == commands.bindings && shortcutDraft == commands.appShortcuts))
             }
-        }.padding(20)
-        }.onAppear { draft = commands.bindings; shortcutDraft = commands.appShortcuts }
+        }.padding(20).background(DiscoboxAppearance.chrome)
+        }.background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
+            .onAppear { draft = commands.bindings; shortcutDraft = commands.appShortcuts }
     }
 }
 
@@ -340,8 +341,7 @@ struct CommandsSheet: View {
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack { Text("Workspace commands").font(.title2.bold()); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
+        StudioConfirmation(title: "Workspace commands", symbol: "keyboard", width: 560) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("macOS shortcuts").font(.headline)
@@ -363,7 +363,9 @@ struct CommandsSheet: View {
 
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(24).frame(width: 480, height: 650)
+        } footer: {
+            HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction) }
+        }.frame(height: 650)
     }
 }
 

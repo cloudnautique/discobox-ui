@@ -58,11 +58,8 @@ import DiscoboxCore
                 guard let userdata, let text else { return }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
                 guard let surface = view.surface else { return }
-                let alert = NSAlert()
-                alert.messageText = kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE ? "Paste into terminal?" : "Allow terminal clipboard access?"
-                alert.informativeText = "The terminal requested clipboard content. Pasting multiple lines can execute commands."
-                alert.addButton(withTitle: "Allow"); alert.addButton(withTitle: "Cancel")
-                if alert.runModal() == .alertFirstButtonReturn {
+                if StudioAppKitDialog.confirm(title: kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE ? "Paste into terminal?" : "Allow terminal clipboard access?",
+                    symbol: "doc.on.clipboard", message: "The terminal requested clipboard content. Pasting multiple lines can execute commands.", confirmTitle: "Allow") {
                     ghostty_surface_complete_clipboard_request(surface, text, state, true)
                 }
             }
@@ -71,9 +68,8 @@ import DiscoboxCore
             MainActor.assumeIsolated {
                 guard let text else { return }
                 if confirm {
-                    let alert = NSAlert(); alert.messageText = "Allow terminal to replace the clipboard?"
-                    alert.addButton(withTitle: "Allow"); alert.addButton(withTitle: "Cancel")
-                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    guard StudioAppKitDialog.confirm(title: "Allow terminal to replace the clipboard?", symbol: "doc.on.clipboard",
+                        message: "The terminal requested permission to replace your Mac’s clipboard.", confirmTitle: "Allow") else { return }
                 }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(String(cString: text), forType: .string)

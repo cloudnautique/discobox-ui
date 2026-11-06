@@ -1,154 +1,138 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 import DiscoboxCore
 
 struct FilesView: View {
     @Environment(Workspace.self) private var workspace
-    @State private var path = ""
-    @State private var entries: [RemoteFile] = []
-    @State private var access: FileAccess?
-    @State private var error: String?
-    @State private var busy = false
-    @State private var transfer: Task<Void, Never>?
-    @State private var bytes: Int64 = 0
-    @State private var transferName = ""
-    @State private var conflicts: [URL] = []
-    @State private var showConflict = false
+    @State private var browser: FileBrowser?
+    @State private var failure: String?
+    @State private var selection: Set<String> = []
+
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button { path = (path as NSString).deletingLastPathComponent; reload() } label: { Image(systemName: "arrow.up") }
-                TextField("Path", text: $path).textFieldStyle(.roundedBorder).onSubmit { reload() }
-                Button { reload() } label: { Image(systemName: "arrow.clockwise") }
-            }.padding(10)
-            HStack {
-                Button("Upload…") {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
-                    panel.begin { response in if response == .OK { accept(panel.urls) } }
-                }.disabled(busy)
-                Spacer()
-                Text("Drop files here").font(.caption).foregroundStyle(.secondary)
-            }.padding(.horizontal, 10).padding(.bottom, 8)
-            List(entries) { entry in
-                HStack {
-                    Label(entry.name, systemImage: entry.type == "directory" ? "folder" : "doc")
-                    Spacer()
-                    if entry.type == "directory" { Button { path = entry.path; reload() } label: { Image(systemName: "chevron.right") }.buttonStyle(.borderless) }
-                    else { Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { if entry.type == "directory" { path = entry.path; reload() } }
-                .contextMenu {
-                    Button("Download…") { download(entry) }.disabled(busy || !["file", "directory"].contains(entry.type))
-                    Button("Copy path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(entry.path, forType: .string) }
-                }
-                .onDrag { promisedFile(entry) }
-            }.listStyle(.inset)
-            .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                guard !busy else { return false }
-                Task { @MainActor in
-                    var urls: [URL] = []
-                    for provider in providers {
-                        let url: URL? = await withCheckedContinuation { continuation in
-                            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
-                        }
-                        if let url { urls.append(url) }
-                    }
-                    accept(urls)
-                }
-                return true
-            }
-            if busy {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("\(transferName) · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))").font(.caption).lineLimit(1)
-                    Spacer(); Button("Cancel") { transfer?.cancel() }
-                }.padding(10)
-            }
-            if let error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(10) }
+        Group {
+            if let browser { panel(browser) }
+            else if let failure { ContentUnavailableView("Files unavailable", systemImage: "folder.badge.questionmark", description: Text(failure)) }
+            else { ProgressView("Opening source folder…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
-        .task {
+        .background(DiscoboxAppearance.canvas)
+        .task(id: workspace.connectionID) {
             do {
-                access = try workspace.fileAccess()
-                path = workspace.execs.first(where: { $0.primary == true })?.workdir ?? "~"
-                await readDirectory()
-            } catch { self.error = error.localizedDescription }
+                let model = try FileBrowser(workspace: workspace)
+                browser = model
+                await model.load()
+            } catch { failure = error.localizedDescription }
         }
-        .onDisappear { transfer?.cancel() }
-        .confirmationDialog("Some names already exist. Replace matching regular files? Directory transfers merge files and may complete partially.", isPresented: $showConflict, titleVisibility: .visible) {
-            Button("Replace existing files", role: .destructive) { upload(conflicts, replace: true) }
-            Button("Skip existing names") { upload(conflicts.filter { local in !entries.contains { $0.name == local.lastPathComponent } }, replace: false) }
-            Button("Cancel", role: .cancel) { conflicts = [] }
-        }
+        .onDisappear { browser?.close() }
     }
-    private func reload() { Task { await readDirectory() } }
-    private func readDirectory() async {
-        guard let access else { return }
-        let requested = path
-        do {
-            let directory = try await access.list(requested)
-            guard !Task.isCancelled, path == requested else { return }
-            path = directory.path; entries = directory.entries.sorted { if ($0.type == "directory") != ($1.type == "directory") { return $0.type == "directory" }; return $0.name.localizedStandardCompare($1.name) == .orderedAscending }; error = nil
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-    }
-    private func accept(_ urls: [URL]) {
-        guard !busy else { error = "A transfer is already running. Drop the remaining files after it finishes."; return }
-        if urls.contains(where: { local in entries.contains { $0.name == local.lastPathComponent } }) { conflicts = urls; showConflict = true }
-        else { upload(urls, replace: false) }
-    }
-    private func upload(_ urls: [URL], replace: Bool) {
-        guard let access, !busy else { return }
-        let directory = path
-        busy = true; bytes = 0; error = nil
-        transfer = Task {
-            defer { busy = false; transfer = nil }
-            for url in urls {
-                if Task.isCancelled { break }
-                transferName = url.lastPathComponent; bytes = 0
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    try await access.transfer(upload: true, remote: (directory as NSString).appendingPathComponent(url.lastPathComponent), local: url, replace: replace) { count in Task { @MainActor in bytes = count } }
-                } catch { self.error = error.localizedDescription; break }
+
+    private func panel(_ browser: FileBrowser) -> some View {
+        @Bindable var browser = browser
+        let selected = browser.entries.filter { selection.contains($0.path) }
+        return VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Button { Task { await browser.load(browser.sourceDirectory) } } label: { Label("Source", systemImage: "folder.badge.gearshape") }
+                        .help("Open the box’s source working directory").accessibilityIdentifier("files.source")
+                    Button { Task { await browser.load((browser.directory as NSString).deletingLastPathComponent) } } label: { Image(systemName: "arrow.up") }
+                        .help("Enclosing folder").disabled(browser.directory == "/")
+                    Spacer(minLength: 0)
+                    Button { chooseUpload(browser) } label: { Label("Upload…", systemImage: "arrow.up.doc") }.disabled(!browser.canTransfer)
+                    Button { chooseDownload(selected, browser: browser) } label: { Image(systemName: "arrow.down.doc") }
+                        .disabled(!browser.canTransfer || selected.isEmpty || !selected.allSatisfy(\.canTransfer)).help("Download selected files or folders…")
+                    Button { Task { await browser.load(browser.directory) } } label: { Image(systemName: "arrow.clockwise") }
+                        .help("Refresh folder").accessibilityIdentifier("files.refresh")
+                }.buttonStyle(.borderless).foregroundStyle(DiscoboxAppearance.accent)
+                TextField("Folder path", text: $browser.path)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11, design: .monospaced))
+                    .onSubmit { Task { await browser.load() } }.accessibilityIdentifier("files.path")
+            }.padding(12).disabled(!browser.canNavigate).background(DiscoboxAppearance.chrome)
+            Divider()
+            FilesTable(browser: browser, entries: browser.entries, enabled: browser.canTransfer, selection: $selection) {
+                chooseDownload($0, browser: browser)
             }
-            let transferError = error
-            await readDirectory()
-            if let transferError { error = transferError }
+            .overlay {
+                if browser.loading { ProgressView().padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9)).allowsHitTesting(false) }
+                else if browser.entries.isEmpty, let error = browser.error {
+                    VStack(spacing: 12) {
+                        Image(systemName: "folder.badge.questionmark").font(.system(size: 28)).foregroundStyle(.secondary)
+                        Text("Files unavailable").font(.headline)
+                        Text(error).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
+                        Button("Try Again") { Task { await browser.load(browser.directory) } }.controlSize(.small)
+                    }.padding(24).frame(maxWidth: 470)
+                }
+                else if browser.entries.isEmpty && browser.error == nil {
+                    VStack(spacing: 8) {
+                        Image(systemName: "tray.and.arrow.down").font(.system(size: 28)).foregroundStyle(DiscoboxAppearance.accent)
+                        Text("Drop files into this folder").font(.system(size: 13, weight: .medium))
+                        Text("Files are copied to the selected box.").font(.caption).foregroundStyle(.secondary)
+                    }.allowsHitTesting(false)
+                }
+            }
+            Divider()
+            if browser.transferring {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(browser.transferName).lineLimit(1)
+                        Text(ByteCountFormatter.string(fromByteCount: browser.bytes, countStyle: .file)).foregroundStyle(.secondary)
+                    }.font(.system(size: 11))
+                    Spacer(minLength: 4)
+                    Button("Cancel") { browser.cancelTransfer() }.controlSize(.small)
+                }.padding(10).background(DiscoboxAppearance.surface)
+            }
+            if let error = browser.error, !browser.entries.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(error).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    Button { browser.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Dismiss error")
+                }.font(.system(size: 11)).foregroundStyle(.orange).padding(10)
+            }
+            HStack {
+                Text(selection.isEmpty ? "\(browser.entries.count) items" : "\(selection.count) selected")
+                Spacer()
+                Text(browser.receipt ?? "Drag in to upload · Drag out to save").lineLimit(1).truncationMode(.middle)
+            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 12).frame(height: 30).background(DiscoboxAppearance.chrome)
+        }
+        .onChange(of: browser.directory) { selection = [] }
+        .sheet(item: Binding(get: { browser.conflict }, set: { if $0 == nil { browser.resolveConflict(.cancel) } })) { conflict in
+            FileConflictSheet(directory: conflict.directory, count: conflict.count, resolve: browser.resolveConflict)
         }
     }
-    private func download(_ entry: RemoteFile) {
-        guard let access else { return }
-        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.prompt = "Download here"
+    private func chooseUpload(_ browser: FileBrowser) {
+        let destination = browser.directory
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
+        panel.prompt = "Upload"; panel.message = "Copy files and folders to \(destination) in the selected box."
+        panel.begin { response in if response == .OK { browser.upload(panel.urls, to: destination) } }
+    }
+    private func chooseDownload(_ files: [RemoteFile], browser: FileBrowser) {
+        guard !files.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.prompt = "Save Here"
+        panel.message = "Choose where to save \(files.count == 1 ? files[0].name : "the selected items"). Existing local files won’t be replaced."
         panel.begin { response in
-            guard response == .OK, let folder = panel.url else { return }
-            busy = true; bytes = 0; transferName = entry.name; error = nil
-            transfer = Task {
-                defer { busy = false; transfer = nil }
-                do { try await access.transfer(upload: false, remote: entry.path, local: folder.appendingPathComponent(entry.name)) { count in Task { @MainActor in bytes = count } } }
-                catch { self.error = error.localizedDescription }
-            }
+            if response == .OK, let folder = panel.url { browser.download(files, to: folder) }
         }
     }
-    private func promisedFile(_ entry: RemoteFile) -> NSItemProvider {
-        let provider = NSItemProvider()
-        guard let access, ["file", "directory"].contains(entry.type) else { return provider }
-        provider.suggestedName = entry.name
-        provider.registerFileRepresentation(forTypeIdentifier: entry.type == "directory" ? UTType.folder.identifier : UTType.data.identifier, fileOptions: [], visibility: .all) { completion in
-            let progress = Progress(totalUnitCount: entry.type == "file" ? entry.size : -1)
-            let task = Task {
-                do {
-                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("discobox-drag-" + UUID().uuidString)
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-                    defer { try? FileManager.default.removeItem(at: directory) }
-                    let file = directory.appendingPathComponent(entry.name)
-                    try await access.transfer(upload: false, remote: entry.path, local: file) { count in progress.completedUnitCount = count }
-                    completion(file, false, nil)
-                } catch { completion(nil, false, error) }
+}
+
+struct FileConflictSheet: View {
+    let directory: String
+    let count: Int
+    let resolve: (FileBrowser.ConflictChoice) -> Void
+    var body: some View {
+        StudioConfirmation(title: "Files already exist", symbol: "doc.on.doc", subtitle: "\(count) matching names in the destination") {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(directory).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Replace matching files or skip existing names. Folders merge their contents; files copied before a cancellation remain in the box.").font(.system(size: 12))
             }
-            progress.cancellationHandler = { task.cancel() }
-            return progress
+        } footer: {
+            HStack {
+                Button("Cancel", role: .cancel) { resolve(.cancel) }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Skip Existing") { resolve(.skip) }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                Button("Replace", role: .destructive) { resolve(.replace) }.tint(.red)
+            }
         }
-        return provider
     }
 }

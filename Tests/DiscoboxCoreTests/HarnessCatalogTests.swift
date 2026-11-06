@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import DiscoboxCore
 
+@Test func harnessReadinessSupportsBothServerGenerations() throws {
+    let current = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Harness"}"#.utf8))
+    let old = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Harness","configured":false}"#.utf8))
+    #expect(current.configured)
+    #expect(!old.configured)
+}
+
 @MainActor @Test func harnessPrefetchDoesNotBlockConnectionAndSharesOneRequest() async throws {
     let client = CatalogFixture()
     let workspace = Workspace()

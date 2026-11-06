@@ -147,6 +147,40 @@ func TestCreateBoxWithoutRepositoryUsesSelectedHarness(t *testing.T) {
 	}
 }
 
+func TestCreateReadinessSupportsBothHarnessGenerations(t *testing.T) {
+	for _, field := range []string{``, `,"configured":true`, `,"configured":false`} {
+		t.Run(field, func(t *testing.T) {
+			b, _ := newBridge("http://fixture", false)
+			b.allowManage = true
+			creates := 0
+			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/harness-configs/h") {
+					return reply(`{"id":"h"` + field + `}`), nil
+				}
+				if r.Method == "GET" && r.URL.Path == "/projects/p" {
+					return reply(`{}`), nil
+				}
+				if r.Method != "POST" || r.URL.Path != "/projects/p/sandboxes" {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL)
+				}
+				creates++
+				result := reply(`{"status":409,"title":"Conflict","detail":"fixture: creation refused","type":"about:blank"}`)
+				result.StatusCode = 409
+				result.Header = http.Header{"Content-Type": []string{"application/problem+json"}}
+				return result, nil
+			})
+			_, err := b.createBox(t.Context(), request{ProjectID: "p", HarnessID: "h"})
+			if field == `,"configured":false` {
+				if err == nil || creates != 0 {
+					t.Fatalf("unconfigured legacy harness reached creation: %v, calls=%d", err, creates)
+				}
+			} else if err != nil || creates != 1 {
+				t.Fatalf("ready harness refused before creation: %v, calls=%d", err, creates)
+			}
+		})
+	}
+}
+
 func TestCreateBoxReturnsReadableProblemWithoutRetry(t *testing.T) {
 	t.Setenv("DISCOBOX_HOST_ID", "fixture-host")
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")

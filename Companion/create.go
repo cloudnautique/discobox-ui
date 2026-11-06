@@ -15,33 +15,47 @@ import (
 	"time"
 
 	api "github.com/discobox-ai/discobox/api/gen"
-	model "github.com/discobox-ai/discobox/api/model"
 	"github.com/discobox-ai/discobox/cli/internal/sandboxcreate"
 	"github.com/discobox-ai/discobox/pkg/platform"
 	"github.com/discobox-ai/discobox/pkg/sourceref"
 )
 
-func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
+func (b *bridge) createBox(ctx context.Context, req request) (out response, failure error) {
 	if !b.allowManage {
 		return response{}, errors.New("box creation requires explicit permission")
 	}
 	if validID(req.ProjectID) != nil || validID(req.HarnessID) != nil {
 		return response{}, errors.New("invalid project or harness")
 	}
+	secrets, err := launchCredentials(req.Payload)
+	if err != nil {
+		return response{}, err
+	}
+	defer func() {
+		if len(secrets) == 0 {
+			return
+		}
+		if out.Status >= 400 {
+			out.Body = []byte(redactLaunchCredentials(string(out.Body), secrets))
+		}
+		if failure != nil {
+			failure = errors.New(redactLaunchCredentials(failure.Error(), secrets))
+		}
+	}()
 	source := strings.TrimSpace(req.Repository)
 	if source != "" {
-		parsed, err := sandboxcreate.ParseSource(source)
-		if err != nil || parsed.Kind != sourceref.Git {
-			return response{}, errors.New("repository must be a remote Git URL or OWNER/REPO")
+		var err error
+		source, err = repositorySource(source)
+		if err != nil {
+			return response{}, err
 		}
-		source = parsed.String()
 	}
 	harness, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/harness-configs/"+req.HarnessID, nil)
 	if err != nil {
 		return response{}, err
 	}
 	var h struct {
-		Configured bool `json:"configured"`
+		Configured *bool `json:"configured"`
 	}
 	if harness.Status != 200 {
 		return harness, nil
@@ -49,7 +63,9 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 	if json.Unmarshal(harness.Body, &h) != nil {
 		return response{}, errors.New("invalid harness configuration response")
 	}
-	if !h.Configured {
+	// New servers no longer require a separate setup step. Respect an older
+	// server's explicit readiness flag when it is present.
+	if h.Configured != nil && !*h.Configured {
 		return response{}, errors.New("choose a configured harness")
 	}
 	target := platform.Platform{OS: "linux", Arch: runtime.GOARCH}
@@ -96,10 +112,6 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 			}
 		}
 	}
-	client, err := api.NewClient(b.base, api.WithClient(b.client))
-	if err != nil {
-		return response{}, err
-	}
 	options := sandboxcreate.PromptOptions{Source: source, NoSource: source == "", Platform: target, PoolID: poolID, IncludeDirty: sandboxcreate.IncludeDirtyNever}
 	if strings.TrimSpace(req.Prompt) != "" {
 		options.Prompt = []string{req.Prompt}
@@ -114,19 +126,31 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 	// accepts slugs/names. Source preparation must not choose another harness.
 	body.HarnessName = api.OptString{}
 	body.Config.HarnessConfigId = api.NewOptString(req.HarnessID)
-	result, err := client.CreateSandbox(ctx, body, api.CreateSandboxParams{ProjectId: req.ProjectID})
+	body.Config.Secrets = secrets
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return response{}, err
+	}
+	// This application connects to different server releases. A successful
+	// creation is not invalid merely because its harness snapshot has fields
+	// removed from the current generated SDK. Keep the full receipt for the GUI
+	// and decode only the state source delivery actually needs.
+	result, err := b.call(ctx, "POST", "/projects/"+req.ProjectID+"/sandboxes", encoded)
 	if err != nil {
 		return response{}, fmt.Errorf("creation may have succeeded; refresh boxes before retrying: %w", err)
 	}
-	sandbox, ok := result.(*model.Sandbox)
-	if !ok {
-		if problem, ok := result.(*api.ErrorModelStatusCode); ok {
-			data, err := json.Marshal(&problem.Response)
-			return response{Version: 1, Status: problem.StatusCode, Body: data}, err
-		}
-		return response{}, fmt.Errorf("unexpected create-box response (%T); refresh boxes before retrying", result)
+	if result.Status < 200 || result.Status >= 300 {
+		return result, nil
+	}
+	sandbox, err := decodeDeliverySandbox(result.Body, req.ProjectID, "")
+	if err != nil {
+		return response{}, fmt.Errorf("creation may have succeeded; refresh boxes before retrying: %w", err)
 	}
 	if source != "" {
+		client, err := api.NewClient(b.base, api.WithClient(b.client))
+		if err != nil {
+			return response{}, fmt.Errorf("box %s created; source delivery could not start: %w", sandbox.ID, err)
+		}
 		// Git only speaks HTTP. This short-lived loopback proxy permits Git routes
 		// for this one newly-created box, using the existing socket transport.
 		base, _ := url.Parse(b.base)
@@ -147,12 +171,131 @@ func (b *bridge) createBox(ctx context.Context, req request) (response, error) {
 		})}
 		go server.Serve(listener)
 		defer server.Close()
-		if err := sandboxcreate.DeliverSource(ctx, client, req.ProjectID, sandbox, local, "http://"+listener.Addr().String(), "", nil); err != nil {
+		// Keep authentication on this computer, as before. The newer delivery
+		// API requires an explicit policy; this UI does not lend Git credentials.
+		options := sandboxcreate.DeliveryOptions{Credentials: sandboxcreate.GitCredentialsLocal}
+		delivery := sourceDeliveryClient{Client: client, bridge: b}
+		if err := sandboxcreate.DeliverSource(ctx, delivery, req.ProjectID, sandbox, local, "http://"+listener.Addr().String(), "", nil, options); err != nil {
 			return response{}, fmt.Errorf("box %s was created but source delivery failed; do not create again: %w", sandbox.ID, err)
 		}
 	}
-	data, err := json.Marshal(sandbox)
-	return response{Version: 1, Status: 200, Body: data}, err
+	return result, nil
+}
+
+// The upstream source parser accepts Git's scp notation, but the API stores
+// a URI and its serializer uses net/url. Normalize at the desktop boundary,
+// before any source lookup or creation, preserving SSH, ref and subdirectory.
+func repositorySource(value string) (string, error) {
+	source, err := sandboxcreate.ParseSource(strings.TrimSpace(value))
+	if err != nil || source.Kind != sourceref.Git {
+		return "", errors.New("repository must be a remote Git URL or OWNER/REPO")
+	}
+	if !strings.Contains(source.Location, "://") {
+		authority, remotePath, ok := strings.Cut(source.Location, ":")
+		if !ok || remotePath == "" {
+			return "", errors.New("SSH repository needs a host and repository path")
+		}
+		address, err := url.Parse("ssh://" + authority)
+		if err != nil || address.Hostname() == "" || address.Path != "" || address.RawQuery != "" || address.Fragment != "" {
+			return "", errors.New("invalid SSH repository address; use ssh://USER@HOST/PATH")
+		}
+		if !strings.HasPrefix(remotePath, "/") {
+			switch strings.ToLower(address.Hostname()) {
+			case "github.com", "gitlab.com", "bitbucket.org":
+				// These hosts address virtual repositories as owner/name.
+				remotePath = "/" + remotePath
+			default:
+				// On an ordinary SSH server, host:repo is relative to the
+				// SSH user's home; ssh://host/repo would be absolute.
+				if strings.HasPrefix(remotePath, "~") {
+					remotePath = "/" + remotePath
+				} else {
+					remotePath = "/~/" + remotePath
+				}
+			}
+		}
+		address.Path = remotePath
+		source.Location = address.String()
+	}
+	return source.String(), nil
+}
+
+// Source delivery has its own small read contract. Embedded harness, creator,
+// pool and policy snapshots are unrelated to it and vary between releases.
+// Do not decode full SDK config/runtime objects: they contain optional
+// upgrade and harness metadata that has changed between server releases.
+func decodeDeliverySandbox(data []byte, project, id string) (*api.Sandbox, error) {
+	type sourceWire api.GitSource
+	type deliveryWire api.SourceDelivery
+	var wire struct {
+		ID        string  `json:"id"`
+		ProjectID string  `json:"projectId"`
+		PoolID    *string `json:"poolId"`
+		Config    *struct {
+			Source               *sourceWire           `json:"source"`
+			SourceCodeReferences map[string]sourceWire `json:"sourceCodeReferences"`
+		} `json:"config"`
+		Runtime *struct {
+			State             string                  `json:"state"`
+			DisplayState      *string                 `json:"displayState"`
+			ErrorMessage      api.OptString           `json:"errorMessage"`
+			SourceDeliveredAt api.OptDateTime         `json:"sourceDeliveredAt"`
+			SourceDeliveries  map[string]deliveryWire `json:"sourceDeliveries"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, fmt.Errorf("invalid box response: %w", err)
+	}
+	if validID(wire.ID) != nil || wire.ProjectID != project || (id != "" && wire.ID != id) || wire.Config == nil || wire.Runtime == nil || wire.Runtime.State == "" {
+		return nil, errors.New("invalid box identity or source-delivery state")
+	}
+	sandbox := &api.Sandbox{ID: wire.ID, ProjectId: wire.ProjectID}
+	if wire.PoolID != nil {
+		sandbox.PoolId.SetTo(*wire.PoolID)
+	}
+	if wire.Config.Source != nil {
+		sandbox.Config.Source.SetTo(api.GitSource(*wire.Config.Source))
+	}
+	if wire.Config.SourceCodeReferences != nil {
+		references := make(api.SandboxConfigSourceCodeReferences, len(wire.Config.SourceCodeReferences))
+		for key, source := range wire.Config.SourceCodeReferences {
+			references[key] = api.GitSource(source)
+		}
+		sandbox.Config.SourceCodeReferences.SetTo(references)
+	}
+	sandbox.Runtime.State = api.SandboxRuntimeState(wire.Runtime.State)
+	if wire.Runtime.DisplayState != nil {
+		sandbox.Runtime.DisplayState.SetTo(api.SandboxRuntimeDisplayState(*wire.Runtime.DisplayState))
+	}
+	sandbox.Runtime.ErrorMessage = wire.Runtime.ErrorMessage
+	sandbox.Runtime.SourceDeliveredAt = wire.Runtime.SourceDeliveredAt
+	if wire.Runtime.SourceDeliveries != nil {
+		states := make(api.SandboxRuntimeSourceDeliveries, len(wire.Runtime.SourceDeliveries))
+		for key, state := range wire.Runtime.SourceDeliveries {
+			states[key] = api.SourceDelivery(state)
+		}
+		sandbox.Runtime.SourceDeliveries.SetTo(states)
+	}
+	return sandbox, nil
+}
+
+type sourceDeliveryClient struct {
+	*api.Client
+	bridge *bridge
+}
+
+func (c sourceDeliveryClient) GetSandbox(ctx context.Context, params api.GetSandboxParams) (api.GetSandboxRes, error) {
+	if validID(params.ProjectId) != nil || validID(params.SandboxId) != nil {
+		return nil, errors.New("invalid source-delivery destination")
+	}
+	result, err := c.bridge.call(ctx, "GET", "/projects/"+params.ProjectId+"/sandboxes/"+params.SandboxId, nil)
+	if err != nil {
+		return nil, err
+	}
+	if result.Status < 200 || result.Status >= 300 {
+		return nil, fmt.Errorf("read created box: HTTP %d", result.Status)
+	}
+	return decodeDeliverySandbox(result.Body, params.ProjectId, params.SandboxId)
 }
 
 func (b *bridge) closeShell(ctx context.Context, req request) (response, error) {

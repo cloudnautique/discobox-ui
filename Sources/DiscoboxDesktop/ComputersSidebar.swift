@@ -116,7 +116,12 @@ struct ComputersSidebar: View {
         }
         .onChange(of: browser.archivedSelection) { _, ids in
             guard browser.filter == .archived, ids.count == 1, let location = ids.first else { return }
-            Task { await connections.selectBox(location) }
+            Task {
+                // A later Command/Shift selection can arrive before this task
+                // runs. An old preview must never collapse a newer selection.
+                guard browser.filter == .archived, browser.archivedSelection == ids else { return }
+                await connections.selectBox(location)
+            }
         }
         .onChange(of: items.map(\.location)) { _, visible in browser.archivedSelection.formIntersection(Set(visible)) }
         .onChange(of: browser.filter) { browser.archivedSelection.removeAll() }
@@ -208,7 +213,8 @@ struct ComputersSidebar: View {
     private func row(_ item: ConnectedBox) -> some View {
         Group {
             if let host = connections.session(item.location.connection) {
-                ComputerBoxRow(box: item.box, host: host, showComputer: browser.computerID == nil)
+                ComputerBoxRow(box: item.box, host: host, showComputer: browser.computerID == nil,
+                    canPurgeSelection: canPurge, purgeSelection: confirmPurge)
                     .environment(host.workspace)
                     .environment(runtimes.runtime(host.id).terminals)
                     .environment(runtimes.runtime(host.id).forwards)
@@ -286,11 +292,21 @@ private struct ComputerBoxRow: View {
     let box: Sandbox
     let host: ConnectionSession
     let showComputer: Bool
+    let canPurgeSelection: Bool
+    let purgeSelection: () -> Void
     @Environment(Connections.self) private var connections
     @State private var action: BoxActionRequest?
+    private var bulkSelection: Bool {
+        connections.browser.filter == .archived && connections.browser.archivedSelection.count > 1 &&
+            connections.browser.archivedSelection.contains(.init(connection: host.id, box: box.id))
+    }
     var body: some View {
         BoxRow(box: box, computer: showComputer ? host.profile.displayName : nil)
             .contextMenu {
+                if bulkSelection {
+                    Button("Purge \(connections.browser.archivedSelection.count) Selected Boxes…", role: .destructive, action: purgeSelection)
+                        .disabled(!canPurgeSelection)
+                } else {
                 Button("Open Workspace") { Task { await connections.selectBox(.init(connection: host.id, box: box.id)) } }
                 Button("Open Shell") {
                     let generation = host.workspace.connectionID
@@ -301,6 +317,7 @@ private struct ComputerBoxRow: View {
                 }.disabled(!box.isRunning)
                 Divider()
                 BoxActionMenu(box: box) { action = .init(box: box, action: $0, connection: host.workspace.connectionID) }
+                }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if BoxAction.archive.isAvailable(for: box) { Button { action = .init(box: box, action: .archive, connection: host.workspace.connectionID) } label: { Label("Archive", systemImage: "archivebox") }.tint(.orange) }
@@ -309,6 +326,6 @@ private struct ComputerBoxRow: View {
                 let power: BoxAction = box.isRunning ? .stop : .start
                 if power.isAvailable(for: box) { Button { action = .init(box: box, action: power, connection: host.workspace.connectionID) } label: { Label(power.title, systemImage: power.symbol) }.tint(box.isRunning ? .orange : .green) }
             }
-            .sheet(item: $action) { BoxActionSheet(request: $0).environment(host.workspace) }
+            .sheet(item: $action) { BoxActionSheet(request: $0).environment(host.workspace).id($0.id) }
     }
 }

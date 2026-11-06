@@ -16,88 +16,100 @@ struct NewBoxSheet: View {
     @State private var showResources = false
     @State private var repository = ""
     @State private var prompt = ""
+    @State private var credentialDrafts: [LaunchCredentialDraft] = []
     @State private var loading = true
     @State private var creating = false
     @State private var error: String?
     @FocusState private var focusedField: Field?
     private enum Field: Hashable { case repository, prompt }
+    private var credentialError: String? {
+        do { _ = try LaunchCredential.payload(credentialDrafts.map(\.credential)); return nil }
+        catch { return error.localizedDescription }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             StudioDialogHeader(title: "New box", symbol: "shippingbox", subtitle: "Create a workspace for your agent.", shortcut: commands?.appShortcuts[.newBox])
                 .padding(24)
             Divider().overlay(DiscoboxAppearance.border)
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("DESTINATION & AGENT").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
-                    VStack(spacing: 0) {
-                        if let connections {
-                            StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
-                                StudioMenuPicker(title: "Computer", selection: $targetComputer, options:
-                                    connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) })
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("DESTINATION & AGENT").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+                        VStack(spacing: 0) {
+                            if let connections {
+                                StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
+                                    StudioMenuPicker(title: "Computer", selection: $targetComputer, options:
+                                        connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) })
+                                }
+                                Divider().padding(.leading, 38)
+                            }
+                            StudioDestinationRow(title: "Pool", symbol: "server.rack") {
+                                StudioMenuPicker(title: "Pool", selection: $poolID, options:
+                                    [.init(id: "", title: "Automatic placement")] + workspace.resources.pools.map { .init(id: $0.id, title: $0.name) })
                             }
                             Divider().padding(.leading, 38)
-                        }
-                        StudioDestinationRow(title: "Pool", symbol: "server.rack") {
-                            StudioMenuPicker(title: "Pool", selection: $poolID, options:
-                                [.init(id: "", title: "Automatic placement")] + workspace.resources.pools.map { .init(id: $0.id, title: $0.name) })
-                        }
-                        Divider().padding(.leading, 38)
-                        StudioDestinationRow(title: "Harness", symbol: "sparkles") {
-                            StudioMenuPicker(title: "Harness", selection: $harness, options:
-                                [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
-                        }
-                    }
-                    .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    StudioFieldLabel(title: "Repository")
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
-                        TextField("Repository", text: $repository, prompt: Text("owner/repository or Git URL"))
-                            .textFieldStyle(.plain).focused($focusedField, equals: .repository)
-                    }
-                    .padding(12).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .repository ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .repository ? 1 : 0.5))
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    StudioFieldLabel(title: "Starting prompt")
-                    TextEditor(text: $prompt).font(.system(size: 12))
-                        .scrollContentBackground(.hidden).focused($focusedField, equals: .prompt)
-                        .padding(8).frame(height: 100)
-                        .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(alignment: .topLeading) {
-                            if prompt.isEmpty {
-                                Text("What would you like the agent to work on?").font(.system(size: 12)).foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 13).padding(.vertical, 16).allowsHitTesting(false).accessibilityHidden(true)
+                            StudioDestinationRow(title: "Harness", symbol: "sparkles") {
+                                StudioMenuPicker(title: "Harness", selection: $harness, options:
+                                    [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
                             }
                         }
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .prompt ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .prompt ? 1 : 0.5))
-                }
-                NewBoxResourceSummary(poolID: poolID, creating: creating, manage: { showResources = true })
-                    .environment(workspace)
-                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                if loading && harnesses.isEmpty { ProgressView("Loading harnesses…").controlSize(.small) }
-                if !loading && harnesses.filter(\.configured).isEmpty {
-                    Text("No configured harnesses are available. Configure a harness in Settings → Harnesses.").font(.callout).foregroundStyle(.secondary)
-                }
-                if creating {
-                    ProgressView("Preparing source and creating your box…").controlSize(.small)
-                    Text("Repository delivery can take several minutes. This window stays open until it finishes.").font(.caption).foregroundStyle(.secondary)
-                }
-            }.padding(24).disabled(creating)
+                        .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        StudioFieldLabel(title: "Repository")
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
+                            TextField("Repository", text: $repository, prompt: Text("owner/repository or Git URL"))
+                                .textFieldStyle(.plain).focused($focusedField, equals: .repository)
+                        }
+                        .padding(12).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .repository ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .repository ? 1 : 0.5))
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        StudioFieldLabel(title: "Starting prompt")
+                        TextEditor(text: $prompt).font(.system(size: 12))
+                            .scrollContentBackground(.hidden).focused($focusedField, equals: .prompt)
+                            .padding(8).frame(height: 100)
+                            .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(alignment: .topLeading) {
+                                if prompt.isEmpty {
+                                    Text("What would you like the agent to work on?").font(.system(size: 12)).foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 13).padding(.vertical, 16).allowsHitTesting(false).accessibilityHidden(true)
+                                }
+                            }
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .prompt ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .prompt ? 1 : 0.5))
+                    }
+                    NewBoxCredentialsSection(drafts: $credentialDrafts)
+                    if let credentialError { Text(credentialError).font(.system(size: 11)).foregroundStyle(.orange) }
+                    NewBoxResourceSummary(poolID: poolID, creating: creating, manage: { showResources = true })
+                        .environment(workspace)
+                    if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                    if loading && harnesses.isEmpty { ProgressView("Loading harnesses…").controlSize(.small) }
+                    if !loading && harnesses.filter(\.configured).isEmpty {
+                        Text("No configured harnesses are available. Configure a harness in Settings → Harnesses.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    if creating {
+                        ProgressView("Preparing source and creating your box…").controlSize(.small)
+                        Text("Repository delivery can take several minutes. This window stays open until it finishes.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(24).disabled(creating)
+            }.frame(maxHeight: 580)
             Divider().overlay(DiscoboxAppearance.border)
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(creating)
                 Spacer()
                 Button("Create Box", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("newBox.create")
+                    .disabled(credentialError != nil)
                     .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
             }.controlSize(.large).padding(.horizontal, 24).padding(.vertical, 16).background(DiscoboxAppearance.chrome)
         }
         .frame(width: 560).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .interactiveDismissDisabled(creating)
+        .onChange(of: workspace.connectionID) { _, _ in credentialDrafts.removeAll() }
+        .onDisappear { credentialDrafts.removeAll() }
         .onAppear { focusedField = .repository }
         .sheet(isPresented: $showResources) {
             if let host = connections?.session(targetComputer), let runtimes {
@@ -140,14 +152,17 @@ struct NewBoxSheet: View {
         creating = true; error = nil
         let target = workspace, hostID = targetComputer, generation = workspace.connectionID
         let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
+        let credentials = credentialDrafts.map(\.credential)
+        let harness = harness, prompt = prompt
+        let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             do {
-                let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let connections {
-                    try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
+                    try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials)
                 } else {
-                    try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation)
+                    try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials)
                 }
+                credentialDrafts.removeAll()
                 commands?.showCreateBox = false
                 dismiss()
             }
@@ -267,7 +282,7 @@ struct AuditView: View {
                 Toggle("Follow", isOn: $following).toggleStyle(.switch).controlSize(.small)
                 }
                 AuditSearchField(text: $search, focusRequested: focusSearch).frame(height: 22)
-            }.padding(12)
+            }.padding(12).background(DiscoboxAppearance.chrome)
             if let error { Notice(text: error, symbol: "exclamationmark.triangle") }
             if !missing.isEmpty { Notice(text: "Unavailable trails: " + missing.joined(separator: "; "), symbol: "exclamationmark.triangle") }
             if !limited.isEmpty { Notice(text: "Recent-event limit reached: " + limited.joined(separator: ", ") + ". Earlier events may be missing.", symbol: "clock") }
@@ -280,7 +295,7 @@ struct AuditView: View {
                             Text(record.summary).font(.callout).lineLimit(3)
                         }.padding(.vertical, 5).tag(record.id)
                     }
-                }.listStyle(.inset).frame(minWidth: 280)
+                }.listStyle(.inset).scrollContentBackground(.hidden).background(DiscoboxAppearance.canvas).frame(minWidth: 280)
                 if let record = records.first(where: { $0.id == selected }) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
@@ -313,6 +328,7 @@ struct AuditView: View {
                 if let lastRead { Text(lastRead, style: .time).font(.caption2) }
             }.foregroundStyle(.secondary).padding(10)
         }.onChange(of: selected) { recording = nil }
+        .background(DiscoboxAppearance.canvas).tint(DiscoboxAppearance.accent)
         .task(id: searchKey) {
             let key = searchKey, input = records
             do {

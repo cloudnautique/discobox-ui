@@ -274,7 +274,7 @@ func missingFilesAPI(status int, body []byte) bool {
 
 func fileResponseError(operation string, status int, body []byte) error {
 	if missingFilesAPI(status, body) {
-		return fmt.Errorf("%s: HTTP 404. This box, its pool, or its server does not support the Files API. Update the remote Discobox server/pool and upgrade the box to its harness's current image", operation)
+		return fmt.Errorf("%s: HTTP 404. This box, its pool, or its server does not support the Files API. It is not included in Discobox v0.18.0/v0.18.1. Updating only the Mac app will not enable it; use a Files-capable server release and updated pool/box runtimes", operation)
 	}
 	// Keep backend explanations useful, bounded, and safe to show as plain text.
 	message := strings.Map(func(r rune) rune {

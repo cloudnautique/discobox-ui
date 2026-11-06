@@ -28,70 +28,64 @@ struct PoolResourcesView: View {
     private var busy: Bool { workspace.clearingPools.contains(poolID) || stopping }
     private var selectedRunning: [Sandbox] { boxes.filter { selection.contains($0.id) && BoxAction.stop.isAvailable(for: $0) } }
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Resources").font(.title2.bold())
-                    Text(computer).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if workspace.resources.isRefreshing { ProgressView().controlSize(.small) }
-                Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.resources.isRefreshing || busy)
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
-            }
-            HStack {
-                Picker("Pool", selection: $poolID) {
-                    if workspace.resources.pools.isEmpty { Text("No pools available").tag("") }
-                    ForEach(workspace.resources.pools) { item in
-                        Text(item.name + (item.id == workspace.resources.defaultPoolID ? " (default)" : "")).tag(item.id)
+        StudioConfirmation(title: "Resources", symbol: "gauge.with.dots.needle.33percent", subtitle: computer, width: 860) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("Pool").foregroundStyle(.secondary)
+                    StudioMenuPicker(title: "Pool", selection: $poolID, options: workspace.resources.pools.isEmpty
+                        ? [.init(id: "", title: "No pools available")]
+                        : workspace.resources.pools.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.resources.defaultPoolID ? " (default)" : "")) }, alignment: .left)
+                        .padding(8).studioCard().frame(maxWidth: 360)
+                    Spacer()
+                    Text("Sort by").foregroundStyle(.secondary)
+                    StudioMenuPicker(title: "Sort by", selection: $sort, options: [.init(id: "disk", title: "Disk"), .init(id: "cpu", title: "CPU"), .init(id: "memory", title: "Memory")], alignment: .left)
+                        .padding(8).studioCard().frame(width: 100)
+                    if workspace.resources.isRefreshing { ProgressView().controlSize(.small) }
+                    Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.resources.isRefreshing || busy)
+                }.disabled(busy)
+                if let error = workspace.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if let pool {
+                    TimelineView(.periodic(from: .now, by: 15)) { context in
+                        resourceSummary(pool, now: context.date)
                     }
-                }.frame(maxWidth: 430)
-                Spacer()
-                Picker("Sort by", selection: $sort) {
-                    Text("Disk").tag("disk"); Text("CPU").tag("cpu"); Text("Memory").tag("memory")
-                }.frame(width: 170)
-            }.disabled(busy)
-            if let error = workspace.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            if let pool {
-                TimelineView(.periodic(from: .now, by: 15)) { context in
-                    resourceSummary(pool, now: context.date)
+                    HStack {
+                        Text("Boxes · \(boxes.count)").font(.headline)
+                        Spacer()
+                        Text("Stopped and archived boxes still occupy disk.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Table(rows, selection: $selection) {
+                        TableColumn("Box") { box in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(box.displayName).lineLimit(1)
+                                Text(box.status).font(.caption).foregroundStyle(.secondary)
+                            }.padding(.vertical, 3)
+                        }.width(min: 180, ideal: 280)
+                        TableColumn("CPU cores") { box in Text(ResourceValue.cpu(box.resourceCPU)).monospacedDigit() }.width(82)
+                        TableColumn("Memory") { box in Text(ResourceValue.bytes(box.resourceMemory)).monospacedDigit() }.width(92)
+                        TableColumn("Disk") { box in Text(ResourceValue.bytes(box.resourceDisk)).monospacedDigit() }.width(92)
+                        TableColumn("Processes") { box in
+                            Text(box.isRunning ? box.resourceReport["processCount"].number.map { String(Int(clamping: Int64(min(max($0, 0), 1_000_000_000)))) } ?? "—" : "—")
+                        }.width(76)
+                    }.scrollContentBackground(.hidden).studioCard().frame(minHeight: 135)
+                    if selection.count == 1, let box = boxes.first(where: { selection.contains($0.id) }) {
+                        boxDetail(box)
+                    }
+                    if let actionError { Text(actionError).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                } else {
+                    ContentUnavailableView(workspace.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
                 }
-                HStack {
-                    Text("Boxes · \(boxes.count)").font(.headline)
-                    Spacer()
-                    Text("Stopped and archived boxes still occupy disk.").font(.caption).foregroundStyle(.secondary)
-                }
-                Table(rows, selection: $selection) {
-                    TableColumn("Box") { box in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(box.displayName).lineLimit(1)
-                            Text(box.status).font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 3)
-                    }.width(min: 180, ideal: 280)
-                    TableColumn("CPU cores") { box in Text(ResourceValue.cpu(box.resourceCPU)).monospacedDigit() }.width(82)
-                    TableColumn("Memory") { box in Text(ResourceValue.bytes(box.resourceMemory)).monospacedDigit() }.width(92)
-                    TableColumn("Disk") { box in Text(ResourceValue.bytes(box.resourceDisk)).monospacedDigit() }.width(92)
-                    TableColumn("Processes") { box in
-                        Text(box.isRunning ? box.resourceReport["processCount"].number.map { String(Int(clamping: Int64(min(max($0, 0), 1_000_000_000)))) } ?? "—" : "—")
-                    }.width(76)
-                }.frame(minHeight: 135)
-                if selection.count == 1, let box = boxes.first(where: { selection.contains($0.id) }) {
-                    boxDetail(box)
-                }
-                if let actionError { Text(actionError).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                HStack {
-                    Button(stopping ? "Stopping…" : "Stop Selected") { stopSelected() }
-                        .disabled(selectedRunning.isEmpty || busy)
-                    Spacer()
-                    Button("Clear Caches…", role: .destructive) {
-                        clearRequest = .init(pool: pool, connection: workspace.connectionID)
-                    }.disabled(busy || !workspace.isConnected)
-                        .accessibilityIdentifier("resources.clearCaches")
-                }
-            } else {
-                ContentUnavailableView(workspace.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
             }
-        }.padding(22).frame(width: 860, height: 690)
+        } footer: {
+            HStack {
+                if let pool {
+                    Button(stopping ? "Stopping…" : "Stop Selected") { stopSelected() }.disabled(selectedRunning.isEmpty || busy)
+                    Button("Clear Caches…", role: .destructive) { clearRequest = .init(pool: pool, connection: workspace.connectionID) }
+                        .disabled(busy || !workspace.isConnected).accessibilityIdentifier("resources.clearCaches")
+                }
+                Spacer()
+                Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction).disabled(busy)
+            }
+        }.frame(height: 690)
             .interactiveDismissDisabled(busy)
             .onChange(of: poolID) { selection = []; actionError = nil }
             .task(id: workspace.connectionID) {
@@ -228,34 +222,39 @@ struct PoolCacheClearSheet: View {
     @State private var failure: String?
     private var running: [Sandbox] { workspace.sandboxes.filter { $0.poolId == request.pool.id && $0.isRunning } }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Clear pool caches?").font(.title2.bold())
-            Text(computer + " › " + request.pool.name).foregroundStyle(.secondary)
-            if let result {
-                Label("Caches cleared. \(result.stoppedSandboxIds.count) boxes stopped.", systemImage: "checkmark.circle")
-                Text("Boxes stay stopped until you start them. Resource reports may take about 30 seconds to update.")
-                HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
-            } else {
-                Text("Every running box on this pool will stop, including boxes started by another client while this window is open.")
-                if !running.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 6) { ForEach(running) { box in Label(box.displayName, systemImage: "stop.circle").lineLimit(2) } }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(height: min(130, CGFloat(running.count) * 30 + 8))
+        StudioConfirmation(title: "Clear pool caches?", symbol: "internaldrive", subtitle: computer + " › " + request.pool.name, destructive: true) {
+            VStack(alignment: .leading, spacing: 16) {
+                if let result {
+                    Label("Caches cleared. \(result.stoppedSandboxIds.count) boxes stopped.", systemImage: "checkmark.circle")
+                    Text("Boxes stay stopped until you start them. Resource reports may take about 30 seconds to update.")
+                } else {
+                    Text("Every running box on this pool will stop, including boxes started by another client while this window is open.")
+                    if !running.isEmpty {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) { ForEach(running) { box in Label(box.displayName, systemImage: "stop.circle").lineLimit(2) } }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }.frame(height: min(130, CGFloat(running.count) * 30 + 8))
+                    }
+                    Text("Removes shared package and tool caches, Docker build caches, proxy downloads, and images pushed to the pool registry. Pushed images must be pushed again.")
+                    Text("Workspaces, source files, configuration, and secrets are kept. Boxes are not restarted automatically.").fontWeight(.medium)
+                    if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
+                    if working { ProgressView("Stopping boxes and clearing caches…") }
                 }
-                Text("Removes shared package and tool caches, Docker build caches, proxy downloads, and images pushed to the pool registry. Pushed images must be pushed again.")
-                Text("Workspaces, source files, configuration, and secrets are kept. Boxes are not restarted automatically.").fontWeight(.medium)
-                if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
-                if working { ProgressView("Stopping boxes and clearing caches…") }
+            }.font(.callout)
+        } footer: {
+            if result != nil {
+                HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
+            } else {
                 HStack {
                     Button(failure == nil ? "Cancel" : "Close") { dismiss() }.keyboardShortcut(.cancelAction).disabled(working)
                     Spacer()
                     Button("Stop Boxes & Clear Caches", role: .destructive) { clear() }
+                        .buttonStyle(.borderedProminent).tint(.red)
                         .disabled(working || failure != nil || request.connection != workspace.connectionID)
                         .accessibilityIdentifier("resources.confirmClear")
                 }
             }
-        }.padding(24).frame(width: 520).interactiveDismissDisabled(working)
+        }.interactiveDismissDisabled(working)
     }
     private func clear() {
         working = true

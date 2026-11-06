@@ -9,12 +9,9 @@ struct BoxStartPrompt: View {
     let open: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            StudioDialogHeader(title: intent.alreadyRunning ? "Box is running" : "Start this box?", symbol: "play.fill", subtitle: intent.computer)
-                .padding(24)
-            Divider()
+        StudioConfirmation(title: intent.alreadyRunning ? "Box is running" : "Start this box?", symbol: "play.fill", subtitle: intent.computer) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(intent.box.displayName).font(.system(size: 15, weight: .semibold)).lineLimit(3)
+                StudioConfirmationSubject(name: intent.box.displayName)
                 Text(intent.alreadyRunning ? "The box is already running. Open it to continue working." : "Start the box to continue working, or view its saved terminal without starting it.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let failure = intent.failure {
@@ -24,8 +21,8 @@ struct BoxStartPrompt: View {
                     Text("The computer’s connection or the box changed. Cancel and choose the box again.").font(.callout).foregroundStyle(.orange)
                 }
                 if intent.working { ProgressView("Starting box…").controlSize(.small) }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
-            Divider()
+            }
+        } footer: {
             HStack(spacing: 12) {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction).disabled(intent.working)
                 Spacer()
@@ -37,8 +34,8 @@ struct BoxStartPrompt: View {
                     Task { if await intent.start() { open() } }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(!intent.canStart).accessibilityIdentifier("boxStart.confirm")
-            }.controlSize(.large).padding(20).background(DiscoboxAppearance.chrome)
-        }.frame(width: 560).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
+            }
+        }
             .accessibilityIdentifier("boxStart.prompt")
     }
 }
@@ -58,7 +55,7 @@ struct StoppedBoxBar: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(starting ? "Starting box…" : box.status == "Stopped" ? "Box stopped" : "Box · " + box.status)
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Saved terminal output is read-only. Start the box to continue working.")
+                    Text(box.isArchived ? "Restore the box to continue working. Saved terminal output is read-only." : "Saved terminal output is read-only. Start the box to continue working.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -75,6 +72,7 @@ struct StoppedBoxBar: View {
             }
             if let failure = intent?.failure { Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
         }.padding(.horizontal, 16).padding(.vertical, 12)
+            .fixedSize(horizontal: false, vertical: true)
             .background(DiscoboxAppearance.chrome)
             .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
     }

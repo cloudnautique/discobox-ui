@@ -91,10 +91,10 @@ public struct ConnectedBox: Identifiable, Sendable {
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }
     }
-    public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil) async throws {
+    public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = []) async throws {
         guard let host = session(id), host.workspace.isConnected else { throw DiscoboxError("Connect to the selected computer first.") }
         let generation = host.workspace.connectionID
-        let box = try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection)
+        let box = try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection, credentials: credentials)
         guard host.workspace.connectionID == generation, host.workspace.isConnected else { throw CancellationError() }
         let location = BoxLocation(connection: host.id, box: box.id)
         creations.append(.init(connection: generation, item: .init(location: location, computer: host.profile.displayName, box: box, needsAttention: box.matchesAttention)))
@@ -122,7 +122,9 @@ public struct ConnectedBox: Identifiable, Sendable {
         guard let host = session(location.connection), host.workspace.isConnected,
               let box = host.workspace.sandboxes.first(where: { $0.id == location.box }) else { return }
         if browser.filter == .archived {
-            if box.isArchived { browser.selectArchives([location]) }
+            if box.isArchived {
+                if !browser.archivedSelection.contains(location) { browser.selectArchives([location]) }
+            }
             else if creationPins.contains(where: { $0.id == location }) { browser.archivedSelection.removeAll() }
             else { browser.filter = .all; browser.archivedSelection.removeAll() }
         }

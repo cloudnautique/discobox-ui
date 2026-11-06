@@ -7,6 +7,24 @@ backend, regardless of whether the CLI, GUI, or another client created them.
 Closing the app never shuts down a box or the server. The app stores connection
 and presentation preferences only, not a second database of boxes.
 
+## Studio presentation
+
+App-owned sheets use the shared `StudioConfirmation`, `StudioDialogHeader`,
+`StudioConfirmationField`, and `studioCard()` components with adaptive
+`DiscoboxAppearance` surfaces, borders, and accents. Informational and destructive
+prompts share `StudioMessageSheet`; AppKit callbacks use `StudioAppKitDialog` so
+clipboard, console-close, and forwarding messages have the same presentation.
+Each flow retains its own validation, default action, and mutation ownership.
+
+Settings keep native macOS controls on Studio surfaces. File pickers, macOS
+permission and Keychain prompts, notification banners, and system menus retain
+their platform presentation. Ghostty terminal contents and remote desktop pages
+retain their own palettes; the app controls their surrounding chrome only.
+
+`--feature-smoke` exercises modal lifetimes, safe defaults, and the dialog/settings
+inventory in light and dark themes using isolated fixtures. Set
+`DISCOBOX_SMOKE_SCREENSHOTS` to a local output directory to capture the matrix.
+
 ## Safety boundary
 
 Development and automated verification must not contact the operator's running
@@ -187,6 +205,16 @@ Darwin's exclusive rename; uploads use ifExists/ifVersion. Recursive traversal
 refuses symlinks, invalid names and excessive depth. Folder transfers are bounded
 in concurrency, but not atomic as a tree.
 
+`FileBrowser` owns a captured connection generation, box, canonical directory,
+navigation request generation, and cancellable transfer. A conflict retains its
+original destination; editing the path field does not retarget a drop. The Files
+panel uses a native `NSTableView` for multi-selection and Finder drag feedback.
+Uploads accept file URLs in the current directory or a directory row. Downloads
+use `NSFilePromiseProvider`: the retained delegate writes to the destination
+supplied by macOS only after the drop is accepted, without a temporary URL that
+could disappear before Finder copies it. A promised download retains its original
+`FileAccess` even if the user changes boxes while the destination receives it.
+
 Tool launches read the authoritative sandbox catalog, refuse host declarations,
 reuse running sessions by metadata, and create/start only the newly returned ID.
 The primary harness is never deleted. Review state remains in the box repository.
@@ -194,6 +222,10 @@ The primary harness is never deleted. Review state remains in the box repository
 ## Native box management
 
 `BoxAction` defines the desktop's lifecycle actions and state-dependent availability.
+Successful purge receipts remove each box immediately and suppress its ID for the
+current connection generation, so an older list response cannot resurrect it.
+Deleted records are not archives. Archived previews preserve bulk selection;
+row context menus use the same captured bulk manifest as the sidebar action.
 A confirmation captures the box ID and connection generation. Workspace rejects
 stale connections and duplicate in-flight actions without retargeting the request.
 The companion accepts only start, stop, archive (DELETE), unarchive, upgrade, repair,

@@ -8,14 +8,13 @@ import (
 	"github.com/discobox-ai/discobox/cli/internal/cli"
 )
 
-// Reuse the upstream configure lifecycle, including callback port forwarding,
-// provisioning, terminal attachment, and exit-status-checked commit. No arbitrary
-// CLI arguments are accepted and server auto-start is always disabled.
+// Upstream now manages saved harness files in its console instead of a
+// separate configure sandbox. No arbitrary CLI arguments are accepted.
 func harnessSetupArgs(endpoint, project, harness string) ([]string, error) {
 	if strings.HasPrefix(harness, "-") || endpoint == "" || validID(project) != nil || validID(harness) != nil {
 		return nil, errors.New("invalid harness setup destination")
 	}
-	return []string{"--server", endpoint, "--project", project, "--auto-start-server=false", "admin", "harness", "configure", harness}, nil
+	return []string{"--server", endpoint, "--project", project, "--auto-start-server=false", "configure"}, nil
 }
 
 func runHarnessSetup(endpoint, project, harness string) error {

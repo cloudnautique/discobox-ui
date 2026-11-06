@@ -29,6 +29,10 @@ struct DiscoboxApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in connections.disconnectAll(); CompanionClient.cancelAllRequests(); runtimes.closeAll(); HarnessSetupWindows.shared.closeAll() }
                 .frame(minWidth: 1000, minHeight: 650)
                 .task {
+                    if ProcessInfo.processInfo.arguments.contains("--notification-status") {
+                        await ApprovalNotifications.printSystemStatus()
+                        exit(0)
+                    }
                     guard !didAttemptStartup else { return }
                     didAttemptStartup = true
                     // Explicitly set the running app's Dock icon as well as the
@@ -39,6 +43,7 @@ struct DiscoboxApp: App {
                     if ProcessInfo.processInfo.arguments.contains("--multihost-smoke") { await MultiHostSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--desktop-smoke") { await DesktopSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--feature-smoke") { await FeatureSmoke.run() }
+                    if ProcessInfo.processInfo.arguments.contains("--files-smoke") { await FilesSmoke.run() }
                     workspace.streamsLiveTerminals = true
                     commands.install(workspace: workspace, connections: connections)
                     connections.syncProfiles(ConnectionProfiles.decode(savedConnections) ?? [])
@@ -107,6 +112,7 @@ struct DiscoboxApp: App {
             .tint(DiscoboxAppearance.accent)
             .accentColor(DiscoboxAppearance.accent)
             .frame(width: 640, height: 680)
+            .background(DiscoboxAppearance.surface)
             .onChange(of: appearance, initial: true) { DiscoboxAppearance.apply(appearance) }
         }
     }

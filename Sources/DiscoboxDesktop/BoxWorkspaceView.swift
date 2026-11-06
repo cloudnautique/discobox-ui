@@ -31,7 +31,7 @@ struct BoxWorkspaceView: View {
             if layout.sideBySide { HSplitView { panes } }
             else { VSplitView { panes } }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity).background(.background)
+        .frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
         .onChange(of: workspace.execs.map(\.id), initial: true) { _, ids in
             // selectBox clears inventory before its async refresh. That empty
             // transition must not discard the box's remembered tab selection.
@@ -257,22 +257,24 @@ struct TerminalCloseSheet: View {
     @AppStorage("confirmShellClose") private var confirmShellClose = true
     @State private var dontAskAgain = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("Close \(request.terminal.title)?", systemImage: "terminal").font(.title2.weight(.semibold))
-            Text("This ends the terminal’s running process. Other terminals and the box stay running.").foregroundStyle(.secondary)
-            if request.terminal.isShell {
-                Toggle("Don’t ask again when closing shells", isOn: $dontAskAgain)
-                Text("Turn confirmation back on in Settings → Appearance → Terminals.").font(.caption).foregroundStyle(.secondary)
+        StudioConfirmation(title: "Close \(request.terminal.title)?", symbol: "terminal", destructive: true) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("This ends the terminal’s running process. Other terminals and the box stay running.").foregroundStyle(.secondary)
+                if request.terminal.isShell {
+                    Toggle("Don’t ask again when closing shells", isOn: $dontAskAgain)
+                    Text("Turn confirmation back on in Settings → Appearance → Terminals.").font(.caption).foregroundStyle(.secondary)
+                }
             }
+        } footer: {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Close Terminal", role: .destructive) {
                     if request.terminal.isShell && dontAskAgain { confirmShellClose = false }
                     confirm(); dismiss()
-                }.keyboardShortcut(.defaultAction).accessibilityIdentifier("terminal.confirmClose")
+                }.buttonStyle(.borderedProminent).tint(.red).keyboardShortcut(.defaultAction).accessibilityIdentifier("terminal.confirmClose")
             }
-        }.padding(24).frame(width: 420)
+        }
     }
 }
 
@@ -393,6 +395,7 @@ struct BoxInspector: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden).background(DiscoboxAppearance.canvas)
         .sheet(isPresented: $showResources) {
             PoolResourcesView(computer: connections?.sessions.first { $0.workspace === workspace }?.profile.displayName ?? workspace.endpointLabel, initialPoolID: box.poolId)
         }

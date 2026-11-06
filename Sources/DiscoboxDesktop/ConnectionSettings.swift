@@ -32,7 +32,7 @@ struct ConnectionSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Connections").font(.title2.weight(.semibold))
+                StudioDialogHeader(title: "Connections", symbol: "network")
                 Spacer()
                 Button { editor = EditRequest(profile: nil) } label: { Label("Add Connection", systemImage: "plus") }
                     .accessibilityIdentifier("connections.add")
@@ -75,8 +75,7 @@ struct ConnectionSettings: View {
                         }
                     }
                 }
-            }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
+            }.listStyle(.inset).scrollContentBackground(.hidden).studioCard()
                 .frame(minHeight: 160)
                 .onDeleteCommand { if let selection, selection.endpoint != "unix://" { removing = selection } }
             if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -96,7 +95,7 @@ struct ConnectionSettings: View {
             }
             Text("Connect to several computers at once. Show Boxes selects a computer without disconnecting the others.")
                 .font(.caption).foregroundStyle(.secondary)
-        }.padding(24)
+        }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .task {
             // Collapse only aliases of the current default socket, never custom sockets.
             if let migrated = ConnectionProfiles.decode(savedConnections), let text = ConnectionProfiles.encode(migrated), text != savedConnections { savedConnections = text }
@@ -112,13 +111,14 @@ struct ConnectionSettings: View {
                 needsAuthorization.remove(profile.id)
             })
         }
-        .confirmationDialog("Remove \(removing?.displayName ?? "connection")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
-                guard let removing else { return }
-                if let text = ConnectionProfiles.encode((ConnectionProfiles.decode(savedConnections) ?? []).filter { $0.id != removing.id }) { savedConnections = text }
+        .sheet(item: $removing) { profile in
+            StudioMessageSheet(title: "Remove \(profile.displayName)?", symbol: "network",
+                message: "This removes the saved address. Access and any active connection remain available.",
+                confirmTitle: "Remove", destructive: true, defaultConfirm: false, cancel: { removing = nil }) {
+                if let text = ConnectionProfiles.encode((ConnectionProfiles.decode(savedConnections) ?? []).filter { $0.id != profile.id }) { savedConnections = text }
                 selected = "unix://"; self.removing = nil
             }
-        } message: { Text("This removes the saved address. Access and any active connection remain available.") }
+        }
     }
     private func connecting(_ profile: ConnectionProfile) -> Bool { connections?.session(profile.id)?.workspace.isConnecting ?? workspace.isConnecting }
     private func connect(_ profile: ConnectionProfile) {
@@ -165,65 +165,65 @@ struct ConnectionEditor: View {
 
     private var placeholder: String { kind == "socket" ? "unix:///path/server.sock" : kind == "http" ? "https://server.example.com" : "Paste a discobox:// address" }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(profile == nil ? "Add Connection" : "Edit Connection")
-                .font(.title2.weight(.semibold))
-            Form {
-                TextField("Name", text: $name, prompt: Text("Studio")).focused($nameFocused)
-                    .accessibilityIdentifier("connection.name")
-                Picker("Connect to", selection: $kind) {
-                    Text("Remote computer").tag("remote")
-                    Text("Custom local socket").tag("socket")
-                    Text("HTTP/S server").tag("http")
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(kind == "socket" ? "Socket address" : "Server address")
-                    TextEditor(text: $address)
-                        .font(.system(.body, design: .monospaced))
-                        .scrollContentBackground(.hidden)
-                        .padding(6)
-                        .frame(height: 80)
-                        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                        .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.separator) }
-                        .overlay(alignment: .topLeading) {
-                            if address.isEmpty {
-                                Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 11).padding(.vertical, 8).allowsHitTesting(false)
-                            }
-                        }
-                        .accessibilityLabel(kind == "socket" ? "Socket address" : "Server address")
-                        .accessibilityIdentifier("connection.address")
-                }
-                if kind == "remote" {
-                    Text("Paste the Discobox address shared by the other computer.").font(.caption).foregroundStyle(.secondary)
-                    DisclosureGroup("Authorize this computer", isExpanded: $enrollment) {
-                        Text("On the remote computer, enroll this app’s peer ID with Discobox. Each computer has its own identity.").font(.caption).foregroundStyle(.secondary)
-                        TextField("This computer’s name", text: $computerName, prompt: Text(ComputerIdentity.systemName))
-                        if loadingIdentity { ProgressView("Loading identity…").controlSize(.small) }
-                        if peerID.isEmpty {
-                            Button("Show My Peer ID") { loadIdentity() }.disabled(loadingIdentity)
-                        } else {
-                            Text(peerID).font(.caption.monospaced()).textSelection(.enabled)
-                            HStack {
-                                Button("Copy Peer ID") { copy(peerID) }
-                                Button("Copy Enrollment Command") { copy(ComputerIdentity.enrollmentCommand(peerID: peerID, name: computerName)) }
-                            }
-                        }
+        StudioConfirmation(title: profile == nil ? "Add connection" : "Edit connection", symbol: "network") {
+            VStack(alignment: .leading, spacing: 18) {
+                Form {
+                    TextField("Name", text: $name, prompt: Text("Studio")).focused($nameFocused)
+                        .accessibilityIdentifier("connection.name")
+                    Picker("Connect to", selection: $kind) {
+                        Text("Remote computer").tag("remote")
+                        Text("Custom local socket").tag("socket")
+                        Text("HTTP/S server").tag("http")
                     }
-                }
-                DisclosureGroup("Advanced") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(kind == "socket" ? "Socket address" : "Server address")
+                        TextEditor(text: $address)
+                            .font(.system(.body, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .frame(height: 80)
+                            .studioCard()
+                            .overlay(alignment: .topLeading) {
+                                if address.isEmpty {
+                                    Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 11).padding(.vertical, 8).allowsHitTesting(false)
+                                }
+                            }
+                            .accessibilityLabel(kind == "socket" ? "Socket address" : "Server address")
+                            .accessibilityIdentifier("connection.address")
+                    }
                     if kind == "remote" {
-                        Toggle("Direct connections only", isOn: $directOnly)
-                        Text("Requires an ?addr=IP:port hint. Relays and discovery are disabled.").font(.caption).foregroundStyle(.secondary)
-                        TextField("HTTPS relay URLs", text: $relays, prompt: Text("Optional, comma-separated")).disabled(directOnly)
+                        Text("Paste the Discobox address shared by the other computer.").font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("Authorize this computer", isExpanded: $enrollment) {
+                            Text("On the remote computer, enroll this app’s peer ID with Discobox. Each computer has its own identity.").font(.caption).foregroundStyle(.secondary)
+                            TextField("This computer’s name", text: $computerName, prompt: Text(ComputerIdentity.systemName))
+                            if loadingIdentity { ProgressView("Loading identity…").controlSize(.small) }
+                            if peerID.isEmpty {
+                                Button("Show My Peer ID") { loadIdentity() }.disabled(loadingIdentity)
+                            } else {
+                                Text(peerID).font(.caption.monospaced()).textSelection(.enabled)
+                                HStack {
+                                    Button("Copy Peer ID") { copy(peerID) }
+                                    Button("Copy Enrollment Command") { copy(ComputerIdentity.enrollmentCommand(peerID: peerID, name: computerName)) }
+                                }
+                            }
+                        }
                     }
-                    Text("Testing checks access without switching your active workspace.").font(.caption).foregroundStyle(.secondary)
-                    if kind == "socket" { Text("Use unix:// for the default server on this computer.").font(.caption).foregroundStyle(.secondary) }
-                }
-            }.formStyle(.grouped).disabled(testing)
-            if let tested { Label("Connection to \(tested.displayName) verified", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green) }
-            if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            Text("Save now and finish setup later. Testing is optional.").font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Advanced") {
+                        if kind == "remote" {
+                            Toggle("Direct connections only", isOn: $directOnly)
+                            Text("Requires an ?addr=IP:port hint. Relays and discovery are disabled.").font(.caption).foregroundStyle(.secondary)
+                            TextField("HTTPS relay URLs", text: $relays, prompt: Text("Optional, comma-separated")).disabled(directOnly)
+                        }
+                        Text("Testing checks access without switching your active workspace.").font(.caption).foregroundStyle(.secondary)
+                        if kind == "socket" { Text("Use unix:// for the default server on this computer.").font(.caption).foregroundStyle(.secondary) }
+                    }
+                }.formStyle(.grouped).scrollContentBackground(.hidden).disabled(testing)
+                if let tested { Label("Connection to \(tested.displayName) verified", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green) }
+                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                Text("Save now and finish setup later. Testing is optional.").font(.caption).foregroundStyle(.secondary)
+            }
+        } footer: {
             HStack {
                 Button("Cancel") { testTask?.cancel(); dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
@@ -236,7 +236,7 @@ struct ConnectionEditor: View {
                     .disabled(fieldsEmpty)
                     .accessibilityIdentifier("connection.save")
             }
-        }.padding(24).frame(width: 520, height: 580)
+        }.frame(height: 650)
         .onAppear {
             if let profile {
                 name = profile.displayName; address = profile.endpoint; relays = profile.relayURLs; directOnly = profile.directOnly ?? false

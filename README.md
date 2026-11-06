@@ -70,6 +70,12 @@ screen; check that you have completed Discobox’s setup and started its server.
 Manage saved computers in **Discobox → Settings → Connections**.
 
 - Press **⌘N** to create a box or **⌘K** to find and switch boxes.
+- In **New box → Credentials for this box**, add a token, its environment
+  variable (for example `OBOT_MCP_TOKEN`), and its destination host (for example
+  `demo.on-obot.ai`). Reference `${OBOT_MCP_TOKEN}` in your repository’s MCP
+  headers. The selected server stores the token and assigns it during creation;
+  the shared harness stays unchanged. Discobox 0.18 may ask for approval on first
+  use. Closing the window or changing computers clears unsaved token drafts.
 - Opening a stopped box offers **Start & Open** or **View Saved**. Saved terminal
   output also has a **Start Box** button, even when your sidebar filters hide it.
 - Creating a box keeps your filters. A temporary **New boxes** row shows startup
@@ -80,6 +86,19 @@ Manage saved computers in **Discobox → Settings → Connections**.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.
 - Use **Settings** to choose System, Light, or Dark appearance, customize
   shortcuts, configure harnesses, manage credentials, and enable notifications.
+
+### Move files in and out
+
+Open a running box’s **Files** tab. It starts in the agent’s working directory;
+**Source** takes you back there. Drag files or folders from Finder into the list
+to upload, or drop onto a folder to copy into it. Select several items with
+Command or Shift, then drag them to Finder to download. Transfers also work
+with remote boxes over the existing connection.
+
+Existing remote names prompt before replacement. Downloads never replace an
+existing local file. **Upload…** and the download button offer the same transfers
+without dragging. The box, pool, and server must support Discobox’s Files API.
+Discobox v0.18.0/v0.18.1 do not include it; updating only this Mac app is not enough.
 
 ## Connect to another computer with Iroh
 

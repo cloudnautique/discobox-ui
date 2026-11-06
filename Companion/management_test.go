@@ -10,7 +10,7 @@ import (
 
 func TestHarnessSetupIsRestrictedAndNeverStartsServer(t *testing.T) {
 	args, err := harnessSetupArgs("unix:///tmp/fixture.sock", "project", "harness")
-	want := []string{"--server", "unix:///tmp/fixture.sock", "--project", "project", "--auto-start-server=false", "admin", "harness", "configure", "harness"}
+	want := []string{"--server", "unix:///tmp/fixture.sock", "--project", "project", "--auto-start-server=false", "configure"}
 	if err != nil || !reflect.DeepEqual(args, want) {
 		t.Fatalf("%v %v", args, err)
 	}
@@ -24,8 +24,8 @@ func TestHarnessSetupIsRestrictedAndNeverStartsServer(t *testing.T) {
 
 func TestHarnessSetupResolvesToUpstreamConfigureCommand(t *testing.T) {
 	cmd := cli.NewRootCommand()
-	found, remaining, err := cmd.Find([]string{"admin", "harness", "configure", "fixture"})
-	if err != nil || found.Name() != "configure" || !reflect.DeepEqual(remaining, []string{"fixture"}) {
+	found, remaining, err := cmd.Find([]string{"configure"})
+	if err != nil || found.Name() != "configure" || len(remaining) != 0 {
 		t.Fatalf("wrong setup command: %v %v %v", found, remaining, err)
 	}
 }

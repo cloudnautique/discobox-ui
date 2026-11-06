@@ -9,9 +9,12 @@ import UserNotifications
     static func run() async {
         do {
             try await verifyAppearance()
+            try await StudioModalSmoke.verify()
             try await verifyNotifications()
             try await DialogReceiptSmoke.verify()
+            try await FilesSmoke.verify()
             try await verifyNotificationPermissionRecovery()
+            try await verifyBackgroundNotificationRecovery()
             try await verifyComputerUsage()
             let workspace = Workspace()
             await workspace.connect(client: DemoClient(pendingRequests: true), label: "Offline panels", demo: true)
@@ -65,7 +68,31 @@ import UserNotifications
             guard let resourcePool = workspace.resources.pools.first else { throw DiscoboxError("Resource fixture missing") }
             guard let shell = workspace.execs.first(where: \.isShell) else { throw DiscoboxError("Shell fixture missing") }
             guard let stoppedBox = workspace.sandboxes.first(where: { $0.id == "demo-api" }) else { throw DiscoboxError("Stopped-box fixture missing") }
+            let credentialDraft = LaunchCredentialDraft(environment: "OBOT_MCP_TOKEN", host: "demo.on-obot.ai", token: "fixture-not-a-real-token")
+            let inboxWorkspace = Workspace()
+            await inboxWorkspace.connect(client: StudioInboxFixture(), label: "Offline approvals", demo: true)
+            await inboxWorkspace.refreshApprovals()
+            let toolsWorkspace = Workspace()
+            await toolsWorkspace.connect(client: StudioInboxFixture(), label: "Offline tools", demo: true)
+            await toolsWorkspace.selectBox("demo-ui")
+            await localComputer.workspace.refreshUsage(); await studioComputer.workspace.refreshUsage()
+            let notificationSettings = ApprovalNotifications(service: NotificationPermissionFixture(), defaults: settingsDefaults)
+            let deniedService = NotificationPermissionFixture(); deniedService.status = .denied
+            let deniedSettings = ApprovalNotifications(service: deniedService, defaults: settingsDefaults)
+            let maintenanceBoxes = try JSONDecoder().decode([Sandbox].self, from: Data(#"""
+                [
+                  {"id":"upgrade","projectId":"p","displayName":"Update available","config":{"model":"Claude Code"},"runtime":{"state":"ready","displayState":"running","upgrade":{"available":true,"targetImage":"fixture:next"}}},
+                  {"id":"repair","projectId":"p","displayName":"Container needs repair","config":{"model":"Codex"},"runtime":{"state":"failed","displayState":"error","errorMessage":"The container could not be created."}},
+                  {"id":"both","projectId":"p","displayName":"Pinned image unavailable","config":{"model":"Claude Code"},"runtime":{"state":"failed","displayState":"error","errorReason":"image_unavailable","upgrade":{"available":true}}},
+                  {"id":"repairing","projectId":"p","displayName":"Repair in progress","config":{"model":"Codex"},"runtime":{"state":"failed","displayState":"repairing"}},
+                  {"id":"healthy","projectId":"p","displayName":"Healthy box","config":{"model":"Claude Code"},"runtime":{"state":"ready","displayState":"running"}}
+                ]
+                """#.utf8))
             let panels: [(String, AnyView)] = [
+                ("box-maintenance-light", AnyView(List(maintenanceBoxes) { BoxRow(box: $0) }.listStyle(.sidebar).frame(width: 350, height: 420).environment(workspace).preferredColorScheme(.light))),
+                ("box-maintenance-dark", AnyView(List(maintenanceBoxes) { BoxRow(box: $0) }.listStyle(.sidebar).frame(width: 350, height: 420).environment(workspace).preferredColorScheme(.dark))),
+                ("launch-credentials-light", AnyView(NewBoxCredentialsSection(drafts: .constant([credentialDraft]), initiallyExpanded: true).padding(24).frame(width: 560).background(DiscoboxAppearance.surface).preferredColorScheme(.light))),
+                ("launch-credentials-dark", AnyView(NewBoxCredentialsSection(drafts: .constant([credentialDraft]), initiallyExpanded: true).padding(24).frame(width: 560).background(DiscoboxAppearance.surface).preferredColorScheme(.dark))),
                 ("start-box-light", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.light))),
                 ("start-box-dark", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.dark))),
                 ("studio-light", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).preferredColorScheme(.light))),
@@ -83,6 +110,11 @@ import UserNotifications
                 ("switch-box-dark", AnyView(BoxChooser().environment(localComputer.workspace).environment(computers).preferredColorScheme(.dark))),
                 ("archived-sidebar", AnyView(WorkspaceView().environment(archivedWorkspace).environment(WorkspaceCommands()).defaultAppStorage(settingsDefaults))),
                 ("bulk-purge", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace))),
+                ("bulk-purge-light", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace).preferredColorScheme(.light))),
+                ("purge-light", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionID)).environment(archivedWorkspace).preferredColorScheme(.light))),
+                ("purge-dark", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionID)).environment(archivedWorkspace).preferredColorScheme(.dark))),
+                ("stop-light", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionID)).environment(workspace).preferredColorScheme(.light))),
+                ("stop-dark", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionID)).environment(workspace).preferredColorScheme(.dark))),
                 ("connections", AnyView(ConnectionSettings().environment(workspace).defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
                 ("connection-editor", AnyView(ConnectionEditor(profile: nil, save: { _ in }))),
                 ("connection-edit", AnyView(ConnectionEditor(profile: .init(name: "Studio", endpoint: "discobox://d1-0000000-1111111-2222222-3333333-4444444-5555555-6666666-7777777?addr=192.0.2.10:12345"), save: { _ in }))),
@@ -91,13 +123,44 @@ import UserNotifications
                 ("archive", AnyView(BoxActionSheet(request: .init(box: box, action: .archive, connection: workspace.connectionID)).environment(workspace))),
                 ("purge", AnyView(BoxActionSheet(request: .init(box: box, action: .purge, connection: workspace.connectionID)).environment(workspace))),
                 ("approval", AnyView(ApprovalSheet(item: item).environment(workspace))),
+                ("approval-light", AnyView(ApprovalSheet(item: item).environment(workspace).preferredColorScheme(.light))),
                 ("new-box", AnyView(NewBoxSheet().environment(workspace))),
                 ("tools", AnyView(ToolsSheet().environment(workspace))),
                 ("audit", AnyView(AuditView(boxID: box.id).environment(workspace))),
                 ("services", AnyView(ServicesView(box: box).environment(workspace).environment(ServiceForwards()))),
                 ("files", AnyView(FilesView().environment(workspace)))
             ]
-            for (name, panel) in panels {
+            let auditPanels: [(String, AnyView)] = [
+                ("audit-tools", AnyView(ToolsSheet().environment(toolsWorkspace))),
+                ("audit-tools-empty", AnyView(ToolsSheet().environment(workspace))),
+                ("audit-welcome", AnyView(WelcomeView().environment(Workspace()).defaultAppStorage(settingsDefaults).frame(width: 1000, height: 800))),
+                ("audit-commands", AnyView(CommandsSheet().environment(WorkspaceCommands(defaults: settingsDefaults)))),
+                ("audit-tags", AnyView(TagFilterSheet(choices: ["team=platform", "priority=high"], selected: .constant(["team=platform"]), matchAny: .constant(false)))),
+                ("audit-usage-details", AnyView(HarnessUsageDetails().environment(computers).environment(localComputer.workspace))),
+                ("audit-inbox-multiple", AnyView(ApprovalInboxView(boxID: nil).environment(inboxWorkspace))),
+                ("audit-inbox-empty", AnyView(ApprovalInboxView(boxID: nil).environment(archivedWorkspace))),
+                ("audit-file-conflict", AnyView(FileConflictSheet(directory: "/workspace/source", count: 3, resolve: { _ in }))),
+                ("audit-connection-editor", AnyView(ConnectionEditor(profile: nil, save: { _ in }))),
+                ("audit-resources", AnyView(PoolResourcesView(computer: "Fixture computer").environment(workspace))),
+                ("audit-settings-harnesses", AnyView(HarnessSettings().environment(workspace).frame(width: 640, height: 600))),
+                ("audit-settings-credentials", AnyView(CredentialSettings().environment(workspace).frame(width: 640, height: 600))),
+                ("audit-settings-connections", AnyView(ConnectionSettings().environment(workspace).defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
+                ("audit-settings-keys", AnyView(KeybindingSettings().environment(WorkspaceCommands(defaults: settingsDefaults)).frame(width: 640, height: 680))),
+                ("audit-settings-appearance", AnyView(AppearanceSettings().defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
+                ("audit-settings-notifications", AnyView(ApprovalNotificationSettings(notifications: notificationSettings).frame(width: 640, height: 680))),
+                ("audit-settings-notifications-denied", AnyView(ApprovalNotificationSettings(notifications: deniedSettings).frame(width: 640, height: 680))),
+                ("audit-delete-credential", AnyView(StudioMessageSheet(title: "Delete credential?", symbol: "key", message: "Access depending on this credential may stop working. This cannot be undone.", confirmTitle: "Delete", destructive: true, defaultConfirm: false, cancel: {}) {})),
+                ("audit-remove-connection", AnyView(StudioMessageSheet(title: "Remove Studio?", symbol: "network", message: "This removes the saved address. Access and any active connection remain available.", confirmTitle: "Remove", destructive: true, defaultConfirm: false, cancel: {}) {})),
+                ("audit-notification-error", AnyView(StudioMessageSheet(title: "Approval notification", symbol: "bell.badge", message: "This notification is out of date. Open the current approval inbox on its computer.") {})),
+                ("audit-port-error", AnyView(StudioMessageSheet(title: "This box port isn’t forwarded", symbol: "network.slash", message: "Open Services to check the reported ports for this box.") {})),
+                ("audit-harness-close", AnyView(StudioMessageSheet(title: "Close harness management?", symbol: "terminal", message: "Unsaved changes in the current editor may be lost.", confirmTitle: "Close Console", destructive: true, defaultConfirm: false, cancel: {}) {})),
+                ("audit-clipboard-read", AnyView(StudioMessageSheet(title: "Paste into terminal?", symbol: "doc.on.clipboard", message: "The terminal requested clipboard content. Pasting multiple lines can execute commands.", confirmTitle: "Allow", cancel: {}) {})),
+                ("audit-clipboard-write", AnyView(StudioMessageSheet(title: "Allow terminal to replace the clipboard?", symbol: "doc.on.clipboard", message: "The terminal requested permission to replace your Mac’s clipboard.", confirmTitle: "Allow", cancel: {}) {}))
+            ]
+            let themedPanels = auditPanels.flatMap { name, panel in
+                [(name + "-light", AnyView(panel.preferredColorScheme(.light))), (name + "-dark", AnyView(panel.preferredColorScheme(.dark)))]
+            }
+            for (name, panel) in panels + themedPanels {
                 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
                 let view = NSHostingView(rootView: panel.environment(TerminalStore()).environment(ServiceForwards()).environment(DesktopWindows()))
                 window.contentView = view
@@ -121,6 +184,9 @@ import UserNotifications
                 }
                 window.orderOut(nil)
             }
+            inboxWorkspace.disconnect()
+            toolsWorkspace.disconnect()
+            print("STUDIO_THEME_AUDIT_OK: \(auditPanels.count) additional dialog/settings surfaces checked in both Light and Dark")
             try await workspace.answer(item, action: "approve", payload: .object(["grantTTLSeconds": .number(900)]))
             guard workspace.approvals.isEmpty else { throw DiscoboxError("Answer did not clear fixture inbox") }
             print("FEATURE_SMOKE_OK: pool resources, cache confirmation, box rows, lifecycle confirmations, approval, new-box preflight, tools and file panel layout; fixture answer clears inbox")
@@ -251,6 +317,46 @@ import UserNotifications
         throw DiscoboxError("Notification permission fixture timed out")
     }
 
+    private static func verifyBackgroundNotificationRecovery() async throws {
+        let suite = "ai.discobox.smoke.notification-background." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let computers = Connections(polling: false)
+        let host = try await computers.connect(.thisComputer, demo: true) { DemoClient(pendingRequests: true) }
+        defer { computers.disconnectAll() }
+        await host.workspace.refreshApprovals()
+        let firstService = NotificationPermissionFixture(), secondService = NotificationPermissionFixture()
+        firstService.transientDeliveryError = true
+        let first = ApprovalNotifications(service: firstService, defaults: defaults, retryDelay: .milliseconds(20))
+        let second = ApprovalNotifications(service: secondService, defaults: defaults)
+        first.configure(computers); second.configure(computers)
+        try await waitForNotification { first.waitingCount == 1 && secondService.delivered.count == 1 }
+        firstService.transientDeliveryError = false
+        // No Settings visit, application activation, changed approval or manual
+        // refresh is needed to retry a transient enqueue failure.
+        try await waitForNotification { firstService.delivered.count == 1 && first.waitingCount == 0 }
+        try await Task.sleep(for: .milliseconds(75))
+        guard firstService.delivered.count == 1, secondService.delivered.count == 1 else {
+            throw DiscoboxError("Notification recovery duplicated an alert or made clients mutually exclusive")
+        }
+        firstService.alertsEnabled = false; firstService.alertStyle = .none
+        await first.refreshAuthorization()
+        guard first.bannersDisabled, !first.permissionBlocked else {
+            throw DiscoboxError("Authorized notifications with banners disabled were reported as ready")
+        }
+        await first.setEnabled(false); await second.setEnabled(false)
+        defaults.set(true, forKey: ApprovalNotifications.preferenceKey)
+        let deniedService = NotificationPermissionFixture()
+        deniedService.status = .denied
+        let denied = ApprovalNotifications(service: deniedService, defaults: defaults, retryDelay: .milliseconds(20))
+        denied.configure(computers)
+        try await waitForNotification { denied.waitingCount == 1 }
+        deniedService.status = .authorized
+        try await waitForNotification { deniedService.delivered.count == 1 && denied.waitingCount == 0 }
+        await denied.setEnabled(false)
+        print("NOTIFICATION_BACKGROUND_SMOKE_OK: independent clients both alert; transient failures and restored permissions retry without activation; no duplicates; disabled banners are visible in settings")
+    }
+
     private static func verifyAppearance() async throws {
         let saved = NSApp.appearance
         let probe = AppearanceProbe()
@@ -301,15 +407,22 @@ private actor ComputerUsageFixture: DiscoboxClient {
     var granted = true
     var requestError = false
     var deliveryError = false
+    var transientDeliveryError = false
     var authorizationRequests = 0
     var delivered: [UNNotificationRequest] = []
-    func authorizationStatus() async -> UNAuthorizationStatus { status }
+    var alertsEnabled = true
+    var notificationCenterEnabled = true
+    var alertStyle = UNAlertStyle.banner
+    func configuration() async -> ApprovalNotificationConfiguration {
+        .init(authorization: status, alertsEnabled: alertsEnabled, notificationCenterEnabled: notificationCenterEnabled, alertStyle: alertStyle)
+    }
     func requestAuthorization() async throws -> Bool {
         authorizationRequests += 1
         if requestError { throw NSError(domain: UNErrorDomain, code: UNError.Code.notificationsNotAllowed.rawValue) }
         return granted
     }
     func add(_ request: UNNotificationRequest) async throws {
+        if transientDeliveryError { throw NSError(domain: "NotificationFixture", code: 1) }
         if deliveryError { throw NSError(domain: UNErrorDomain, code: UNError.Code.notificationsNotAllowed.rawValue) }
         delivered.append(request)
     }
@@ -318,6 +431,20 @@ private actor ComputerUsageFixture: DiscoboxClient {
 }
 
 @MainActor private final class AppearanceProbe { var scheme: ColorScheme? }
+
+private actor StudioInboxFixture: DiscoboxClient {
+    private let demo = DemoClient()
+    func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .tools {
+            return Data(#"{"tools":[{"id":"ai.discobox.diff","name":"Changes","description":"Review changes in this box.","runs":"sandbox"},{"id":"fixture-tests","name":"Tests","description":"Open the test console.","runs":"sandbox"}]}"#.utf8)
+        }
+        if request.operation == .approvals {
+            return Data(#"{"approvalRequests":[{"kind":"credential","credential":{"id":"studio-github","sandboxId":"demo-ui","status":"pending","name":"GitHub","justification":"Read repository issues."}},{"kind":"credential","credential":{"id":"studio-notion","sandboxId":"demo-ui","status":"pending","name":"Notion","justification":"Read the project notes."}}]}"#.utf8)
+        }
+        return try await demo.perform(request)
+    }
+}
+
 private struct AppearanceProbeView: View {
     @Environment(\.colorScheme) private var scheme
     let probe: AppearanceProbe

@@ -23,6 +23,21 @@ private actor HostFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
     func count(_ operation: BridgeRequest.Operation) -> Int { requests.filter { $0.operation == operation }.count }
+    func creationPayload() -> JSONValue? { requests.first { $0.operation == .createBox }?.payload }
+}
+
+@MainActor @Test func launchCredentialsOnlyReachTheChosenComputerAndCreation() async throws {
+    let connections = Connections(polling: false)
+    let localClient = HostFixture(), remoteClient = HostFixture()
+    _ = try await connections.connect(.thisComputer, demo: true) { localClient }
+    let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
+    let credential = LaunchCredential(environment: "OBOT_MCP_TOKEN", host: "example.test", value: "fixture-only-token")
+    try await connections.createBox(on: remote.id, harness: "demo-harness", repository: "", credentials: [credential])
+    let expected = try LaunchCredential.payload([credential])
+    #expect(await localClient.creationPayload() == nil)
+    #expect(await remoteClient.creationPayload() == expected)
+    #expect(await remoteClient.count(.createBox) == 1)
+    connections.disconnectAll()
 }
 
 @MainActor @Test func remoteCreationPreservesArchivedAndSelectsTheDestinationComputer() async throws {

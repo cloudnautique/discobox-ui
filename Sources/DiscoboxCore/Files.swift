@@ -1,12 +1,14 @@
 import Foundation
 
-public struct RemoteFile: Decodable, Identifiable, Sendable {
+public struct RemoteFile: Decodable, Identifiable, Sendable, Equatable {
     public let path: String
     public let name: String
     public let type: String
     public let size: Int64
     public let version: String
     public var id: String { path }
+    public var isDirectory: Bool { type == "directory" }
+    public var canTransfer: Bool { type == "file" || isDirectory }
 }
 public struct RemoteDirectory: Decodable, Sendable { public let path: String; public let entries: [RemoteFile] }
 public struct FileAccess: Sendable {

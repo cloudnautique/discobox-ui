@@ -2,6 +2,14 @@ import Foundation
 import Testing
 @testable import DiscoboxCore
 
+@Test func deletedBoxesAreNotArchivesAndHaveNoLifecycleActions() throws {
+    for runtime in [#"{"state":"deleted"}"#, #"{"state":"ready","displayState":"deleted"}"#, #"{"state":"deleted","displayState":"archived"}"#] {
+        let box = try JSONDecoder().decode(Sandbox.self, from: Data("{\"id\":\"s\",\"projectId\":\"p\",\"displayName\":\"Deleted\",\"config\":{},\"runtime\":\(runtime)}".utf8))
+        #expect(box.isDeleted && !box.isArchived)
+        #expect(BoxAction.allCases.allSatisfy { !$0.isAvailable(for: box) })
+    }
+}
+
 @Test func lifecycleAvailabilityUsesDisplayState() throws {
     let data = Data(#"{"id":"s","projectId":"p","displayName":"Box","harnessConfig":{"name":"Claude Code"},"config":{"source":{"url":"https://github.com/example/project.git"}},"runtime":{"state":"ready","runtimeState":"running","displayState":"archiving","agentStatus":{"sources":[{"slug":"primary","branch":"feature/mac"}]}}}"#.utf8)
     let box = try JSONDecoder().decode(Sandbox.self, from: data)

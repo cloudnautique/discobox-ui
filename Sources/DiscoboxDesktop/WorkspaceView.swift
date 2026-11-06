@@ -93,7 +93,7 @@ struct WorkspaceView: View {
                     Text(workspace.endpointLabel == "unix://" ? "Looking for your default local server." : workspace.endpointLabel)
                         .foregroundStyle(.secondary)
                     Button("Cancel") { workspace.disconnect() }.keyboardShortcut(.cancelAction)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
             } else if workspace.isConnected || connections?.sessions.contains(where: { $0.workspace.isConnected }) == true {
                 VStack(spacing: 0) {
                 HSplitView {
@@ -569,13 +569,14 @@ private struct BoxChooserRow: View {
     }
     var body: some View {
         HStack(spacing: 10) {
-            Circle().fill(item.needsAttention ? Color.orange : item.box.isRunning ? .green : .secondary.opacity(0.5))
+            Circle().fill(item.box.needsRepair ? Color.red : item.needsAttention ? .orange : item.box.isRunning ? .green : .secondary.opacity(0.5))
                 .frame(width: 5, height: 5).accessibilityLabel(item.needsAttention ? "Needs attention" : item.box.status)
             VStack(alignment: .leading, spacing: 5) {
                 Text(item.box.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 if !metadata.isEmpty { Text(metadata).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
             }
             Spacer(minLength: 8)
+            BoxMaintenanceIndicators(box: item.box)
             if !item.computer.isEmpty {
                 Text(item.computer).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                     .padding(.horizontal, 6).padding(.vertical, 4)
@@ -675,12 +676,13 @@ struct BoxRow: View {
     @State private var showInbox = false
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Circle().fill(box.isRunning ? Color.green : (box.matchesAttention ? .orange : .secondary.opacity(0.4)))
+            Circle().fill(box.needsRepair ? Color.red : box.isRunning ? .green : (box.matchesAttention ? .orange : .secondary.opacity(0.4)))
                 .frame(width: 7, height: 7).padding(.top, 6)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(box.displayName).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     Spacer(minLength: 0)
+                    BoxMaintenanceIndicators(box: box)
                     if workspace.approvals.contains(where: { $0.boxID == box.id }) {
                         Button { showInbox = true } label: { Text("!").font(.headline.bold()).foregroundStyle(.red) }.buttonStyle(.borderless).help("Pending approval requests")
                     }
@@ -700,8 +702,8 @@ struct BoxRow: View {
                 }
             }
         }.padding(.vertical, 7)
-        .accessibilityValue(box.status)
-        .help([box.displayName, box.status, box.repository, box.harnessName, box.branch, box.runtime.errorMessage].compactMap { $0 }.joined(separator: "\n"))
+        .accessibilityValue([box.status, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
+        .help([box.displayName, box.status, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.joined(separator: "\n"))
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
     }
 }
@@ -768,38 +770,37 @@ struct WelcomeView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
+        .background(DiscoboxAppearance.canvas)
     }
 }
 
-private struct TagFilterSheet: View {
+struct TagFilterSheet: View {
     let choices: [String]
     @Binding var selected: Set<String>
     @Binding var matchAny: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Filter by tag").font(.title2.bold())
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+        StudioConfirmation(title: "Filter by tag", symbol: "tag") {
+            VStack(alignment: .leading, spacing: 14) {
+                Picker("Matching", selection: $matchAny) {
+                    Text("Match all").tag(false)
+                    Text("Match any").tag(true)
+                }.pickerStyle(.segmented)
+                StudioConfirmationField(title: "Search") { TextField("Find a tag", text: $search) }
+                List(choices.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { tag in
+                    Toggle(tag, isOn: Binding(get: { selected.contains(tag) }, set: { on in
+                        if on { selected.insert(tag) } else { selected.remove(tag) }
+                    })).toggleStyle(.checkbox)
+                }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
             }
-            Picker("Matching", selection: $matchAny) {
-                Text("Match all").tag(false)
-                Text("Match any").tag(true)
-            }.pickerStyle(.segmented)
-            TextField("Find a tag", text: $search).textFieldStyle(.roundedBorder)
-            List(choices.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { tag in
-                Toggle(tag, isOn: Binding(get: { selected.contains(tag) }, set: { on in
-                    if on { selected.insert(tag) } else { selected.remove(tag) }
-                })).toggleStyle(.checkbox)
-            }
+        } footer: {
             HStack {
                 Text("\(selected.count) selected").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Clear filters") { selected.removeAll() }.disabled(selected.isEmpty)
+                Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
-        }.padding(20).frame(width: 420, height: 460)
+        }.frame(height: 480)
     }
 }

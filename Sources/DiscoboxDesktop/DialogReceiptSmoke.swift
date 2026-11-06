@@ -42,7 +42,50 @@ import DiscoboxCore
                 throw DiscoboxError("Late dialog completion dismissed a newer sheet or repeated the mutation")
             }
         }
+        try await verifyPurgeConfirmations()
         print("DIALOG_RECEIPT_SMOKE_OK: archive and approval close before stalled refresh; late completion leaves newer dialog open; one mutation each")
+    }
+
+    private static func verifyPurgeConfirmations() async throws {
+        for bulk in [false, true] {
+            let client = StudioPurgeClient(), workspace = Workspace()
+            await workspace.connect(client: client, label: "Studio purge fixture", demo: true)
+            for id in ["demo-api", "demo-tests"] {
+                try await workspace.performBoxAction(.archive, boxID: id, connection: workspace.connectionID)
+            }
+            let boxes = workspace.sandboxes.filter(\.isArchived)
+            guard let first = boxes.first, boxes.count == 2 else { throw DiscoboxError("Purge fixtures missing") }
+            let model = DialogReceiptModel()
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = NSHostingView(rootView: DialogReceiptHost(model: model).environment(workspace).environment(TerminalStore()).environment(ServiceForwards()))
+            window.makeKeyAndOrderFront(nil)
+            defer { model.dialog = nil; window.orderOut(nil); workspace.disconnect() }
+            model.dialog = bulk ? .bulk(.init(boxes: boxes, connection: workspace.connectionID)) : .action(.init(box: first, action: .purge, connection: workspace.connectionID))
+            try await wait { window.attachedSheet?.contentView != nil }
+            guard let root = window.attachedSheet?.contentView else { throw DiscoboxError("Purge sheet missing") }
+            try await wait { views(root).compactMap { $0 as? NSTextField }.contains { $0.placeholderString == "DELETE" } }
+            // SwiftUI can attach accessibility identifiers to a wrapper rather
+            // than its native NSButton. The destructive footer action is the
+            // rightmost button in both confirmation layouts.
+            try await wait { views(root).compactMap { $0 as? NSButton }.count >= 2 }
+            guard let field = views(root).compactMap({ $0 as? NSTextField }).first(where: { $0.placeholderString == "DELETE" }),
+                  let button = views(root).compactMap({ $0 as? NSButton }).max(by: { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }), !button.isEnabled else {
+                throw DiscoboxError("Purge confirmation must start disabled")
+            }
+            for text in ["delete", "DELETE"] {
+                field.currentEditor()?.string = text
+                field.stringValue = text
+                field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+                try await Task.sleep(for: .milliseconds(75))
+                guard button.isEnabled == (text == "DELETE") else { throw DiscoboxError("Studio purge confirmation validation changed") }
+            }
+            button.performClick(nil)
+            try await wait { window.attachedSheet == nil }
+            guard await client.purges == (bulk ? 2 : 1), workspace.sandboxes.filter(\.isArchived).count == (bulk ? 0 : 1) else {
+                throw DiscoboxError("Studio purge confirmation did not target exactly the confirmed fixture boxes")
+            }
+        }
+        print("STUDIO_PURGE_SMOKE_OK: single and bulk purge require DELETE, accept native text entry, submit once per confirmed box and dismiss")
     }
     private static func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
     private static func wait(line: Int = #line, _ predicate: () async -> Bool) async throws {
@@ -54,8 +97,9 @@ import DiscoboxCore
 private enum DialogReceiptPresentation: Identifiable {
     case action(BoxActionRequest)
     case approval(UUID, ApprovalItem)
+    case bulk(BulkPurgeRequest)
     var id: UUID {
-        switch self { case .action(let request): request.id; case .approval(let id, _): id }
+        switch self { case .action(let request): request.id; case .approval(let id, _): id; case .bulk(let request): request.id }
     }
 }
 @MainActor @Observable private final class DialogReceiptModel {
@@ -68,8 +112,18 @@ private struct DialogReceiptHost: View {
             switch dialog {
             case .action(let request): BoxActionSheet(request: request).id(dialog.id)
             case .approval(_, let item): ApprovalSheet(item: item).id(dialog.id)
+            case .bulk(let request): BulkPurgeSheet(request: request, completed: { _ in }).id(dialog.id)
             }
         }
+    }
+}
+
+private actor StudioPurgeClient: DiscoboxClient {
+    private let demo = DemoClient()
+    private(set) var purges = 0
+    func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .boxAction && request.action == "purge" { purges += 1 }
+        return try await demo.perform(request)
     }
 }
 

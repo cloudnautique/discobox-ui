@@ -29,10 +29,18 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         public let state: String
         public let runtimeState: String?
         public let errorMessage: String?
+        public let errorReason: String?
         public let lastActiveAt: String?
         public let displayState: String?
         public let agentStatus: JSONValue?
         public let resources: JSONValue?
+        public let upgrade: Upgrade?
+    }
+    /// Only decode the stable upgrade fields; image and bundle metadata differ
+    /// between server releases and must not prevent boxes from being listed.
+    public struct Upgrade: Codable, Sendable, Equatable {
+        public let available: Bool
+        public let reason: String?
     }
     public struct Metadata: Codable, Sendable, Equatable {
         public let name: String?
@@ -46,7 +54,8 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         return terms.allSatisfy { term in fields.contains { $0.localizedCaseInsensitiveContains(term) } }
     }
     public var isRunning: Bool { runtime.displayState.map { $0 == "running" } ?? (runtime.state == "ready" && runtime.runtimeState == "running") }
-    public var isArchived: Bool { ["archived", "deleted"].contains(runtime.displayState ?? runtime.state) }
+    public var isDeleted: Bool { runtime.state == "deleted" || runtime.displayState == "deleted" }
+    public var isArchived: Bool { !isDeleted && (runtime.displayState ?? runtime.state) == "archived" }
     public var harnessName: String? { harnessConfig?["name"].string ?? config.model }
     public var repository: String? {
         guard let raw = config.source?["url"].string ?? config.source?["localDirectory"].string ?? meta?.tags?["repository"], !raw.isEmpty else { return nil }
@@ -172,6 +181,14 @@ public struct Harness: Decodable, Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let configured: Bool
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        // New harnesses run without setup. Older servers send a readiness flag.
+        configured = try values.decodeIfPresent(Bool.self, forKey: .configured) ?? true
+    }
+    private enum CodingKeys: String, CodingKey { case id, name, configured }
 }
 public struct HarnessList: Decodable, Sendable { public let harnessConfigs: [Harness]? }
 public struct AuditRecord: Decodable, Identifiable, Sendable, Equatable {
