@@ -90,6 +90,12 @@ Manage saved computers in **Discobox → Settings → Connections**.
 - Use **Desktop** in the title bar to open the box’s desktop, or **Services**
   for its ports. The inspector also holds box details and tags.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.
+- To save a harness subscription login, sign in inside a box, then open
+  **Settings → Harnesses → Manage…**, choose that box, and **Review changes**.
+  Confirm the review and **Save reviewed changes** to share the login with that
+  harness’s other boxes. Refreshable OAuth logins renew on the server; a copied
+  access token does not include refresh credentials. This requires the newer
+  Discobox save-back API; older servers show an update/matching-CLI explanation.
 - Use **Settings** to choose System, Light, or Dark appearance, customize
   shortcuts, configure harnesses, manage credentials, and enable notifications.
 

@@ -140,7 +140,7 @@ public struct InputPart: Codable, Sendable, Equatable {
 }
 
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public enum Operation: String, Encodable, Sendable { case harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
     public let operation: Operation
     public let projectID: String?
     public let sandboxID: String?
@@ -182,12 +182,15 @@ public struct Harness: Decodable, Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let configured: Bool
+    public let usesLegacySetup: Bool
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         name = try values.decode(String.self, forKey: .name)
         // New harnesses run without setup. Older servers send a readiness flag.
-        configured = try values.decodeIfPresent(Bool.self, forKey: .configured) ?? true
+        let readiness = try values.decodeIfPresent(Bool.self, forKey: .configured)
+        configured = readiness ?? true
+        usesLegacySetup = readiness != nil
     }
     private enum CodingKeys: String, CodingKey { case id, name, configured }
 }

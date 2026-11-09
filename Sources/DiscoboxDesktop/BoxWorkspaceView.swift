@@ -14,6 +14,7 @@ struct BoxWorkspaceView: View {
     @State private var creationAction: BoxActionRequest?
     @AppStorage("confirmShellClose") private var confirmShellClose = true
     private var harness: Exec? { workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first(where: { !$0.isShell }) }
+    private var harnessConfiguration: Harness? { workspace.cachedHarnesses.first { $0.id == box.config.harnessConfigId } }
     private var companions: [Exec] { workspace.execs.filter { $0.id != harness?.id } }
     private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionID.uuidString + box.id) }
     private var creation: BoxCreation? {
@@ -72,8 +73,17 @@ struct BoxWorkspaceView: View {
                     Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
+                if box.isRunning, !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty, let configuration = harnessConfiguration {
+                    Button("Save login/settings…", systemImage: "square.and.arrow.up") { manageHarness(configuration) }
+                        .labelStyle(.iconOnly).font(.caption).foregroundStyle(DiscoboxAppearance.accent)
+                        .help("Review this box’s harness changes before sharing them with other boxes")
+                }
                 Spacer()
                 Menu {
+                    if let configuration = harnessConfiguration {
+                        Button("Manage harness login and settings…") { manageHarness(configuration) }
+                        Divider()
+                    }
                     Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
                     supportingTools
                 } label: { Image(systemName: "ellipsis") }.help("Agent and workspace actions")
@@ -88,6 +98,9 @@ struct BoxWorkspaceView: View {
         }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
             .background(WorkspaceSplitPosition(key: persistenceKey, enabled: layout.isSplit, secondaryMinimum: layout.shellsSplit && layout.shellSideBySide ? 720 : 360,
                 revision: layout.shellsSplit ? (layout.shellSideBySide ? "columns" : "stack") : "tabs"))
+    }
+    private func manageHarness(_ configuration: Harness) {
+        HarnessSetupWindows.shared.open(configuration, workspace: workspace, connections: connections, commands: commands, sourceBoxID: box.id)
     }
     @ViewBuilder private var agentContent: some View {
         if let harness, box.isRunning, harness.status == "running" {

@@ -8,9 +8,10 @@ struct NewBoxSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(ConnectionRuntimes.self) private var runtimes: ConnectionRuntimes?
     @State private var targetComputer = ""
-    init(repository: String = "", computer: String? = nil) {
+    init(repository: String = "", computer: String? = nil, harnessID: String = "") {
         _repository = State(initialValue: repository)
         _targetComputer = State(initialValue: computer ?? "")
+        _harness = State(initialValue: harnessID)
     }
     private var currentRepository: RepositoryChoice? { workspace.selectedBox.flatMap(RepositoryChoice.init(box:)) }
     private var recentRepositories: [RepositoryChoice] { RepositoryChoice.recent(in: workspace.sandboxes).filter { $0.id != currentRepository?.id } }
@@ -60,7 +61,7 @@ struct NewBoxSheet: View {
                                     [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
                                 Button("Manage…") {
                                     if let selected = harnesses.first(where: { $0.id == harness }) {
-                                        HarnessSetupWindows.shared.open(selected, workspace: workspace)
+                                        HarnessSetupWindows.shared.open(selected, workspace: workspace, connections: connections, commands: commands)
                                     }
                                 }.font(.caption).buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
                                     .disabled(harness.isEmpty || workspace.isDemo)
@@ -164,7 +165,7 @@ struct NewBoxSheet: View {
         .task(id: workspace.connectionID) {
             let target = workspace, generation = workspace.connectionID
             error = nil
-            harness = harnesses.first(where: \.configured)?.id ?? ""
+            if harness.isEmpty { harness = harnesses.first(where: \.configured)?.id ?? "" }
             loading = harnesses.isEmpty
             do {
                 let refreshed = try await target.harnesses()

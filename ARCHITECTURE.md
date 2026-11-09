@@ -54,6 +54,18 @@ runtime error gets a warning, not a failed-creation screen. Inventory reads add
 the TUI's canonical provisioning-status summary without extra server calls.
 An existing primary PTY remains visible through startup hooks/tours.
 
+Harness management loads public config and binding metadata directly, without
+starting the bundled console. The native window belongs to a captured computer
+and harness ID. Sign-in happens in an ordinary box; a separate review reads the
+server's redacted save-back candidate. Saving revalidates the box's assignment,
+candidate ID and preview fingerprint, then posts only that ID to the public save
+route once. Token values, OAuth refresh material, private capture/acknowledgment
+routes and grant lifetimes never pass through this flow. A durable
+`saved-handoff-pending` receipt is shown as saved; retrying its handoff requires a
+fresh review rather than replaying an uncertain save. The advanced terminal
+console remains an explicit option for newer servers; older harness schemas
+still load natively and explain how to use their matching host CLI.
+
 Native colors are generated from `discobox/assets/brand/tokens.json` by
 `make brand-tokens`. Lint verifies the generated copy; the UI never defines a
 second palette. Studio layout and system controls remain native. JetBrains Mono
@@ -127,7 +139,7 @@ in a versioned protocol rather than adding ad hoc output parsing.
 The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
 including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection
 remains independent of that environment setting. Attach and forwarding use the
-same resolver; harness management passes its resolved address to the CLI with
+same resolver; the advanced harness console passes its resolved address to the CLI with
 auto-start disabled. It never changes backend configuration to expose TCP.
 HTTP/S is supported when the existing server already exposes it. TLS validation
 stays enabled. Redirects are rejected. Current single-user auth is supported;

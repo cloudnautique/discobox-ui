@@ -408,6 +408,15 @@ public final class Workspace {
             throw DiscoboxError("The request changed or was answered elsewhere. Check the approval inbox.")
         }
     }
+    func harnessOperation(_ operation: BridgeRequest.Operation, harnessID: String, boxID: String?, payload: JSONValue?, connection: UUID) async throws -> JSONValue {
+        guard [.harnessDetails, .harnessChanges, .saveHarnessChanges, .discardHarnessChanges].contains(operation),
+              isConnected, connectionID == connection, let client, let projectID else {
+            throw DiscoboxError("This computer reconnected. Close and reopen harness management.")
+        }
+        let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: boxID, harnessID: harnessID, payload: payload))
+        guard isConnected, connectionID == connection else { throw CancellationError() }
+        return try JSONDecoder().decode(JSONValue.self, from: data)
+    }
     public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, action: action, payload: payload, localPath: localPath, poolID: poolID))

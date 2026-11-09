@@ -163,6 +163,13 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 		// to wake. Bound the whole request by context, not a 10-second header wait.
 		b.client.Transport.(*http.Transport).ResponseHeaderTimeout = 0
 	}
+	if req.Operation == "harnessChanges" || req.Operation == "saveHarnessChanges" || req.Operation == "discardHarnessChanges" {
+		// Save-back can spend 30 seconds acknowledging a committed OAuth
+		// handoff. Keep it bounded by the operation context, not the ordinary
+		// 10-second header wait or 15-second metadata client timeout.
+		b.client.Timeout = 0
+		b.client.Transport.(*http.Transport).ResponseHeaderTimeout = 0
+	}
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, duration)
@@ -176,6 +183,9 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 }
 
 func requestTimeout(req request) time.Duration {
+	if req.Operation == "harnessChanges" || req.Operation == "saveHarnessChanges" || req.Operation == "discardHarnessChanges" {
+		return 90 * time.Second
+	}
 	if req.Operation == "boxAction" && req.Action == "archive" {
 		// Archive records an asynchronous intent, without waiting for runtime removal.
 		return 30 * time.Second
@@ -335,6 +345,8 @@ func validateInput(parts []inputPart) error {
 
 func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
+	case "harnessDetails", "harnessChanges", "saveHarnessChanges", "discardHarnessChanges":
+		return b.harnessManagement(ctx, req)
 	case "poolConfiguration", "updatePoolProxy":
 		return b.poolConfiguration(ctx, req)
 	case "poolResources", "clearPoolCache":

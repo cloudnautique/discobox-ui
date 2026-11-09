@@ -10,6 +10,16 @@ import DiscoboxCore
             ("upstream-" + item.kind, AnyView(ApprovalSheet(item: item).environment(workspace)))
         }
         panels.append(("pool-network", AnyView(PoolNetworkView(poolID: "local", computer: "Fixture computer", connection: workspace.connectionID).environment(workspace))))
+        let harnessWorkspace = Workspace()
+        await harnessWorkspace.connect(client: DemoClient(), label: "Harness fixture", demo: true)
+        let harness = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"demo-harness","name":"Agent subscription"}"#.utf8))
+        let saved = HarnessManagement(workspace: harnessWorkspace, harnessID: harness.id)
+        await saved.load()
+        let pending = HarnessManagement(workspace: harnessWorkspace, harnessID: harness.id)
+        await pending.load(); pending.selectBox("demo-ui"); await pending.refreshPreview()
+        for (name, model) in [("harness-saved", saved), ("harness-review", pending)] {
+            panels.append((name, AnyView(HarnessManagementView(harness: harness, manager: model, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))))
+        }
         return panels
     }
 }

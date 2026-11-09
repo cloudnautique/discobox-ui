@@ -4,6 +4,8 @@ import DiscoboxCore
 
 struct HarnessSettings: View {
     @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var error: String?
     @State private var loading = false
     @State private var defaultID = ""
@@ -24,12 +26,12 @@ struct HarnessSettings: View {
                                 Text(harness.name).fontWeight(.medium)
                                 if harness.id == defaultID { Text("Default").font(.caption).foregroundStyle(.secondary) }
                             }
-                            Text(harness.configured ? "Configured" : "Needs setup")
+                            Text(harness.usesLegacySetup ? (harness.configured ? "Configured" : "Needs setup") : "Ready to run · manage saved logins and settings")
                                 .font(.caption).foregroundStyle(harness.configured ? Color.secondary : Color.orange)
                         }
                         Spacer()
                         Button("Manage…") {
-                            HarnessSetupWindows.shared.open(harness, workspace: workspace)
+                            HarnessSetupWindows.shared.open(harness, workspace: workspace, connections: connections, commands: commands)
                         }.disabled(workspace.isDemo)
                     }.padding(.vertical, 6)
                 }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
@@ -158,8 +160,8 @@ struct CredentialSettings: View {
     }
 }
 
-@MainActor final class HarnessSetupWindows {
-    static let shared = HarnessSetupWindows()
+@MainActor final class HarnessConsoleWindows {
+    static let shared = HarnessConsoleWindows()
     private var windows: [String: HarnessSetupWindow] = [:]
     func close(connection: UUID) {
         for key in Array(windows.keys) where key.hasPrefix(connection.uuidString + ":") {
@@ -178,6 +180,10 @@ struct CredentialSettings: View {
             else { existing.window.makeKeyAndOrderFront(nil); return }
         }
         let session = TerminalSession(arguments: ["--configure-harness", harness.id, "--endpoint", workspace.transportEndpoint, "--project", project])
+        session.view.openURL = { raw in
+            guard let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return false }
+            return NSWorkspace.shared.open(url)
+        }
         let controller = HarnessSetupWindow(harness: harness, session: session, workspace: workspace) { [weak self] in
             self?.windows.removeValue(forKey: key)
         }

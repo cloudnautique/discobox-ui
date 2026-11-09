@@ -42,6 +42,7 @@ struct DiscoboxApp: App {
                     if let url = Bundle.main.url(forResource: "Discobox", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
                         NSApp.applicationIconImage = icon
                     }
+                    if ProcessInfo.processInfo.arguments.contains("--harness-smoke") { await HarnessManagementSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--multihost-smoke") { await MultiHostSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--desktop-smoke") { await DesktopSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--feature-smoke") { await FeatureSmoke.run() }
