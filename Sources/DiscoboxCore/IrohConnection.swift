@@ -7,26 +7,45 @@ public actor IrohConnection {
         public let endpoint: String?
         public let peerID: String?
         public let error: String?
+        public let errorKind: String?
     }
-    private nonisolated let process: IrohProcess
-    private var startup: Task<Ready, Error>?
+    private nonisolated let slot = IrohProcessSlot()
+    private let makeProcess: @Sendable () -> IrohProcess
+    private var startup: (id: UUID, task: Task<Ready, Error>)?
+    private var established = false
 
     public init(executable: URL, endpoint: String, seed: Data, relayURLs: [String] = [], directOnly: Bool = false) {
-        process = IrohProcess(executable: executable, arguments: ["--iroh-proxy", "--endpoint", endpoint], seed: seed, relayURLs: relayURLs, directOnly: directOnly)
+        makeProcess = { IrohProcess(executable: executable, arguments: ["--iroh-proxy", "--endpoint", endpoint], seed: seed, relayURLs: relayURLs, directOnly: directOnly) }
     }
     public func prepare() async throws -> String {
+        guard !slot.isClosed else { throw DiscoboxError("The remote connection helper stopped.") }
+        if established && !slot.isRunning {
+            startup = nil; established = false; slot.retire()
+        }
         if startup == nil {
-            let process = process
-            startup = Task.detached { try process.start() }
+            let process = makeProcess()
+            guard slot.install(process) else { throw CancellationError() }
+            startup = (UUID(), Task.detached { try process.start() })
         }
-        let ready = try await startup!.value
-        guard let endpoint = ready.endpoint, endpoint.hasPrefix("unix:///"), process.isRunning else {
-            throw DiscoboxError("The remote connection helper stopped. Disconnect and connect again.")
+        let attempt = startup!
+        do {
+            let ready = try await attempt.task.value
+            guard !slot.isClosed else { throw DiscoboxError("The remote connection helper stopped.") }
+            guard let endpoint = ready.endpoint, endpoint.hasPrefix("unix:///"), slot.isRunning else {
+                throw DiscoboxError("The remote connection helper stopped unexpectedly. Retrying can restart it.", connectionRetryable: true)
+            }
+            guard startup?.id == attempt.id else { throw CancellationError() }
+            established = true
+            return endpoint
+        } catch {
+            if startup?.id == attempt.id {
+                startup = nil; established = false; slot.retire()
+            }
+            throw error
         }
-        return endpoint
     }
-    public nonisolated func close() { process.close() }
-    deinit { process.close() }
+    public nonisolated func close() { slot.close() }
+    deinit { slot.close() }
 
     public static func peerID(executable: URL, seed: Data) async throws -> String {
         let process = IrohProcess(executable: executable, arguments: ["--iroh-identity"], seed: seed, relayURLs: [], directOnly: false)
@@ -36,6 +55,29 @@ public actor IrohConnection {
             guard let id = ready.peerID, id.hasPrefix("d1-") else { throw DiscoboxError("The companion returned an invalid peer ID.") }
             return id
         } onCancel: { process.close() }
+    }
+}
+
+/// close() can interrupt a pending startup without waiting for the actor. An
+/// explicitly closed connection never creates another helper.
+private final class IrohProcessSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: IrohProcess?
+    private var closed = false
+    var isClosed: Bool { lock.withLock { closed } }
+    var isRunning: Bool { lock.withLock { process?.isRunning == true } }
+    func install(_ value: IrohProcess) -> Bool {
+        let accepted = lock.withLock { if closed { return false }; process = value; return true }
+        if !accepted { value.close() }
+        return accepted
+    }
+    func retire() {
+        let previous = lock.withLock { let old = process; process = nil; return old }
+        previous?.close()
+    }
+    func close() {
+        let previous = lock.withLock { closed = true; let old = process; process = nil; return old }
+        previous?.close()
     }
 }
 
@@ -84,11 +126,11 @@ private final class IrohProcess: @unchecked Sendable {
                 line.append(byte)
                 guard line.count <= 8192 else { throw DiscoboxError("Invalid Iroh startup response.") }
             }
-            guard !lock.withLock({ cancelled }) else { throw DiscoboxError("Iroh connection setup was cancelled or timed out.") }
+            guard !lock.withLock({ cancelled }) else { throw DiscoboxError("Iroh connection setup was cancelled or timed out.", connectionRetryable: true) }
             guard let ready = try? JSONDecoder().decode(IrohConnection.Ready.self, from: line) else {
                 throw DiscoboxError("Iroh helper could not start. Rebuild the app and companion together.")
             }
-            if let error = ready.error { throw DiscoboxError(error) }
+            if let error = ready.error { throw DiscoboxError(error, connectionRetryable: ready.errorKind == "transport") }
             return ready
         } catch { close(); throw error }
     }

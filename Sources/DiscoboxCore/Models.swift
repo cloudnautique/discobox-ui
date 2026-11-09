@@ -174,7 +174,10 @@ public struct BridgeRequest: Encodable, Sendable {
 
 public struct DiscoboxError: LocalizedError, Sendable {
     public let message: String
-    public init(_ message: String) { self.message = message }
+    public let connectionRetryable: Bool
+    public init(_ message: String, connectionRetryable: Bool = false) {
+        self.message = message; self.connectionRetryable = connectionRetryable
+    }
     public var errorDescription: String? { message }
 }
 

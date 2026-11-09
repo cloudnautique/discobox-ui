@@ -63,3 +63,24 @@ private struct FixtureExecutable {
     }
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
+
+@Test func companionClassifiesRecoverableErrorsWithoutRetryingTheRequest() async throws {
+    for (status, kind, error, retryable) in [(502, "", "", true), (503, "", "", true), (403, "", "", false),
+                                            (400, "", "", false), (0, "transport", "fixture connection lost", true),
+                                            (0, "", "invalid destination", false)] {
+        let wire = try JSONSerialization.data(withJSONObject: ["version": 1, "status": status, "errorKind": kind, "error": error])
+        let fixture = try FixtureExecutable(script: """
+        #!/bin/sh
+        /bin/cat >/dev/null
+        printf x >> "$0.calls"
+        printf '%s' '\(String(decoding: wire, as: UTF8.self))'
+        """)
+        defer { fixture.remove() }
+        let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
+        do {
+            _ = try await client.perform(.init(.answer, projectID: "p", requestID: "ask", kind: "credential", action: "deny"))
+            Issue.record("Failed fixture response was accepted")
+        } catch { #expect(ConnectionRecovery.canRetry(error) == retryable) }
+        #expect(try Data(contentsOf: fixture.url.appendingPathExtension("calls")) == Data("x".utf8))
+    }
+}

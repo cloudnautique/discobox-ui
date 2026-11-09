@@ -34,11 +34,24 @@ struct ConnectionLifecycle: View {
             }
             .onChange(of: workspace.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
             .onChange(of: workspace.isConnected) { ApprovalNotifications.shared.synchronize(session) }
+            .onChange(of: workspace.transportEndpoint) { old, new in
+                if !old.isEmpty, old != new { runtime.terminals.closeAll(); runtime.forwards.closeAll() }
+            }
+            .onChange(of: workspace.lastRefresh) {
+                guard workspace.connectionError == nil, workspace.detailError == nil,
+                      let inventory = workspace.terminalInventory else { return }
+                runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+            }
             .onChange(of: workspace.pendingBoxActions) {
                 for box in workspace.pendingBoxActions { runtime.forwards.close(box: box); runtime.desktops.close(box: box) }
             }
             .onChange(of: workspace.terminalInventory) {
-                if let inventory = workspace.terminalInventory { runtime.terminals.retainExecs(inventory, connection: workspace.connectionID) }
+                if let inventory = workspace.terminalInventory {
+                    runtime.terminals.retainExecs(inventory, connection: workspace.connectionID)
+                    if workspace.connectionError == nil, workspace.detailError == nil {
+                        runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+                    }
+                }
             }
             .onChange(of: workspace.sandboxes) {
                 runtime.terminals.retainRunningBoxes(workspace.sandboxes, connection: workspace.connectionID)

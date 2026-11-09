@@ -28,7 +28,10 @@ struct DiscoboxApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     Task { await ApprovalNotifications.shared.refreshAuthorization() }
                 }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in connections.disconnectAll(); CompanionClient.cancelAllRequests(); runtimes.closeAll(); HarnessSetupWindows.shared.closeAll() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in ConnectionReachability.shared.stop(); connections.disconnectAll(); CompanionClient.cancelAllRequests(); runtimes.closeAll(); HarnessSetupWindows.shared.closeAll() }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+                    Task { await connections.retryInterruptedConnections(probeHealthy: true) }
+                }
                 .frame(minWidth: 1000, minHeight: 650)
                 .task {
                     if ProcessInfo.processInfo.arguments.contains("--notification-status") {
@@ -43,6 +46,8 @@ struct DiscoboxApp: App {
                         NSApp.applicationIconImage = icon
                     }
                     if ProcessInfo.processInfo.arguments.contains("--harness-smoke") { await HarnessManagementSmoke.run() }
+                    if ProcessInfo.processInfo.arguments.contains("--recovery-smoke") { await ConnectionRecoverySmoke.run() }
+                    if ProcessInfo.processInfo.arguments.contains("--recovery-terminal-smoke") { await ConnectionRecoverySmoke.run(includeTerminal: true) }
                     if ProcessInfo.processInfo.arguments.contains("--multihost-smoke") { await MultiHostSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--desktop-smoke") { await DesktopSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--feature-smoke") { await FeatureSmoke.run() }
@@ -68,6 +73,7 @@ struct DiscoboxApp: App {
                         await DialogSmoke.run(workspace: workspace, commands: commands, terminals: terminals)
                     }
                     ApprovalNotifications.shared.configure(connections)
+                    if !workspace.isDemo { ConnectionReachability.shared.start(connections) }
                 }
         }
         .defaultSize(width: 1320, height: 850)
@@ -97,7 +103,7 @@ struct DiscoboxApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(!workspace.isConnected)
                 Button("Disconnect Selected Computer") { connections.disconnect(connections.activeID) }
-                    .disabled(!workspace.isConnected && !workspace.isConnecting)
+                    .disabled(!workspace.canReconnect && !workspace.isConnecting)
             }
         }
         Settings {

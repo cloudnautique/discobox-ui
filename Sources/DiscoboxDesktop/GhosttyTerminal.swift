@@ -129,6 +129,7 @@ struct TerminalIdentity: Hashable {
 
 @MainActor @Observable final class TerminalStore {
     private var sessions: [TerminalIdentity: TerminalSession] = [:]
+    private var recoveryAfter: [TerminalIdentity: Date] = [:]
     func session(_ identity: TerminalIdentity) -> TerminalSession {
         if let value = sessions[identity] { return value }
         let value = TerminalSession(identity: identity); sessions[identity] = value; return value
@@ -141,27 +142,43 @@ struct TerminalIdentity: Hashable {
         }
     }
     func reconnect(_ identity: TerminalIdentity) {
+        recoveryAfter.removeValue(forKey: identity)
         sessions.removeValue(forKey: identity)?.close()
+    }
+    /// Reattach only an ended stream whose concrete exec was just confirmed
+    /// live. No process is created in the box and no terminal input is replayed.
+    func recoverInterrupted(_ inventory: Workspace.TerminalInventory, connection: UUID) {
+        let now = Date()
+        recoveryAfter = recoveryAfter.filter { $0.value > now }
+        for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && inventory.execIDs.contains(identity.exec) {
+            guard let session = sessions[identity], session.ended, session.error == nil,
+                  recoveryAfter[identity].map({ $0 <= now }) ?? true else { continue }
+            recoveryAfter[identity] = now.addingTimeInterval(10)
+            sessions.removeValue(forKey: identity)?.close()
+        }
     }
     func closeBox(_ box: String, connection: UUID) {
         for identity in Array(sessions.keys) where identity.box == box && identity.connection == connection {
+            recoveryAfter.removeValue(forKey: identity)
             sessions.removeValue(forKey: identity)?.close()
         }
     }
     func retainExecs(_ inventory: Workspace.TerminalInventory, connection: UUID) {
         for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && !inventory.execIDs.contains(identity.exec) {
+            recoveryAfter.removeValue(forKey: identity)
             sessions.removeValue(forKey: identity)?.close()
         }
     }
     func retainRunningBoxes(_ boxes: [Sandbox], connection: UUID) {
         let running = Set(boxes.filter(\.isRunning).map(\.id))
         for identity in Array(sessions.keys) where identity.connection == connection && !running.contains(identity.box) {
+            recoveryAfter.removeValue(forKey: identity)
             sessions.removeValue(forKey: identity)?.close()
         }
     }
     func closeAll() {
         for session in sessions.values { session.close() }
-        sessions.removeAll()
+        sessions.removeAll(); recoveryAfter.removeAll()
     }
 }
 

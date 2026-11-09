@@ -6,6 +6,9 @@ import Observation
     public private(set) var profile: ConnectionProfile
     public let workspace = Workspace()
     @ObservationIgnored private var polling: [Task<Void, Never>] = []
+    @ObservationIgnored private var attempt = UUID()
+    func beginConnection() -> UUID { stopPolling(); return attempt }
+    func ownsAttempt(_ value: UUID) -> Bool { attempt == value }
     public init(profile: ConnectionProfile) {
         self.profile = profile
         id = ConnectionProfiles.normalizedEndpoint(profile.endpoint)
@@ -17,27 +20,30 @@ import Observation
         let workspace = workspace
         polling = [Task {
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(3)) } catch { return }
-                if workspace.isConnected { await workspace.refresh() }
+                let delay = workspace.recovery.nextRetryAt.map { min(3, max(0.05, $0.timeIntervalSinceNow)) } ?? 3
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                if workspace.isConnecting || workspace.recovery.isAttempting { continue }
+                if workspace.recovery.nextRetryAt != nil { await workspace.retryConnection(automatically: true) }
+                else if workspace.isConnected && workspace.connectionError == nil { await workspace.refresh() }
             }
         }, Task {
             while !Task.isCancelled {
-                if workspace.isConnected { await workspace.refreshApprovals() }
+                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshApprovals() }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }, Task(priority: .utility) {
             while !Task.isCancelled {
-                if workspace.isConnected { await workspace.refreshResources() }
+                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshResources() }
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
             }
         }, Task(priority: .utility) {
             while !Task.isCancelled {
-                if workspace.isConnected { await workspace.refreshUsage() }
+                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshUsage() }
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }]
     }
-    func stopPolling() { polling.forEach { $0.cancel() }; polling.removeAll() }
+    func stopPolling() { attempt = UUID(); polling.forEach { $0.cancel() }; polling.removeAll() }
     deinit { polling.forEach { $0.cancel() } }
 }
 
@@ -107,13 +113,23 @@ public struct ConnectedBox: Identifiable, Sendable {
         syncProfiles([profile])
         let host = session(ConnectionProfiles.normalizedEndpoint(profile.endpoint))!
         if host.workspace.isConnected || host.workspace.isConnecting {
+            if host.workspace.connectionError != nil { await host.workspace.retryConnection() }
             if select && host.workspace.isConnected { activate(host.id) }
             return host
         }
+        if host.workspace.canReconnect {
+            await host.workspace.retryConnection()
+            if select && host.workspace.isConnected { activate(host.id) }
+            return host
+        }
+        let attempt = host.beginConnection()
         let transport = try client()
         await host.workspace.connect(client: transport, label: host.id, demo: demo)
+        guard host.ownsAttempt(attempt), !Task.isCancelled else { return host }
+        // Failed initial connects need the recovery loop just as much as
+        // connections that drop after their first successful inventory.
+        if pollingEnabled { host.startPolling() }
         if host.workspace.isConnected {
-            if pollingEnabled { host.startPolling() }
             if select { activate(host.id) }
         }
         return host
@@ -137,6 +153,14 @@ public struct ConnectedBox: Identifiable, Sendable {
         creations.removeAll { $0.id.connection == id }
     }
     public func disconnectAll() { for host in sessions { disconnect(host.id) } }
+    public func retryInterruptedConnections(probeHealthy: Bool = false) async {
+        await withTaskGroup(of: Void.self) { group in
+            for host in sessions where host.workspace.canReconnect && (probeHealthy || host.workspace.connectionError != nil) && !host.workspace.recovery.requiresAction {
+                let workspace = host.workspace
+                group.addTask { await workspace.retryConnection() }
+            }
+        }
+    }
     public var switcherBoxes: [ConnectedBox] {
         sessions.filter { $0.workspace.isConnected }.flatMap { host in
             let waiting = Set(host.workspace.approvals.map(\.boxID))

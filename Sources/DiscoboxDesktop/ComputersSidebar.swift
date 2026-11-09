@@ -163,7 +163,7 @@ struct ComputersSidebar: View {
                                 Text(host.profile.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if !host.workspace.approvals.isEmpty { Text("\(host.workspace.approvals.count)").font(.caption2).foregroundStyle(.orange) }
-                                Circle().fill(host.workspace.connectionError != nil ? .orange : host.workspace.isConnected ? .green : .secondary.opacity(0.5)).frame(width: 5, height: 5)
+                                ConnectionStatusBadge(workspace: host.workspace, compact: true)
                             }.font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Filter boxes on " + host.profile.displayName + ". Click again to show all computers.")
                             .accessibilityIdentifier("computers.filter." + host.id)
@@ -175,7 +175,10 @@ struct ComputersSidebar: View {
                             Button("Show All Computers") { browser.computerID = nil }
                             Button("Show Workspace") { connections.activate(host.id) }
                             Button("Manage Resources…") { resourceHost = host }.disabled(!host.workspace.isConnected)
-                            if host.workspace.isConnected || host.workspace.isConnecting {
+                            if host.workspace.connectionError != nil {
+                                Button("Retry now") { Task { await host.workspace.retryConnection() } }.disabled(host.workspace.recovery.isAttempting)
+                            }
+                            if host.workspace.canReconnect || host.workspace.isConnecting {
                                 Button("Disconnect") { connections.disconnect(host.id) }
                             } else { Button("Connect") { connect(host) } }
                         }
@@ -190,7 +193,8 @@ struct ComputersSidebar: View {
                 Button("Show all computers") { browser.computerID = nil }.font(.caption)
             }
             if let host = connections.sessions.first(where: { $0.id == browser.computerID }), !host.workspace.isConnected {
-                Button(host.workspace.isConnecting ? "Connecting…" : "Connect to " + host.profile.displayName) { connect(host) }.disabled(host.workspace.isConnecting)
+                Button(host.workspace.recovery.isAttempting ? "Reconnecting…" : host.workspace.canReconnect ? "Retry now" : "Connect to " + host.profile.displayName) { connect(host) }
+                    .disabled(host.workspace.isConnecting || host.workspace.recovery.isAttempting)
                 if let error = host.workspace.connectionError { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
             }
         }.padding(16)

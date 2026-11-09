@@ -68,6 +68,11 @@ On launch, the app tries the default local Discobox server. If the server is
 running, your boxes appear automatically. Otherwise, the app shows a connection
 screen; check that you have completed Discobox’s setup and started its server.
 Manage saved computers in **Discobox → Settings → Connections**.
+Computers you connect to retry automatically after network interruptions, including
+when the first attempt cannot reach the host. The app keeps your last-known boxes
+and selection visible, backs off between retries, and checks again after wake or
+network restoration. Use **Retry now** to check immediately; **Disconnect** stops
+retries. Authorization or certificate errors need your attention before retrying.
 
 - Press **⌘N** to create a box or **⌘K** to find and switch boxes.
 - Use the **+** beside a repository to create a box with that repository filled

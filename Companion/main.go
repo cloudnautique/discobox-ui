@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,6 +27,8 @@ import (
 )
 
 const maxBody = 8 << 20
+
+var errEndpointRedirect = errors.New("redirects are not accepted")
 
 type request struct {
 	RemotePath string          `json:"remotePath,omitempty"`
@@ -51,10 +54,11 @@ type inputPart struct {
 }
 
 type response struct {
-	Version int    `json:"version"`
-	Status  int    `json:"status"`
-	Body    []byte `json:"body,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Version   int    `json:"version"`
+	Status    int    `json:"status"`
+	Body      []byte `json:"body,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorKind string `json:"errorKind,omitempty"`
 }
 
 type bridge struct {
@@ -92,7 +96,7 @@ func main() {
 	}
 	if *irohProxy || *irohIdentity {
 		if err := runIroh(*endpoint, *irohIdentity, os.Stdin, os.Stdout); err != nil {
-			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error(), "errorKind": companionErrorKind(err)})
 			os.Exit(1)
 		}
 		return
@@ -126,8 +130,27 @@ func main() {
 	err := runManaged(*endpoint, *allowInput, *allowShell, *allowManage, os.Stdin, &out)
 	if err != nil {
 		out.Error = err.Error()
+		out.ErrorKind = companionErrorKind(err)
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+
+func companionErrorKind(err error) string {
+	if errors.Is(err, errEndpointRedirect) {
+		return ""
+	}
+	var untrusted x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &untrusted) || errors.As(err, &hostname) || errors.As(err, &invalid) {
+		return ""
+	}
+	var transportError *url.Error
+	var networkError net.Error
+	if errors.As(err, &transportError) || errors.As(err, &networkError) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "transport"
+	}
+	return ""
 }
 
 func run(endpoint string, allowInput bool, input io.Reader, out *response) error {
@@ -256,7 +279,7 @@ func newBridge(endpoint string, allowInput bool) (*bridge, error) {
 		return nil, errors.New("this build supports unix:// and existing http:// or https:// endpoints; Iroh support is not yet implemented")
 	}
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects are not accepted") },
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errEndpointRedirect },
 	}
 	return &bridge{client: client, base: base, allowInput: allowInput}, nil
 }

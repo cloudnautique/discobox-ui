@@ -36,6 +36,9 @@ public final class Workspace {
     public private(set) var inventoryObservedAt: String?
     public private(set) var servicesObservedAt: String?
     public private(set) var connectionError: String?
+    public private(set) var recovery = ConnectionRecovery()
+    public private(set) var recoveryCount = 0
+    @ObservationIgnored private var recoveryInFlight = false
     public private(set) var detailError: String?
     public private(set) var screenError: String?
     public private(set) var isOpeningShell = false
@@ -95,6 +98,7 @@ public final class Workspace {
     }
 
     public var selectedBox: Sandbox? { sandboxes.first { $0.id == sandboxID } }
+    public var canReconnect: Bool { client != nil }
     public var selectedExec: Exec? { execs.first { $0.id == execID } }
     public var canSendInput: Bool {
         isConnected && connectionError == nil && detailError == nil && screenError == nil &&
@@ -141,6 +145,7 @@ public final class Workspace {
         isDemo = demo
         isConnecting = true
         let current = revision
+        defer { if current == revision, Task.isCancelled { disconnect() } }
         do {
             let transport = try await client.prepareConnection()
             guard current == revision, !Task.isCancelled else { return }
@@ -158,9 +163,10 @@ public final class Workspace {
             isConnecting = false
             if connectionError != nil { isConnected = false }
         } catch {
-            guard current == revision else { return }
+            guard current == revision, !Task.isCancelled else { return }
             isConnecting = false
             connectionError = error.localizedDescription
+            recovery.failed(error, now: now())
         }
     }
 
@@ -186,6 +192,7 @@ public final class Workspace {
         isDemo = false
         lastRefresh = nil
         connectionError = nil
+        recovery.reset(); recoveryInFlight = false; recoveryCount = 0
         clearSelection()
     }
 
@@ -225,10 +232,14 @@ public final class Workspace {
 
     public func refresh() async {
         guard isConnected, let client, let projectID else { return }
+        if connectionError != nil && !recoveryInFlight && !isConnecting {
+            await retryConnection(); return
+        }
         let current = revision
         let request = UUID()
         listRequest = request
         do {
+            let transport = try await client.prepareConnection()
             let result = try await client.decode(.init(.sandboxes, projectID: projectID), as: SandboxesResponse.self)
             guard current == revision, request == listRequest, !Task.isCancelled else { return }
             let updatedBoxes = (result.sandboxes ?? []).filter { !$0.isDeleted && !confirmedPurges.contains($0.id) }
@@ -236,13 +247,17 @@ public final class Workspace {
             let running = Set(updatedBoxes.filter(\.isRunning).map(\.id))
             recentBoxes = recentBoxes.filter { running.contains($0.key) && now().timeIntervalSince($0.value.loadedAt) < 30 }
             connectionError = nil
-            lastRefresh = Date()
+            if !recoveryInFlight { recovery.reset() }
+            if let transport, transportEndpoint != transport { transportEndpoint = transport }
             if let sandboxID, !sandboxes.contains(where: { $0.id == sandboxID }) { clearSelection() }
             if selectedBox?.isRunning != true { inputEnabled = false }
             await refreshDetails()
+            guard current == revision, request == listRequest, !Task.isCancelled else { return }
+            lastRefresh = now()
         } catch {
             guard current == revision, request == listRequest, !Task.isCancelled else { return }
             connectionError = error.localizedDescription
+            recovery.failed(error, now: now())
             inputEnabled = false
         }
     }
@@ -491,6 +506,7 @@ public final class Workspace {
     }
 
     public func reconnect() async {
+        if connectionError != nil || !isConnected { await retryConnection(); return }
         guard let client else { return }
         let label = endpointLabel, demo = isDemo, box = sandboxID, terminal = execID
         self.client = nil // Preserve the shared transport while reconnecting this workspace.
@@ -498,6 +514,51 @@ public final class Workspace {
         if isConnected {
             await selectBox(box)
             if let terminal, execs.contains(where: { $0.id == terminal }) { await selectExec(terminal) }
+        }
+    }
+    /// Probe the same host without clearing its last-known boxes or selection.
+    /// Replacing a default project starts a fresh generation, invalidating old
+    /// confirmations rather than retargeting them to a different project.
+    public func retryConnection(automatically: Bool = false) async {
+        guard let client, !isConnecting, !recoveryInFlight else { return }
+        if automatically {
+            guard let deadline = recovery.nextRetryAt, deadline <= now(), !recovery.requiresAction else { return }
+        }
+        let current = revision, wasConnected = isConnected
+        recoveryInFlight = true; recovery.begin()
+        defer {
+            if current == revision {
+                recoveryInFlight = false
+                if Task.isCancelled, recovery.isAttempting {
+                    recovery.failed(URLError(.networkConnectionLost), now: now())
+                }
+            }
+        }
+        do {
+            let transport = try await client.prepareConnection()
+            let project = try await client.decode(.init(.defaultProject), as: Project.self)
+            guard current == revision, !Task.isCancelled else { return }
+            if let projectID, projectID != project.id {
+                let label = endpointLabel, demo = isDemo
+                self.client = nil
+                await connect(client: client, label: label, demo: demo)
+                return
+            }
+            projectID = project.id; isConnected = true
+            await refresh()
+            guard current == revision, !Task.isCancelled else { return }
+            if connectionError == nil {
+                if let transport { transportEndpoint = transport }
+                recovery.reset(); recoveryCount += 1
+                Task { [weak self] in
+                    guard let self, self.revision == current else { return }
+                    _ = try? await self.harnesses()
+                }
+            } else if !wasConnected { isConnected = false }
+        } catch {
+            guard current == revision, !Task.isCancelled else { return }
+            connectionError = error.localizedDescription; inputEnabled = false
+            recovery.failed(error, now: now())
         }
     }
     public func refreshUsage() async {

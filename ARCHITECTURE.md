@@ -27,6 +27,23 @@ inventory in light and dark themes using isolated fixtures. Set
 
 ## Upstream API integration
 
+Every requested computer owns its recovery schedule, including after a failed
+first connection. Only connection probes and reads are retried, with jittered
+2/4/8/16/30-second backoff. Disconnected computers stay disconnected; a network
+availability/wake hint only probes clients already requested by the user.
+Transport errors and transient HTTP statuses are classified at the companion
+boundary; HTTP authorization, certificate and protocol failures pause recovery.
+Cached boxes, selection and generation survive a transient outage. A changed
+default project starts a fresh generation and invalidates old confirmations.
+Failed/exited Iroh helpers may restart using the same enrollment identity; a
+closed client may never restart. Writes and terminal input are never replayed.
+Ended terminal attachments are replaced only after a fresh inventory confirms
+the concrete exec is still live, with a cooldown. Healthy surfaces and existing
+port listeners stay intact when the private transport endpoint is unchanged.
+`--recovery-smoke` renders the offline retry/attention UI in both themes;
+`--recovery-terminal-smoke` additionally exercises synthetic Ghostty attachment
+replacement and requires an available macOS renderer. Neither uses live hosts.
+
 The approval inbox preserves all five request kinds: credential, trust, refresh,
 adoption, and API access. Future kinds remain visible for review in a compatible
 console. Consent requests use their own routes and authority summaries. They

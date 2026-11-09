@@ -95,7 +95,7 @@ struct WorkspaceView: View {
                     Text("Connecting to Discobox…").font(.title2.weight(.semibold))
                     Text(workspace.endpointLabel == "unix://" ? "Looking for your default local server." : workspace.endpointLabel)
                         .foregroundStyle(.secondary)
-                    Button("Cancel") { workspace.disconnect() }.keyboardShortcut(.cancelAction)
+                    Button("Cancel") { if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() } }.keyboardShortcut(.cancelAction)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
             } else if workspace.isConnected || connections?.sessions.contains(where: { $0.workspace.isConnected }) == true {
                 VStack(spacing: 0) {
@@ -251,12 +251,11 @@ struct WorkspaceView: View {
                             .lineLimit(1).truncationMode(.middle)
                     }
                     Spacer()
-                    Circle().fill(workspace.isConnected && workspace.connectionError == nil ? Color.green : .orange).frame(width: 6, height: 6)
-                    Text(workspace.isDemo ? "Demo" : (!workspace.isConnected ? "Disconnected" : workspace.connectionError == nil ? "Connected" : "Connection interrupted")).font(.caption).foregroundStyle(.secondary)
+                    ConnectionStatusBadge(workspace: workspace)
                     if let connections { Text(connections.active.profile.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(workspace.endpointLabel) }
                     Button { Task { await workspace.reconnect() } } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless).help("Reconnect to server")
-                        .disabled(workspace.isConnecting)
+                        .disabled(workspace.isConnecting || workspace.recovery.isAttempting)
                 }.font(.caption).padding(.horizontal, 14).frame(height: 30).background(DiscoboxAppearance.chrome)
                 }
                 .navigationTitle("")
@@ -306,7 +305,11 @@ struct WorkspaceView: View {
                 }
                 .toolbar(removing: .sidebarToggle)
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    if let error = workspace.connectionError { Notice(text: error, symbol: "wifi.exclamationmark") }
+                    if workspace.connectionError != nil {
+                        ConnectionRecoveryBanner(workspace: workspace, computer: connections?.active.profile.displayName ?? workspace.endpointLabel) {
+                            if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() }
+                        }
+                    }
                     if let error = workspace.commandError {
                         HStack { Notice(text: error, symbol: "exclamationmark.triangle"); Button("Dismiss") { workspace.commandError = nil }.padding(.trailing) }
                     }
@@ -789,6 +792,7 @@ struct Notice: View {
 
 struct WelcomeView: View {
     @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "shippingbox.fill").font(.system(size: 52)).foregroundStyle(.tint)
@@ -799,8 +803,10 @@ struct WelcomeView: View {
                     .font(.title3).foregroundStyle(.secondary)
             }
             ConnectionSettings().frame(width: 520)
-            if let error = workspace.connectionError {
-                Notice(text: error, symbol: "exclamationmark.triangle").frame(maxWidth: 600)
+            if workspace.connectionError != nil {
+                ConnectionRecoveryBanner(workspace: workspace, computer: connections?.active.profile.displayName ?? workspace.endpointLabel) {
+                    if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() }
+                }.frame(maxWidth: 640)
             }
             HStack(spacing: 16) {
                 Button("Explore demo workspace") {

@@ -176,7 +176,7 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 		ErrorLog:      log.New(io.Discard, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
+			w.WriteHeader(irohProxyErrorStatus(err))
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Remote Discobox is unreachable or refused this peer. Check its Iroh listener, network, and peer enrollment. Transport error: " + err.Error()})
 		},
 	}
@@ -204,4 +204,17 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 		}
 		return err
 	}
+}
+
+// Upstream forwards the server's admission close reason in these errors. Only
+// explicit enrollment refusals are permanent; startup, shutdown and network
+// failures must remain retryable rather than guessing from an opaque IrohError.
+func irohProxyErrorStatus(err error) int {
+	reason := strings.ToLower(err.Error())
+	for _, refusal := range []string{"not authorized", "not enrolled", "peer revoked"} {
+		if strings.Contains(reason, refusal) {
+			return http.StatusForbidden
+		}
+	}
+	return http.StatusBadGateway
 }

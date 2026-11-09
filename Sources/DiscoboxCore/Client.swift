@@ -52,14 +52,14 @@ public actor CompanionClient: DiscoboxClient {
         do { response = try JSONDecoder().decode(BridgeResponse.self, from: data) }
         catch { throw DiscoboxError("The companion returned an invalid response. Rebuild the app and companion together.") }
         guard response.version == 1 else { throw DiscoboxError("Unsupported companion protocol version.") }
-        if let error = response.error, !error.isEmpty { throw DiscoboxError(error) }
+        if let error = response.error, !error.isEmpty { throw DiscoboxError(error, connectionRetryable: response.errorKind == "transport") }
         guard (200..<300).contains(response.status) else {
             if response.status == 401 || response.status == 403 {
                 throw DiscoboxError("Access refused (\(response.status)). For Iroh, enroll this app’s peer ID on the remote server or check whether it was revoked. Discobot authentication is not supported.")
             }
             let problem = response.body.flatMap { try? JSONDecoder().decode(APIProblem.self, from: $0) }
             let detail = problem?.detail ?? problem?.error ?? problem?.message ?? "The request was refused."
-            throw DiscoboxError("HTTP \(response.status): \(detail)")
+            throw DiscoboxError("HTTP \(response.status): \(detail)", connectionRetryable: [408, 425, 429, 500, 502, 503, 504].contains(response.status))
         }
         return response.body ?? Data()
     }
@@ -70,6 +70,7 @@ private struct BridgeResponse: Decodable {
     let status: Int
     let body: Data?
     let error: String?
+    let errorKind: String?
 }
 private struct APIProblem: Decodable {
     let detail: String?
@@ -150,7 +151,7 @@ private final class ProcessRequest: @unchecked Sendable {
             }
             process.waitUntilExit()
             if lock.withLock({ cancelled }) { throw CancellationError() }
-            guard process.terminationStatus == 0 else { throw DiscoboxError("The companion exited unexpectedly (\(process.terminationStatus)).") }
+            guard process.terminationStatus == 0 else { throw DiscoboxError("The companion exited unexpectedly (\(process.terminationStatus)).", connectionRetryable: true) }
             return output
         } catch {
             cancel()
