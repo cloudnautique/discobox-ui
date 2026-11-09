@@ -155,12 +155,20 @@ struct ScopedCredentialApprovalView: View {
             }
             ForEach(Array(context["held"].array.enumerated()), id: \.offset) { _, row in
                 if row["envVar"] == request["envName"] {
-                    Text("Currently held: " + row["secretName"].string + " · " + row["from"].string + (row["adds"] == .bool(true) ? " · addition" : "") + " · " + (row["expiresAt"].string.isEmpty ? "no expiry" : row["expiresAt"].string)).font(.caption).foregroundStyle(.secondary)
+                    Text(heldCredentialDescription(row)).font(.caption).foregroundStyle(.secondary)
                     ForEach(Array(row["routes"].array.enumerated()), id: \.offset) { index, routes in RouteReview(routes: routes.array, title: "Held ceiling \(index + 1)") }
                 }
             }
             Text("A denied part leaves its current bindings unchanged. No decision has been sent yet.").font(.caption).foregroundStyle(.secondary)
         }.padding(12).studioCard()
+    }
+    private func heldCredentialDescription(_ row: JSONValue) -> String {
+        let name: String = row["secretName"].string
+        let source: String = row["from"].string
+        let addition: String = row["adds"] == .bool(true) ? " · addition" : ""
+        let expiresAt: String = row["expiresAt"].string
+        let expiry: String = expiresAt.isEmpty ? "no expiry" : expiresAt
+        return "Currently held: \(name) · \(source)\(addition) · \(expiry)"
     }
     private func receiptSummary(_ result: JSONValue) -> some View {
         VStack(alignment: .leading, spacing: 16) {
