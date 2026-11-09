@@ -92,7 +92,7 @@ Manage saved computers in **Discobox → Settings → Connections**.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.
 - To save a harness subscription login, sign in inside a box, then open
   **Settings → Harnesses → Manage…**, choose that box, and **Review changes**.
-  Confirm the review and **Save reviewed changes** to share the login with that
+  Confirm the review and **Save changes** to share the login with that
   harness’s other boxes. Refreshable OAuth logins renew on the server; a copied
   access token does not include refresh credentials. This requires the newer
   Discobox save-back API; older servers show an update/matching-CLI explanation.

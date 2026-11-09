@@ -52,6 +52,18 @@ import Testing
         #expect(model.result == .null && model.error != nil && model.review == .null)
         #expect(await client.writes.count == 1)
     }
+    @Test func failedBoxUpdateCheckKeepsTheDurableSaveReceiptVisible() async throws {
+        let client = HarnessFixture(failPreviewAfterSave: true)
+        let workspace = Workspace()
+        await workspace.connect(client: client, label: "fixture", demo: true)
+        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        model.selectBox("demo-ui"); await model.refreshPreview(); await model.answer(save: true)
+        #expect(model.result["state"].string == "saved-handoff-pending")
+        await model.refreshPreview()
+        #expect(model.result["state"].string == "saved-handoff-pending")
+        #expect(model.error != nil && model.review == .null && !model.canSave)
+        #expect(await client.writes.count == 1)
+    }
     @Test func legacyReadinessIsDistinctFromARefreshableSavedLogin() throws {
         let current = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Agent"}"#.utf8))
         let old = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Agent","configured":false,"configCommand":["setup"]}"#.utf8))
@@ -64,9 +76,13 @@ private actor HarnessFixture: DiscoboxClient {
     let base = DemoClient()
     let failSave: Bool
     let wrongReceipt: Bool
+    let failPreviewAfterSave: Bool
     var writes: [BridgeRequest] = []
-    init(failSave: Bool = false, wrongReceipt: Bool = false) { self.failSave = failSave; self.wrongReceipt = wrongReceipt }
+    init(failSave: Bool = false, wrongReceipt: Bool = false, failPreviewAfterSave: Bool = false) {
+        self.failSave = failSave; self.wrongReceipt = wrongReceipt; self.failPreviewAfterSave = failPreviewAfterSave
+    }
     func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .harnessChanges, failPreviewAfterSave, !writes.isEmpty { throw DiscoboxError("Box temporarily unavailable") }
         if request.operation == .saveHarnessChanges {
             writes.append(request)
             if wrongReceipt { return Data(#"{"state":"saved","harnessConfigId":"other","candidateId":"demo-candidate"}"#.utf8) }

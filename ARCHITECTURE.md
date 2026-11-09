@@ -65,6 +65,11 @@ routes and grant lifetimes never pass through this flow. A durable
 fresh review rather than replaying an uncertain save. The advanced terminal
 console remains an explicit option for newer servers; older harness schemas
 still load natively and explain how to use their matching host CLI.
+The resizable window separates a compact saved-state overview from the source-box
+review. Computer and source stay visible, and consent/save controls sit outside
+the scrolling change list. File comparisons load on expansion with bounded diff
+work; large files retain full before/after views. Refreshing an unavailable source
+box never erases the durable save receipt or automatically repeats a write.
 
 Native colors are generated from `discobox/assets/brand/tokens.json` by
 `make brand-tokens`. Lint verifies the generated copy; the UI never defines a

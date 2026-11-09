@@ -11,25 +11,21 @@ import DiscoboxCore
             await workspace.connect(client: client, label: "Harness fixture", demo: true)
             let harness = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"demo-harness","name":"Subscription agent"}"#.utf8))
             let model = HarnessManagement(workspace: workspace, harnessID: harness.id)
-            await model.load(); model.selectBox("demo-ui"); await model.refreshPreview()
-            guard model.canSave else { throw DiscoboxError("Missing candidate fixture") }
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 690), styleMask: [.titled], backing: .buffered, defer: false)
+            await model.load(); model.selectBox("demo-ui")
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.contentView = NSHostingView(rootView: HarnessManagementView(harness: harness, manager: model, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))
             window.makeKeyAndOrderFront(nil)
             try await Task.sleep(for: .milliseconds(350))
-            if let root = window.contentView {
-                for view in descendants(root) {
-                    if let scroll = view as? NSScrollView, let document = scroll.documentView {
-                        document.scroll(NSPoint(x: 0, y: document.isFlipped ? max(0, document.bounds.height - scroll.contentSize.height) : 0))
-                        scroll.reflectScrolledClipView(scroll.contentView)
-                    }
-                }
-                fflush(stdout)
-            }
+            try await wait { saveButton(window)?.isEnabled == true }
+            saveButton(window)!.performClick(nil)
+            try await wait { model.review != .null && !model.busy }
             try await wait { saveButton(window) != nil && reviewButton(window) != nil }
             guard saveButton(window)?.isEnabled == false else { throw DiscoboxError("Save enabled before review") }
             try click(reviewButton(window)!, window: window)
             try await wait { saveButton(window)?.isEnabled == true }
+            window.setContentSize(NSSize(width: 900, height: 760))
+            try await Task.sleep(for: .milliseconds(150))
+            guard saveButton(window)?.isEnabled == true else { throw DiscoboxError("Resizing lost review consent") }
             saveButton(window)!.performClick(nil)
             try await wait { model.result["state"].string == "saved-handoff-pending" && !model.busy }
             guard await client.saves == 1 else { throw DiscoboxError("Save duplicated") }
@@ -40,7 +36,7 @@ import DiscoboxCore
             create.orderFront(nil)
             try await wait { descendants(create.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.titleOfSelectedItem == "Subscription agent" } }
             create.orderOut(nil); workspace.disconnect()
-            print("HARNESS_MANAGEMENT_SMOKE_OK: native review gates save, one host-scoped candidate POST, durable handoff-pending receipt without re-save, and sign-in box keeps its chosen harness")
+            print("HARNESS_MANAGEMENT_SMOKE_OK: overview opens focused review, fixed consent/save fit the minimum window and survive resizing, one host-scoped save, durable receipt, and sign-in box keeps its chosen harness")
             fflush(stdout); exit(0)
         } catch { print("HARNESS_MANAGEMENT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
@@ -51,14 +47,18 @@ import DiscoboxCore
     }
     private static func reviewButton(_ window: NSWindow) -> NSButton? {
         guard let root = window.contentView else { return nil }
-        // SwiftUI exposes AX identity through proxy nodes, rather than its
-        // backing NSButton. In this fixture the final document control is the
-        // review checkbox; the enabled default action independently verifies it.
-        guard let document = descendants(root).compactMap({ $0 as? NSScrollView }).first?.documentView else { return nil }
-        return descendants(document).compactMap { $0 as? NSButton }.sorted { lhs, rhs in
-            let left = lhs.convert(lhs.bounds, to: document).midY
-            let right = rhs.convert(rhs.bounds, to: document).midY
-            return document.isFlipped ? left > right : left < right
+        // SwiftUI exposes AX identity through proxy nodes. In this fixture the
+        // checkbox is the first native control in the fixed footer, outside
+        // the scrolling diff. The default Save action independently verifies it.
+        guard let scroll = descendants(root).compactMap({ $0 as? NSScrollView }).first else { return nil }
+        let content = scroll.convert(scroll.bounds, to: root)
+        return descendants(root).compactMap { $0 as? NSButton }.filter { button in
+            let rect = button.convert(button.bounds, to: root)
+            return root.isFlipped ? rect.midY > content.maxY : rect.midY < content.minY
+        }.sorted { lhs, rhs in
+            let left = lhs.convert(lhs.bounds, to: root).midY
+            let right = rhs.convert(rhs.bounds, to: root).midY
+            return root.isFlipped ? left < right : left > right
         }.first
     }
     private static func click(_ button: NSButton, window: NSWindow) throws {

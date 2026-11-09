@@ -20,6 +20,12 @@ import DiscoboxCore
         for (name, model) in [("harness-saved", saved), ("harness-review", pending)] {
             panels.append((name, AnyView(HarnessManagementView(harness: harness, manager: model, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))))
         }
+        let file: JSONValue = .object([
+            "path": .string("~/.config/agent/settings.json"),
+            "previous": .object(["content": .string("{\n  \"theme\": \"system\",\n  \"model\": \"default\"\n}")]),
+            "file": .object(["content": .string("{\n  \"theme\": \"dark\",\n  \"model\": \"default\",\n  \"notifications\": true\n}")])
+        ])
+        panels.append(("harness-file-diff", AnyView(HarnessFileChangeView(file: file, initiallyExpanded: true).padding(24).frame(width: 680).background(DiscoboxAppearance.surface))))
         return panels
     }
 }

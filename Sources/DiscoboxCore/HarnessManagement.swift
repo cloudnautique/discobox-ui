@@ -51,13 +51,13 @@ import Observation
     public func refreshPreview() async {
         guard validConnection, !busy, !boxID.isEmpty else { return }
         let source = boxID, token = revision
-        busy = true; error = nil; review = .null; result = .null
+        busy = true; error = nil; review = .null
         defer { busy = false }
         do {
             let value = try await perform(.harnessChanges, box: source)
             guard validConnection, token == revision, boxID == source else { return }
             guard value["changes"]["harnessConfigId"].string == harnessID, !value["fingerprint"].string.isEmpty else { throw DiscoboxError("Invalid harness preview. Refresh and try again.") }
-            review = value
+            review = value; result = .null
         } catch { if validConnection, token == revision { self.error = error.localizedDescription } }
     }
     public func answer(save: Bool) async {
