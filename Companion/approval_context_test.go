@@ -4,11 +4,65 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/discobox-ai/discobox/pkg/bindingplan"
 )
+
+func TestApprovalContextWireEnvelope(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusNotFound} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Errorf("preview mutated %s", r.URL)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if status != http.StatusOK {
+					w.WriteHeader(status)
+					io.WriteString(w, `{"detail":"Request no longer exists"}`)
+					return
+				}
+				switch r.URL.Path {
+				case "/projects/p/secret-requests/ask":
+					io.WriteString(w, `{"id":"ask","sandboxId":"requester","envName":"TOKEN","status":"pending","use":{}}`)
+				case "/projects/p/secrets":
+					io.WriteString(w, `{"secrets":[]}`)
+				case "/projects/p/bound-secrets":
+					io.WriteString(w, `{"boundSecrets":[]}`)
+				case "/projects/p/secret-bindings":
+					io.WriteString(w, `{"secretBindings":[]}`)
+				default:
+					t.Errorf("unexpected preview route %s", r.URL)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			out := response{Version: 1}
+			input := `{"operation":"approvalContext","projectID":"p","requestID":"ask"}`
+			if err := runManaged(server.URL, false, false, false, strings.NewReader(input), &out); err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded response
+			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != 1 || decoded.Status != status || !json.Valid(decoded.Body) {
+				t.Fatalf("invalid approval envelope: version=%d status=%d err=%v", decoded.Version, decoded.Status, err)
+			}
+			if status == http.StatusOK {
+				var review approvalContext
+				if err = json.Unmarshal(decoded.Body, &review); err != nil || review.Fingerprint == "" {
+					t.Fatalf("missing credential review: %v", err)
+				}
+			} else if !strings.Contains(string(decoded.Body), "Request no longer exists") {
+				t.Fatal("API error detail was lost")
+			}
+		})
+	}
+}
 
 func TestCredentialReviewUsesRequesterAndCanonicalCombinedPlan(t *testing.T) {
 	b, _ := newBridge("http://fixture", false)

@@ -5,10 +5,68 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestHarnessManagementWireEnvelopes(t *testing.T) {
+	preview := `{"candidateId":"login-one","harnessConfigId":"h","state":"pending","files":[{"path":"settings.json","file":{"path":"settings.json","content":"{}"}}]}`
+	for _, operation := range []string{"harnessDetails", "harnessChanges", "saveHarnessChanges", "discardHarnessChanges"} {
+		t.Run(operation, func(t *testing.T) {
+			writes := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method + " " + r.URL.Path {
+				case "GET /projects/p/harness-configs/h":
+					io.WriteString(w, `{"id":"h","configuredFiles":[]}`)
+				case "GET /projects/p/bound-secrets":
+					io.WriteString(w, `{"boundSecrets":[]}`)
+				case "GET /projects/p/secrets":
+					io.WriteString(w, `{"secrets":[]}`)
+				case "GET /projects/p/sandboxes/source":
+					io.WriteString(w, `{"config":{"harnessConfigId":"h"}}`)
+				case "GET /api/projects/p/sandboxes/source/harness-config-changes":
+					io.WriteString(w, preview)
+				case "POST /api/projects/p/sandboxes/source/harness-config-changes/save":
+					writes++
+					io.WriteString(w, `{"candidateId":"login-one","harnessConfigId":"h","state":"saved"}`)
+				case "POST /api/projects/p/sandboxes/source/harness-config-changes/discard":
+					writes++
+					io.WriteString(w, `{"state":"discarded"}`)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			payload, _ := json.Marshal(map[string]string{"candidateId": "login-one", "fingerprint": harnessReviewFingerprint([]byte(preview))})
+			input, _ := json.Marshal(request{Operation: operation, ProjectID: "p", HarnessID: "h", SandboxID: "source", Payload: payload})
+			out := response{Version: 1}
+			if err := runManaged(server.URL, false, false, true, strings.NewReader(string(input)), &out); err != nil {
+				t.Fatal(err)
+			}
+			// Exercise the process boundary, not only the internal operation DTO:
+			// the Swift client rejects an otherwise valid body with version zero.
+			wire, err := json.Marshal(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded response
+			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != 1 || decoded.Status != 200 || !json.Valid(decoded.Body) {
+				t.Fatalf("invalid companion envelope: version=%d status=%d err=%v", decoded.Version, decoded.Status, err)
+			}
+			wantWrites := 0
+			if operation == "saveHarnessChanges" || operation == "discardHarnessChanges" {
+				wantWrites = 1
+			}
+			if writes != wantWrites {
+				t.Fatalf("writes=%d, want %d", writes, wantWrites)
+			}
+		})
+	}
+}
 
 func TestHarnessSaveIsAnExplicitReviewedCandidateOnItsOriginalBox(t *testing.T) {
 	b, _ := newBridge("http://fixture", false)

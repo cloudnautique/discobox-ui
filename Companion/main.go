@@ -178,6 +178,9 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	if err != nil {
 		return err
 	}
+	// The wire version belongs to this process boundary. Assembled responses
+	// (harness metadata, credential previews) do not pass through b.call.
+	result.Version = 1
 	*out = result
 	return nil
 }
