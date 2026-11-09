@@ -17,6 +17,8 @@ struct DiscoboxApp: App {
     @State private var commands = WorkspaceCommands()
     @State private var didAttemptStartup = false
 
+    init() { BrandTypography.register() }
+
     var body: some Scene {
         Window("Discobox", id: "workspace") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
@@ -148,17 +150,16 @@ enum DiscoboxAppearance {
         guard NSApp.appearance?.name != name else { return }
         NSApp.appearance = name.flatMap { NSAppearance(named: $0) }
     }
-    static let accent = adaptive(light: NSColor(red: 0.50, green: 0.37, blue: 0.72, alpha: 1), dark: NSColor(red: 0.74, green: 0.64, blue: 0.90, alpha: 1))
-    static let canvas = adaptive(light: NSColor(red: 0.985, green: 0.985, blue: 0.993, alpha: 1), dark: NSColor(red: 0.125, green: 0.125, blue: 0.14, alpha: 1))
-    static let chrome = adaptive(light: NSColor(red: 0.972, green: 0.972, blue: 0.98, alpha: 1), dark: NSColor(red: 0.162, green: 0.16, blue: 0.18, alpha: 1))
-    static let sidebar = adaptive(light: NSColor(red: 0.943, green: 0.939, blue: 0.96, alpha: 1), dark: NSColor(red: 0.147, green: 0.145, blue: 0.164, alpha: 1))
-    static let surface = adaptive(light: NSColor(red: 0.958, green: 0.954, blue: 0.973, alpha: 1), dark: NSColor(red: 0.18, green: 0.175, blue: 0.20, alpha: 1))
-    static let border = adaptive(light: NSColor(red: 0.86, green: 0.85, blue: 0.89, alpha: 1), dark: NSColor(red: 0.225, green: 0.22, blue: 0.25, alpha: 1))
-    static let selection = accent.opacity(0.14)
+    static let accent = BrandTokens.magenta
+    static let canvas = BrandTokens.ink
+    static let chrome = BrandTokens.inkRaised
+    static let sidebar = BrandTokens.inkSunken
+    static let surface = BrandTokens.inkRaised
+    static let border = BrandTokens.line
+    static let warning = BrandTokens.warn
+    static let danger = BrandTokens.err
+    static let success = BrandTokens.green
+    static let selection = BrandTokens.selection
     static let terminalInset: CGFloat = 8
-    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-        })
-    }
+
 }

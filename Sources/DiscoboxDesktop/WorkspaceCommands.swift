@@ -15,8 +15,12 @@ import DiscoboxCore
     var inspectorSection = UserDefaults.standard.string(forKey: "inspectorSection") ?? "services" {
         didSet { UserDefaults.standard.set(inspectorSection, forKey: "inspectorSection") }
     }
-    func openServices() { inspectorSection = "services"; showInspector = true }
+    func openServices() { restoreAgentLayout(); inspectorSection = "services"; showInspector = true }
     func toggleInspector() { showInspector.toggle() }
+    func toggleServices() {
+        if showInspector && inspectorSection == "services" { showInspector = false }
+        else { openServices() }
+    }
 
     var focusMode = false
     private struct AgentFocusSnapshot {
@@ -32,10 +36,11 @@ import DiscoboxCore
         agentFocusSnapshot = nil
         saved.layout.open(saved.layout.ids.contains(saved.selected) ? saved.selected : "agent")
         saved.layout.agentFocused = saved.agentFocused
-        showInspector = saved.inspectorVisible
+        if saved.layout === currentLayout { showInspector = saved.inspectorVisible }
     }
     private func toggleAgentMaximization() {
-        if agentFocusSnapshot != nil { restoreAgentLayout(); return }
+        if isAgentMaximized { restoreAgentLayout(); return }
+        restoreAgentLayout()
         guard let layout = currentLayout else { return }
         agentFocusSnapshot = AgentFocusSnapshot(layout: layout, selected: layout.selected,
             agentFocused: layout.agentFocused, inspectorVisible: showInspector)
@@ -44,6 +49,21 @@ import DiscoboxCore
     }
     var showCommands = false
     var showCreateBox = false
+    struct CreationSeed { let repository: String; let computer: String? }
+    var creationSeed: CreationSeed?
+    func newBox(repository: String = "", computer: String? = nil) {
+        creationSeed = .init(repository: repository, computer: computer)
+        showCreateBox = true
+    }
+    func toggleShells() {
+        if isAgentMaximized {
+            restoreAgentLayout()
+            if currentLayout?.isSplit == true { return }
+        }
+        guard let layout = currentLayout else { return }
+        if layout.isSplit { layout.hideCompanions() }
+        else if !layout.restoreCompanions() { perform(.newShell) }
+    }
     var choosingBox = false
     var hint: String?
     private var layouts: [String: WorkspaceTabs] = [:]
@@ -58,8 +78,8 @@ import DiscoboxCore
         return layout(for: workspace.connectionID.uuidString + box)
     }
     func resetLayouts() { restoreAgentLayout(); layouts.removeAll(); cancelPrefix() }
-    func moveTab(_ delta: Int) { cancelPrefix(); currentLayout?.moveTab(delta) }
-    func movePane() { cancelPrefix(); currentLayout?.movePane() }
+    func moveTab(_ delta: Int) { cancelPrefix(); restoreAgentLayout(); currentLayout?.moveTab(delta) }
+    func movePane(_ delta: Int = 1) { cancelPrefix(); currentLayout?.movePane(delta) }
 
     weak var window: NSWindow?
     private var workspace: Workspace?
@@ -74,7 +94,12 @@ import DiscoboxCore
         self.defaults = defaults
         let saved = defaults.data(forKey: "commandBindings.v1").flatMap { try? JSONDecoder().decode(CommandBindings.self, from: $0) }
         bindings = saved?.validationError == nil ? (saved ?? CommandBindings()) : CommandBindings()
-        let shortcuts = defaults.data(forKey: "appShortcuts.v1").flatMap { try? JSONDecoder().decode(AppShortcuts.self, from: $0) }
+        var shortcuts = defaults.data(forKey: "appShortcuts.v1").flatMap { try? JSONDecoder().decode(AppShortcuts.self, from: $0) }
+        // A pre-existing custom Cmd-J binding wins over the newly added default.
+        if shortcuts?.validationError != nil, var migrated = shortcuts {
+            migrated[.toggleShells] = ""
+            if migrated.validationError == nil { shortcuts = migrated }
+        }
         appShortcuts = shortcuts?.validationError == nil ? (shortcuts ?? AppShortcuts()) : AppShortcuts()
     }
     func save(_ value: CommandBindings) {
@@ -96,12 +121,14 @@ import DiscoboxCore
               workspace?.isConnected == true || (action == .switchBox && connections?.sessions.contains(where: { $0.workspace.isConnected }) == true) else { return }
         cancelPrefix()
         switch action {
-        case .newBox: showCreateBox = true
+        case .newBox: newBox()
         case .switchBox: choosingBox = true
         case .previousTab: moveTab(-1)
         case .nextTab: moveTab(1)
-        case .previousPane, .nextPane: movePane()
+        case .previousPane: movePane(-1)
+        case .nextPane: movePane(1)
         case .toggleInspector: toggleInspector()
+        case .toggleShells: toggleShells()
         case .help: showCommands = true
         }
     }
@@ -153,7 +180,7 @@ import DiscoboxCore
             hint = nil
             if let workspace, workspace.execs.indices.contains(number) {
                 let terminal = workspace.execs[number]
-                currentLayout?.open(terminal.primary == true ? "agent" : "exec:" + terminal.id)
+                selectTerminalPane(terminal)
                 tab = .terminal; Task { await workspace.selectExec(terminal.id) }
             } else { message("No terminal \(number)") }
         case .unknown: message("No command for that sequence · \(bindings.leader) ? shows commands")
@@ -174,7 +201,7 @@ import DiscoboxCore
         switch command {
         case .tools: showTools = true
         case .changes: Task { do { try await workspace.openSession(tool: "ai.discobox.diff") } catch { workspace.commandError = error.localizedDescription } }
-        case .files: showFiles = true; currentLayout?.open("files")
+        case .files: restoreAgentLayout(); showFiles = true; currentLayout?.open("files")
         case .approvals: showApprovals = true
         case .agent:
             if let layout = currentLayout, layout.isSplit { layout.agentFocused = true }
@@ -192,9 +219,9 @@ import DiscoboxCore
             }
         case .previousTerminal: moveTerminal(-1)
         case .nextTerminal: moveTerminal(1)
-        case .newShell: tab = .terminal; Task { await workspace.openShell() }
+        case .newShell: restoreAgentLayout(); tab = .terminal; Task { await workspace.openShell() }
         case .services: openServices()
-        case .audit: showFiles = false; showAudit = true; currentLayout?.open("audit")
+        case .audit: restoreAgentLayout(); showFiles = false; showAudit = true; currentLayout?.open("audit")
         case .boxes: focusMode = false; choosingBox = true
         case .previousBox: moveBox(-1)
         case .nextBox: moveBox(1)
@@ -208,12 +235,16 @@ import DiscoboxCore
             if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() }
         }
     }
+    private func selectTerminalPane(_ terminal: Exec) {
+        if terminal.primary == true, currentLayout?.isSplit == true { currentLayout?.agentFocused = true }
+        else { currentLayout?.open(terminal.primary == true ? "agent" : "exec:" + terminal.id) }
+    }
     private func moveTerminal(_ delta: Int) {
         guard let workspace, !workspace.execs.isEmpty else { return }
         let index = workspace.execs.firstIndex { $0.id == workspace.execID } ?? 0
         tab = .terminal
         let terminal = workspace.execs[(index + delta + workspace.execs.count) % workspace.execs.count]
-        currentLayout?.open(terminal.primary == true ? "agent" : "exec:" + terminal.id)
+        selectTerminalPane(terminal)
         Task { await workspace.selectExec(terminal.id) }
     }
     private func moveBox(_ delta: Int) {

@@ -10,6 +10,7 @@ struct BoxWorkspaceView: View {
     @Environment(TerminalStore.self) private var terminals
     @State private var showInbox = false
     @State private var closing: TerminalCloseRequest?
+    @State private var renaming: PaneRenameRequest?
     @State private var creationAction: BoxActionRequest?
     @AppStorage("confirmShellClose") private var confirmShellClose = true
     private var harness: Exec? { workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first(where: { !$0.isShell }) }
@@ -18,28 +19,33 @@ struct BoxWorkspaceView: View {
     private var creation: BoxCreation? {
         connections?.creationPins.first { $0.connection == workspace.connectionID && $0.id.box == box.id }
     }
+    private var persistenceKey: String {
+        let computer = connections?.sessions.first { $0.workspace === workspace }?.id ?? workspace.connectionID.uuidString
+        return "workspace." + computer + "." + box.id
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if let error = workspace.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
-            if !box.isRunning {
-                StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id)
-            }
-            // Keep the tab's container stable when hiding the pinned agent;
-            // reparenting a retained NSView across two outgoing/incoming SwiftUI
-            // branches can let the outgoing branch reclaim the terminal.
-            if layout.sideBySide { HSplitView { panes } }
-            else { VSplitView { panes } }
+            if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
+            if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id) }
+            // The agent is always the first child of this split. Never mount it
+            // as a tab or reparent it when opening a supporting tool.
+            HSplitView {
+                agentPane
+                if layout.isSplit { companionArea }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
-        .onChange(of: workspace.execs.map(\.id), initial: true) { _, ids in
-            // selectBox clears inventory before its async refresh. That empty
-            // transition must not discard the box's remembered tab selection.
-            if workspace.sandboxID == box.id, !workspace.execs.isEmpty, ids == workspace.execs.map(\.id) { layout.reconcile(companions.map { "exec:" + $0.id }) }
+        .onChange(of: workspace.execs.map(\.id), initial: true) { _, _ in
+            if workspace.sandboxID == box.id, !workspace.execs.isEmpty { layout.reconcile(companions.map { "exec:" + $0.id }) }
         }
         .onChange(of: workspace.execID) { old, id in
             guard workspace.sandboxID == box.id, old != nil, let id else { return }
-            if companions.contains(where: { $0.id == id }) { layout.open("exec:" + id) }
+            if companions.contains(where: { $0.id == id }) {
+                layout.reconcile(companions.map { "exec:" + $0.id })
+                layout.open("exec:" + id)
+            }
         }
         .onChange(of: layout.selected) { _, id in
             if workspace.sandboxID == box.id, id.hasPrefix("exec:") {
@@ -47,187 +53,222 @@ struct BoxWorkspaceView: View {
                 if workspace.execID != exec { Task { if workspace.sandboxID == box.id { await workspace.selectExec(exec) } } }
             }
         }
-        .onChange(of: commands.showInspector) { _, visible in
-            guard !visible else { return }
-            let exec = layout.agentFocused || layout.selected == "agent" ? harness?.id : (layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil)
-            guard let exec else { return }
-            let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint,
-                                            project: workspace.projectID ?? "", box: box.id, exec: exec, demo: workspace.isDemo)
-            terminals.focus(identity)
-        }
-        .onChange(of: commands.agentFocusRequest) {
-            guard workspace.sandboxID == box.id, let harness else { return }
-            let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: workspace.transportEndpoint,
-                                            project: workspace.projectID ?? "", box: box.id, exec: harness.id, demo: workspace.isDemo)
-            terminals.focus(identity)
-        }
+        .onChange(of: commands.showInspector) { _, visible in if !visible { focusActiveTerminal() } }
+        .onChange(of: commands.agentFocusRequest) { focusActiveTerminal(agent: true) }
         .onChange(of: commands.showFiles) { _, show in if show { layout.open("files") } }
         .onChange(of: commands.showAudit) { _, show in if show { layout.open("audit") } }
-
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
         .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
+        .sheet(item: $renaming) { request in PaneRenameSheet(name: request.name) { layout.rename(request.id, to: $0) } }
         .sheet(item: $creationAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
     }
 
-    @ViewBuilder private var panes: some View {
-        if layout.keepAgent || layout.selected == "agent" { agentPane }
-        if layout.selected != "agent" { selectedPane }
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 8) {
-            ScrollViewReader { reader in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(layout.keepAgent ? layout.ids.filter { $0 != "agent" } : layout.ids, id: \.self) { id in
-                            HStack(spacing: 6) {
-                                Button { layout.open(id) } label: {
-                                    Label(title(id), systemImage: symbol(id)).lineLimit(1)
-                                }.buttonStyle(.plain)
-                                if id != "agent" {
-                                    Button { close(id) } label: { Image(systemName: "xmark").font(.caption2) }
-                                        .buttonStyle(.plain).help("Close \(title(id))")
-                                }
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 7)
-                            .background(layout.selected == id ? DiscoboxAppearance.surface : .clear, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(layout.selected == id ? DiscoboxAppearance.border : .clear, lineWidth: 1) }
-                            .accessibilityElement(children: .contain)
-                            .accessibilityAddTraits(layout.selected == id ? .isSelected : [])
-                            .id(id)
-                            .contextMenu {
-                                Button("Select Tab") { layout.open(id) }
-                                if id != "agent" {
-                                    Button("Split Below Agent") { layout.sideBySide = false; layout.keepAgent = true; layout.open(id) }
-                                    Button("Split Beside Agent") { layout.sideBySide = true; layout.keepAgent = true; layout.open(id) }
-                                    Button("Show Tab Only") { layout.keepAgent = false; layout.open(id) }
-                                    Divider()
-                                    Button("Close Tab") { close(id) }
-                                }
-                            }
-                        }
-                    }
-                }
-                .onChange(of: layout.selected) { _, id in reader.scrollTo(id) }
-            }
-            tabControls
-            if !layout.keepAgent { maximizeAgentButton }
-        }.workspacePaneHeader()
-    }
-    private var maximizeAgentButton: some View {
-        Button { commands.perform(.focus) } label: {
-            Image(systemName: commands.isAgentMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-        }
-        .help(commands.isAgentMaximized ? "Restore workspace layout" : "Maximize agent")
-        .accessibilityLabel(commands.isAgentMaximized ? "Restore workspace layout" : "Maximize agent")
-    }
-    private var tabControls: some View {
-        @Bindable var layout = layout
-        return HStack(spacing: 8) {
-            if workspace.isOpeningShell { ProgressView().controlSize(.small) }
-            Menu {
-                Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
-                Divider()
-                Button("Audit") { layout.open("audit") }
-                Button("Services") { commands.openServices() }
-                Button("Files") { layout.open("files") }
-                Button("Changes") { commands.perform(.changes) }.disabled(!box.isRunning)
-                Button("Tools & Additional Agent…") { commands.showTools = true }
-            } label: { Image(systemName: "plus") }.help("Open Tab")
-            Menu {
-                Toggle("Keep Agent Visible", isOn: $layout.keepAgent)
-                Divider()
-                Picker("Split Arrangement", selection: $layout.sideBySide) {
-                    Text("Below Agent").tag(false)
-                    Text("Beside Agent").tag(true)
-                }.pickerStyle(.inline)
-            } label: { Image(systemName: layout.sideBySide ? "rectangle.split.2x1" : "rectangle.split.1x2") }.help("Workspace Layout")
-        }
-    }
     private var agentPane: some View {
         VStack(spacing: 0) {
-            if layout.keepAgent {
-            HStack {
-                Label("Agent", systemImage: "sparkles").fontWeight(.semibold).foregroundStyle(.primary)
+            HStack(spacing: 8) {
+                Label("Agent", systemImage: "sparkles").fontWeight(.semibold)
                 Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 if workspace.approvals.contains(where: { $0.boxID == box.id }) {
                     Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
                 Spacer()
-                if !layout.isSplit { tabControls }
-                maximizeAgentButton
+                Menu {
+                    Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
+                    supportingTools
+                } label: { Image(systemName: "ellipsis") }.help("Agent and workspace actions")
+                Button { commands.perform(.focus) } label: {
+                    Image(systemName: commands.isAgentMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                }.help(commands.isAgentMaximized ? "Restore workspace layout" : "Maximize agent")
+                    .accessibilityIdentifier("workspace.maximizeAgent")
             }.workspacePaneHeader()
-                .overlay(alignment: .bottom) { (layout.agentFocused ? DiscoboxAppearance.accent.opacity(0.35) : DiscoboxAppearance.border).frame(height: 1) }
+                .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
                 .onTapGesture { layout.agentFocused = true }
-            } else {
-                tabBar
-                    .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
-            }
-            if let creation, creation.phase == .failed {
-                ContentUnavailableView {
-                    Label("Box needs attention", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(creation.message)
-                } actions: {
-                    Menu("Box Actions") {
-                        BoxActionMenu(box: box) { creationAction = .init(box: box, action: $0, connection: workspace.connectionID) }
-                    }
+            agentContent
+        }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
+            .background(WorkspaceSplitPosition(key: persistenceKey, enabled: layout.isSplit, secondaryMinimum: layout.shellsSplit && layout.shellSideBySide ? 720 : 360,
+                revision: layout.shellsSplit ? (layout.shellSideBySide ? "columns" : "stack") : "tabs"))
+    }
+    @ViewBuilder private var agentContent: some View {
+        if let harness, box.isRunning, harness.status == "running" {
+            ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
+        } else if let creation, creation.phase == .failed {
+            ContentUnavailableView {
+                Label("Box needs attention", systemImage: "exclamationmark.triangle")
+            } description: { Text(creation.message) } actions: {
+                Menu("Box Actions") {
+                    BoxActionMenu(box: box) { creationAction = .init(box: box, action: $0, connection: workspace.connectionID) }
                 }
-            } else if let creation, creation.phase == .starting {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Starting your box…").font(.headline)
-                    Text(box.status).font(.callout).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let harness {
-                ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
-            } else if creation != nil {
-                ProgressView("Waiting for the agent…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else { ContentUnavailableView("No harness terminal", systemImage: "terminal") }
-        }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
-    }
-    private var selectedPane: some View {
-        VStack(spacing: 0) {
-            tabBar
-                .overlay(alignment: .bottom) { (!layout.agentFocused ? DiscoboxAppearance.accent.opacity(0.35) : DiscoboxAppearance.border).frame(height: 1) }
-                .onTapGesture { layout.agentFocused = false }
-            Group {
-                if let terminal = companions.first(where: { "exec:" + $0.id == layout.selected }) {
-                    ConsoleView(terminal: terminal, focused: !layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = false }).studioTerminalFrame()
-                } else if layout.selected == "audit" { AuditView(boxID: box.id, focusSearch: !layout.agentFocused) }
-                else if layout.selected == "services" { ServicesView(box: box) }
-                else if layout.selected == "files" { FilesView() }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(ToolPaneFocus(active: !layout.agentFocused && layout.selected != "audit" && !layout.selected.hasPrefix("exec:")))
-            .simultaneousGesture(TapGesture().onEnded { layout.agentFocused = false })
-        }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
+        } else if let creation, creation.phase == .starting {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Starting your box…").font(.headline)
+                Text(box.preparationStatus?.isEmpty == false ? box.preparationStatus! : box.status).font(.callout).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let harness, !["starting", "repairing"].contains(box.runtime.displayState ?? "") {
+            ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
+        } else if creation != nil {
+            ProgressView("Waiting for the agent…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if ["starting", "repairing"].contains(box.runtime.displayState ?? "") {
+            VStack(spacing: 12) { ProgressView(); Text(box.preparationStatus ?? "Preparing the box…").font(.callout).foregroundStyle(.secondary) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else { ContentUnavailableView("No harness terminal", systemImage: "terminal", description: Text("A startup hook or harness may have exited. You can still open a shell to inspect this box.")) }
     }
-    private func title(_ id: String) -> String {
-        switch id {
-        case "agent": "Agent"
-        case "audit": "Audit"
-        case "services": "Services"
-        case "files": "Files"
-        default: companions.first(where: { "exec:" + $0.id == id })?.title ?? "Terminal"
+    @ViewBuilder private var companionArea: some View {
+        if layout.shellsSplit {
+            if layout.shellSideBySide { HSplitView { splitPanes }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { VSplitView { splitPanes }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+        } else {
+            VStack(spacing: 0) {
+                tabBar
+                paneContent(layout.selected)
+            }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
         }
     }
-    private func symbol(_ id: String) -> String {
+    private var splitPanes: some View {
+        ForEach(layout.visibleCompanions, id: \.self) { id in
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Label(title(id), systemImage: symbol(id)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if layout.visibleCompanions.first == id { shellActions }
+                    Button { close(id) } label: { Image(systemName: "xmark").font(.caption2) }
+                        .help("Close " + title(id)).accessibilityLabel("Close " + title(id))
+                }.workspacePaneHeader()
+                    .overlay(alignment: .bottom) { paneBorder(id) }
+                    .contentShape(Rectangle()).onTapGesture { layout.open(id) }
+                    .contextMenu { sessionMenu(id) }
+                paneContent(id)
+            }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
+                .background(WorkspaceSplitPosition(key: persistenceKey + (layout.shellSideBySide ? ".horizontal" : ".vertical"), enabled: layout.visibleCompanions.first == id, fraction: 0.5, minimum: layout.shellSideBySide ? 360 : 180, secondaryMinimum: layout.shellSideBySide ? 360 : 180))
+        }
+    }
+    private var tabBar: some View {
+        HStack(spacing: 8) {
+            ScrollViewReader { reader in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(layout.companionIDs, id: \.self) { id in
+                            HStack(spacing: 7) {
+                                Button { layout.open(id) } label: { Label(title(id), systemImage: symbol(id)).lineLimit(1) }.buttonStyle(.plain)
+                                Button { close(id) } label: { Image(systemName: "xmark").font(.system(size: 8)) }
+                                    .buttonStyle(.plain).help("Close " + title(id)).accessibilityLabel("Close " + title(id))
+                            }.padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(layout.selected == id ? DiscoboxAppearance.surface : .clear, in: RoundedRectangle(cornerRadius: 5))
+                                .accessibilityElement(children: .contain)
+                                .accessibilityAddTraits(layout.selected == id ? .isSelected : [])
+                                .id(id).contextMenu { sessionMenu(id) }
+                        }
+                    }
+                }.onChange(of: layout.selected, initial: true) { _, id in reader.scrollTo(id) }
+            }
+            shellActions
+        }.workspacePaneHeader().overlay(alignment: .bottom) { paneBorder(layout.selected) }
+    }
+    private var shellActions: some View {
+        HStack(spacing: 9) {
+            if workspace.isOpeningShell { ProgressView().controlSize(.mini) }
+            Button { commands.perform(.newShell) } label: { Image(systemName: "plus") }
+                .disabled(!box.isRunning || workspace.isOpeningShell).help("New shell").accessibilityIdentifier("workspace.newShell")
+            Menu {
+                if layout.shellsSplit {
+                    Button("Merge into Tabs") { layout.mergeShells() }
+                    Button("Stack Shells") { layout.shellSideBySide = false }
+                    Button("Shells Side by Side") { layout.shellSideBySide = true }
+                } else {
+                    ForEach(layout.terminalIDs.filter { $0 != layout.selected }, id: \.self) { id in
+                        Button("Split with " + title(id)) { layout.split(with: id) }
+                    }
+                    Button("New Shell and Split") { newSplitShell() }.disabled(!box.isRunning || workspace.isOpeningShell)
+                }
+            } label: { Label(layout.shellsSplit ? "Merge" : "Split", systemImage: layout.shellsSplit ? "rectangle" : "rectangle.split.1x2") }
+            primaryAction: {
+                if layout.shellsSplit { layout.mergeShells() }
+                else if let id = layout.terminalIDs.first(where: { $0 != layout.selected }), layout.selected.hasPrefix("exec:") { layout.split(with: id) }
+                else { newSplitShell() }
+            }.menuIndicator(.hidden).fixedSize()
+                .disabled(!layout.selected.hasPrefix("exec:")).help("Arrange shell sessions; the agent stays visible")
+            Menu {
+                if layout.shellsSplit {
+                    ForEach(layout.companionIDs.filter { !layout.visibleCompanions.contains($0) }, id: \.self) { id in
+                        Button(title(id)) { layout.open(id) }
+                    }
+                    Divider()
+                }
+                supportingTools
+            } label: { Image(systemName: "ellipsis") }.help("Files, changes and additional tools")
+            Button { commands.toggleShells() } label: { Image(systemName: "chevron.right") }
+                .help("Hide shells without stopping them (" + commands.appShortcuts[.toggleShells] + ")")
+                .accessibilityLabel("Hide shell area").accessibilityIdentifier("workspace.hideShells")
+        }.foregroundStyle(.secondary)
+    }
+    @ViewBuilder private var supportingTools: some View {
+        Button("Files") { layout.open("files") }
+        Button("Changes") { commands.perform(.changes) }.disabled(!box.isRunning)
+        Button("Audit") { layout.open("audit") }
+        Button("Tools & Additional Agent…") { commands.showTools = true }
+    }
+    private func paneBorder(_ id: String) -> some View {
+        (!layout.agentFocused && layout.selected == id ? DiscoboxAppearance.accent.opacity(0.4) : DiscoboxAppearance.border).frame(height: 1)
+    }
+    private func paneContent(_ id: String) -> some View {
+        Group {
+            if let terminal = companions.first(where: { "exec:" + $0.id == id }) {
+                ConsoleView(terminal: terminal, focused: !layout.agentFocused && layout.selected == id, onFocus: { layout.open(id) }).studioTerminalFrame()
+            } else if id == "audit" { AuditView(boxID: box.id, focusSearch: !layout.agentFocused) }
+            else if id == "files" { FilesView() }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ToolPaneFocus(active: !layout.agentFocused && id == layout.selected && id == "files"))
+            .simultaneousGesture(TapGesture().onEnded { layout.open(id) })
+    }
+    @ViewBuilder private func sessionMenu(_ id: String) -> some View {
+        Button("Select Tab") { layout.open(id) }
+        if id.hasPrefix("exec:") {
+            Button("Rename Tab…") { renaming = .init(id: id, name: title(id)) }
+            if layout.shellsSplit { Button("Merge into Tabs") { layout.mergeShells() } }
+            else {
+                ForEach(layout.terminalIDs.filter { $0 != id }, id: \.self) { other in
+                    Button("Split with " + title(other)) { layout.open(id); layout.split(with: other) }
+                }
+            }
+        }
+        Divider()
+        Button("Close " + title(id)) { close(id) }
+    }
+    private func title(_ id: String) -> String {
+        if let name = layout.names[id] { return name }
         switch id {
-        case "agent": "sparkles"
-        case "audit": "list.bullet.rectangle"
-        case "services": "network"
-        case "files": "folder"
-        default: "terminal"
+        case "audit": return "Audit"
+        case "files": return "Files"
+        default:
+            guard let exec = companions.first(where: { "exec:" + $0.id == id }) else { return "Terminal" }
+            let matching = companions.filter { $0.title == exec.title }
+            return matching.count > 1 ? exec.title + " " + String((matching.firstIndex(of: exec) ?? 0) + 1) : exec.title
+        }
+    }
+    private func symbol(_ id: String) -> String { id == "audit" ? "list.bullet.rectangle" : id == "files" ? "folder" : "terminal" }
+    private func focusActiveTerminal(agent: Bool = false) {
+        let exec = agent || layout.agentFocused || !layout.isSplit ? harness?.id : (layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil)
+        guard let exec else { return }
+        terminals.focus(.init(connection: workspace.connectionID, endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box.id, exec: exec, demo: workspace.isDemo))
+    }
+    private func newSplitShell() {
+        let target = workspace, generation = workspace.connectionID, layout = layout
+        let previous = layout.selected
+        Task {
+            await target.openShell()
+            guard target.connectionID == generation, target.sandboxID == box.id, let exec = target.execID,
+                  exec != String(previous.dropFirst(5)), target.execs.contains(where: { $0.id == exec && $0.isShell }) else { return }
+            layout.reconcile(target.execs.filter { $0.id != harness?.id }.map { "exec:" + $0.id })
+            layout.open(previous); layout.split(with: "exec:" + exec)
         }
     }
     private func close(_ id: String) {
         if let exec = companions.first(where: { "exec:" + $0.id == id }) {
             let request = TerminalCloseRequest(terminal: exec, box: box.id, connection: workspace.connectionID)
             if exec.isShell && !confirmShellClose { closeTerminal(request) } else { closing = request }
-        }
-        else { layout.close(id) }
+        } else { layout.close(id) }
     }
     private func closeTerminal(_ request: TerminalCloseRequest) {
         let target = workspace
@@ -239,6 +280,25 @@ struct BoxWorkspaceView: View {
             let identity = TerminalIdentity(connection: request.connection, endpoint: target.transportEndpoint, project: target.projectID ?? "", box: request.box, exec: request.terminal.id, demo: target.isDemo)
             do { try await target.closeShell(request.terminal.id); terminals.reconnect(identity) }
             catch { target.commandError = error.localizedDescription }
+        }
+    }
+}
+
+private struct PaneRenameRequest: Identifiable { let id: String; let name: String }
+private struct PaneRenameSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var name: String
+    let save: (String) -> Void
+    var body: some View {
+        StudioConfirmation(title: "Rename shell tab", symbol: "terminal", width: 420) {
+            TextField("Tab name", text: $name).textFieldStyle(.roundedBorder)
+            Text("This label is remembered while this box is open in the app.").font(.caption).foregroundStyle(.secondary)
+        } footer: {
+            HStack {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") { save(name); dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            }
         }
     }
 }

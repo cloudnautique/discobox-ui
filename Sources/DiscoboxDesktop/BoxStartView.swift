@@ -55,7 +55,9 @@ struct StoppedBoxBar: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(starting ? "Starting box…" : box.status == "Stopped" ? "Box stopped" : "Box · " + box.status)
                         .font(.system(size: 12, weight: .semibold))
-                    Text(box.isArchived ? "Restore the box to continue working. Saved terminal output is read-only." : "Saved terminal output is read-only. Start the box to continue working.")
+                    Text(starting || box.isRepairing
+                         ? (box.preparationStatus?.isEmpty == false ? box.preparationStatus! : "Waiting for Discobox to finish preparing this box.")
+                         : box.isArchived ? "Restore the box to continue working. Saved terminal output is read-only." : "Saved terminal output is read-only. Start the box to continue working.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()

@@ -70,8 +70,13 @@ screen; check that you have completed Discobox’s setup and started its server.
 Manage saved computers in **Discobox → Settings → Connections**.
 
 - Press **⌘N** to create a box or **⌘K** to find and switch boxes.
-- In **New box → Credentials for this box**, add a token, its environment
-  variable (for example `OBOT_MCP_TOKEN`), and its destination host (for example
+- Use the **+** beside a repository to create a box with that repository filled
+  in, or choose a recent repository from the dropdown in **New box**.
+- Keep the agent beside your shell tabs. **Split** shows two shells together;
+  **Merge** returns them to tabs. **⌘J** hides or restores the shell area without
+  stopping its sessions. Right-click a shell tab to rename it.
+- In **New box → Box secrets**, add a secret value, its environment
+  variable (for example `OBOT_MCP_TOKEN`), and its allowed host (for example
   `demo.on-obot.ai`). Reference `${OBOT_MCP_TOKEN}` in your repository’s MCP
   headers. The selected server stores the token and assigns it during creation;
   the shared harness stays unchanged. Discobox 0.18 may ask for approval on first
@@ -82,7 +87,8 @@ Manage saved computers in **Discobox → Settings → Connections**.
   progress or errors; **Reveal** shows a running box hidden by your filters.
 - Use the boxes menu to group and filter the list. **All computers** shows boxes
   from every connected server.
-- Open the right-hand inspector for services, box details, and tags.
+- Use **Desktop** in the title bar to open the box’s desktop, or **Services**
+  for its ports. The inspector also holds box details and tags.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.
 - Use **Settings** to choose System, Light, or Dark appearance, customize
   shortcuts, configure harnesses, manage credentials, and enable notifications.

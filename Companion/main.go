@@ -18,9 +18,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
+
+	serverendpoint "github.com/discobox-ai/discobox/pkg/endpoint"
 	"time"
 )
 
@@ -185,16 +186,24 @@ func requestTimeout(req request) time.Duration {
 	return 15 * time.Second
 }
 
-func defaultSocket() string {
-	base := os.Getenv("XDG_RUNTIME_DIR")
-	if base == "" {
-		base = filepath.Join(os.TempDir(), "discobox-"+strconv.Itoa(os.Getuid()))
+func resolveLocalEndpoint(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || value == "unix://" {
+		return serverendpoint.DefaultEndpoint()
 	}
-	return filepath.Join(base, "discobox", "server.sock")
+	return value
+}
+
+func defaultSocket() string {
+	parsed, err := serverendpoint.Parse(serverendpoint.DefaultEndpoint())
+	if err != nil || parsed.Scheme != "unix" {
+		return ""
+	}
+	return parsed.Value
 }
 
 func newBridge(endpoint string, allowInput bool) (*bridge, error) {
-	u, err := url.Parse(strings.TrimSpace(endpoint))
+	u, err := url.Parse(resolveLocalEndpoint(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("invalid endpoint: %w", err)
 	}
@@ -213,7 +222,11 @@ func newBridge(endpoint string, allowInput bool) (*bridge, error) {
 		}
 		path := u.Path
 		if path == "" {
-			path = defaultSocket()
+			parsed, parseErr := serverendpoint.Parse(u.String())
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			path = parsed.Value
 		}
 		if !filepath.IsAbs(path) {
 			return nil, errors.New("Unix socket path must be absolute")
@@ -322,11 +335,13 @@ func validateInput(parts []inputPart) error {
 
 func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
+	case "poolConfiguration", "updatePoolProxy":
+		return b.poolConfiguration(ctx, req)
 	case "poolResources", "clearPoolCache":
 		return b.poolOperation(ctx, req)
 	case "boxAction":
 		return b.boxAction(ctx, req)
-	case "deleteSecret", "approvals", "secrets", "answer", "createSecret", "ruleProposals":
+	case "approvalContext", "deleteSecret", "approvals", "secrets", "answer", "createSecret", "ruleProposals":
 		return b.approvals(ctx, req)
 	case "tools", "openTool", "newAgent":
 		return b.toolOperation(ctx, req)
@@ -359,7 +374,11 @@ func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 			return response{}, err
 		}
 	}
-	return b.call(ctx, method, path, body)
+	res, err := b.call(ctx, method, path, body)
+	if req.Operation == "sandboxes" && err == nil && res.Status == 200 {
+		res.Body = withPreparationStatus(res.Body)
+	}
+	return res, err
 }
 
 func (b *bridge) requireRunningBox(ctx context.Context, req request) error {

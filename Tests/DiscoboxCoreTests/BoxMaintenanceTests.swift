@@ -61,3 +61,12 @@ private func maintenanceBox(_ runtime: String) throws -> Sandbox {
         #expect(!box.needsRepair)
     }
 }
+
+@Test func runningWarningKeepsCreatedBoxUsable() throws {
+    let box = try maintenanceBox(#"{"state":"failed","displayState":"running","runtimeState":"running","errorMessage":"Optional background setup failed"}"#)
+    #expect(box.isRunning)
+    #expect(box.runningWarning == "Optional background setup failed")
+    #expect(!box.needsRepair)
+    let creation = BoxCreation(connection: UUID(), item: .init(location: .init(connection: "computer", box: box.id), computer: "Fixture", box: box, needsAttention: true))
+    #expect(creation.phase == .ready)
+}

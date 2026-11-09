@@ -37,6 +37,7 @@ extension ApprovalItem {
     /// need the form's explicit choices.
     public var notificationApprovalPayload: JSONValue? {
         guard kind == "credential", request["status"].string == "pending",
+              request["use"] == .null, request["delegate"] == .null,
               request["reason"].string.isEmpty,
               ["", "use"].contains(request["purpose"].string) else { return nil }
         let ttl = request["grantTTLSeconds"]

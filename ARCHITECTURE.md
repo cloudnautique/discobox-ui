@@ -25,6 +25,41 @@ retain their own palettes; the app controls their surrounding chrome only.
 inventory in light and dark themes using isolated fixtures. Set
 `DISCOBOX_SMOKE_SCREENSHOTS` to a local output directory to capture the matrix.
 
+## Upstream API integration
+
+The approval inbox preserves all five request kinds: credential, trust, refresh,
+adoption, and API access. Future kinds remain visible for review in a compatible
+console. Consent requests use their own routes and authority summaries. They
+never inherit a credential payload. Refresh writes only a manually entered token;
+the bridge never executes a suggested refresh command.
+
+Structured credential requests have separate use/delegate decisions and modern
+`ttlSeconds`/scope/delivery fields. Scalar requests on older servers retain their
+legacy form. A read-only `approvalContext` loads limits, effective holdings and
+own bindings from the requesting box, independent of the selected workspace.
+The canonical upstream `bindingplan.Answer` computes the replacement effects.
+The form sends an opaque context fingerprint with its decisions; the bridge
+re-reads the context before its single POST and refuses a changed review.
+The server still enforces the final authority and lifetime at commit time.
+No new automatic approval rules or changed secret ceilings are implicit.
+
+Pool Network & Trust reads effective source, revisions and observations without
+running probes. A reviewed save sends only a proxy PATCH. Explicit null removes
+the pool override; unrelated settings are omitted. The bridge checks the prior
+override immediately before saving. Credentials use secure fields, are never
+returned by reads, and are cleared on close. Saving never restarts the pool.
+
+`displayState` remains authoritative for usable terminals. A running box with a
+runtime error gets a warning, not a failed-creation screen. Inventory reads add
+the TUI's canonical provisioning-status summary without extra server calls.
+An existing primary PTY remains visible through startup hooks/tours.
+
+Native colors are generated from `discobox/assets/brand/tokens.json` by
+`make brand-tokens`. Lint verifies the generated copy; the UI never defines a
+second palette. Studio layout and system controls remain native. JetBrains Mono
+is bundled under OFL-1.1 and registered privately to the app for brand headings;
+Ghostty configuration and terminal content remain unchanged.
+
 ## Safety boundary
 
 Development and automated verification must not contact the operator's running
@@ -89,9 +124,11 @@ terminates that child only. This favors a small, inspectable first integration.
 If profiling warrants a persistent companion, retain request IDs and cancellation
 in a versioned protocol rather than adding ad hoc output parsing.
 
-It resolves the default Unix socket the same way as `pkg/endpoint/default_unix.go`:
-`XDG_RUNTIME_DIR`, otherwise the OS temporary directory plus `discobox-<uid>`,
-then `discobox/server.sock`. It never changes backend configuration to expose TCP.
+The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
+including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection
+remains independent of that environment setting. Attach and forwarding use the
+same resolver; harness management passes its resolved address to the CLI with
+auto-start disabled. It never changes backend configuration to expose TCP.
 HTTP/S is supported when the existing server already exposes it. TLS validation
 stays enabled. Redirects are rejected. Current single-user auth is supported;
 Iroh enrollment uses an app-owned Keychain identity and the persistent transport described below. Discobot assertions are not implemented.

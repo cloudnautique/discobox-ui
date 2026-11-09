@@ -1,6 +1,11 @@
 import Foundation
 
 extension Sandbox {
+    public var runningWarning: String? {
+        guard isRunning, let message = runtime.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty else { return nil }
+        return message
+    }
+
     public var upgradeAvailable: Bool { runtime.upgrade?.available == true && BoxAction.upgrade.isAvailable(for: self) }
 
     public var isRepairing: Bool {

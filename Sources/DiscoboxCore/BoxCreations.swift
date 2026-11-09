@@ -9,6 +9,7 @@ public struct BoxCreation: Identifiable, Sendable {
     public enum Phase: String, Sendable { case starting, failed, ready }
     public var phase: Phase {
         let runtime = item.box.runtime
+        if item.box.isRunning { return .ready }
         if item.box.matchesAttention || runtime.displayState == "stopped" ||
             (runtime.displayState == nil && runtime.state == "ready" && runtime.runtimeState == "stopped") { return .failed }
         return item.box.isRunning ? .ready : .starting
@@ -16,7 +17,7 @@ public struct BoxCreation: Identifiable, Sendable {
     public var message: String {
         if let error = item.box.runtime.errorMessage, !error.isEmpty { return error }
         switch phase {
-        case .starting: return "Starting…"
+        case .starting: return item.box.preparationStatus ?? "Starting…"
         case .failed: return "Startup stopped. Open the box to review its status."
         case .ready: return "Running · outside your current filters"
         }

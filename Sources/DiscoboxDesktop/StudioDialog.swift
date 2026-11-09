@@ -17,9 +17,9 @@ struct StudioDialogHeader: View {
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(destructive ? Color.red : DiscoboxAppearance.accent)
                 .frame(width: 36, height: 36)
-                .background(destructive ? Color.red.opacity(0.1) : DiscoboxAppearance.selection, in: RoundedRectangle(cornerRadius: 9))
+                .background(destructive ? Color.red.opacity(0.1) : DiscoboxAppearance.selection, in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 17, weight: .semibold))
+                Text(title).font(BrandTypography.mono(17, weight: .semibold)).foregroundStyle(BrandTokens.onGold).padding(.horizontal, 6).padding(.vertical, 3).background(BrandTokens.gold, in: RoundedRectangle(cornerRadius: 4))
                 if let subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 12)
@@ -60,8 +60,8 @@ struct StudioConfirmationSubject: View {
             Image(systemName: "shippingbox").foregroundStyle(.secondary).padding(.top, 2)
             Text(name).font(.system(size: 13, weight: .semibold)).textSelection(.enabled).lineLimit(4)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+            .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
     }
 }
 
@@ -72,8 +72,8 @@ struct StudioConfirmationField<Content: View>: View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             content.textFieldStyle(.plain).font(.system(size: 13)).padding(10)
-                .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+                .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
         }
     }
 }
@@ -109,9 +109,9 @@ struct StudioMessageSheet: View {
 
 extension View {
     func studioCard() -> some View {
-        self.background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
+        self.background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
     }
 }
 

@@ -21,29 +21,29 @@ struct NewBoxCredentialsSection: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Available when this box’s harness starts. The selected server stores each token and assigns it to this box.")
+                Text("API keys and MCP tokens used by this box. Agent sign-in is managed separately in Settings → Harnesses.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 ForEach($drafts) { $draft in
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("Token credential").font(.system(size: 11, weight: .medium))
+                            Text("Box secret").font(.system(size: 11, weight: .medium))
                             Spacer()
                             Button {
                                 drafts.removeAll { $0.id == draft.id }
                             } label: { Image(systemName: "trash") }
                                 .buttonStyle(.plain).foregroundStyle(.secondary)
-                                .help("Remove credential").accessibilityLabel("Remove credential")
+                                .help("Remove secret").accessibilityLabel("Remove secret")
                         }
                         credentialField("Environment variable") {
                             TextField("OBOT_MCP_TOKEN", text: $draft.environment)
                                 .font(.system(size: 12, design: .monospaced))
                                 .accessibilityIdentifier("newBox.credential.environment")
                         }
-                        credentialField("Destination host") {
-                            TextField("demo.on-obot.ai", text: $draft.host)
+                        credentialField("Allowed host") {
+                            TextField("mcp.example.com", text: $draft.host)
                                 .accessibilityIdentifier("newBox.credential.host")
                         }
-                        credentialField("Token") {
+                        credentialField("Secret value") {
                             SecureField("Paste token", text: $draft.token)
                                 .accessibilityIdentifier("newBox.credential.token")
                         }
@@ -54,7 +54,7 @@ struct NewBoxCredentialsSection: View {
                 if drafts.count < 16 {
                     Button {
                         drafts.append(.init())
-                    } label: { Label("Add Credential", systemImage: "plus") }
+                    } label: { Label(drafts.isEmpty ? "Add secret" : "Add another secret", systemImage: "plus") }
                         .accessibilityIdentifier("newBox.credential.add")
                 }
                 Text("Use ${VARIABLE} in your MCP headers. Discobox supplies a placeholder and inserts the token for requests to its destination host. Older servers may ask you to approve its first use.")
@@ -66,8 +66,8 @@ struct NewBoxCredentialsSection: View {
             }.padding(.top, 10)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "key")
-                Text("Credentials for this box").font(.system(size: 12, weight: .medium))
+                Image(systemName: "lock")
+                Text("Box secrets").font(.system(size: 12, weight: .medium))
                 Spacer()
                 Text(drafts.isEmpty ? "Optional" : "\(drafts.count)").font(.system(size: 11)).foregroundStyle(.secondary)
             }

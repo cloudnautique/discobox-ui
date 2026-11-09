@@ -10,6 +10,7 @@ struct PoolResourcesView: View {
     @Environment(DesktopWindows.self) private var desktops: DesktopWindows?
     @Environment(\.dismiss) private var dismiss
     @State private var poolID = ""
+    @State private var networkPool: PoolCacheClearRequest?
     @State private var selection: Set<String> = []
     @State private var sort = "disk"
     @State private var clearRequest: PoolCacheClearRequest?
@@ -79,6 +80,7 @@ struct PoolResourcesView: View {
             HStack {
                 if let pool {
                     Button(stopping ? "Stopping…" : "Stop Selected") { stopSelected() }.disabled(selectedRunning.isEmpty || busy)
+                    Button("Network & Trust…") { networkPool = .init(pool: pool, connection: workspace.connectionID) }.disabled(busy || !workspace.isConnected)
                     Button("Clear Caches…", role: .destructive) { clearRequest = .init(pool: pool, connection: workspace.connectionID) }
                         .disabled(busy || !workspace.isConnected).accessibilityIdentifier("resources.clearCaches")
                 }
@@ -93,6 +95,9 @@ struct PoolResourcesView: View {
                 await workspace.refreshResources()
                 guard !Task.isCancelled, generation == workspace.connectionID else { return }
                 choosePool()
+            }
+            .sheet(item: $networkPool) { request in
+                PoolNetworkView(poolID: request.pool.id, computer: computer, connection: request.connection).environment(workspace)
             }
             .sheet(item: $clearRequest) { request in
                 PoolCacheClearSheet(request: request, computer: computer)

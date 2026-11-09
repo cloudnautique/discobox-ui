@@ -35,12 +35,47 @@ public struct ApprovalItem: Decodable, Identifiable, Sendable, Equatable {
     public let kind: String
     public let credential: JSONValue?
     public let trust: JSONValue?
-    public var request: JSONValue { credential ?? trust ?? .null }
+    public let refresh: JSONValue?
+    public let adoption: JSONValue?
+    public let apiAccess: JSONValue?
+    private let future: JSONValue?
+    public init(kind: String, credential: JSONValue? = nil, trust: JSONValue? = nil, refresh: JSONValue? = nil, adoption: JSONValue? = nil, apiAccess: JSONValue? = nil) {
+        self.kind = kind; self.credential = credential; self.trust = trust
+        self.refresh = refresh; self.adoption = adoption; self.apiAccess = apiAccess; future = nil
+    }
+    public init(from decoder: any Decoder) throws {
+        let root = try JSONValue(from: decoder)
+        kind = root["kind"].string
+        func value(_ key: String) -> JSONValue? { root[key] == .null ? nil : root[key] }
+        credential = value("credential"); trust = value("trust"); refresh = value("refresh")
+        adoption = value("adoption"); apiAccess = value("apiAccess"); future = ["credential", "trust", "refresh", "adoption", "apiAccess"].contains(kind) ? nil : value(kind)
+    }
+    public var request: JSONValue {
+        switch kind {
+        case "credential": credential ?? .null
+        case "trust": trust ?? .null
+        case "refresh": refresh ?? .null
+        case "adoption": adoption ?? .null
+        case "apiAccess": apiAccess ?? .null
+        default: future ?? .null
+        }
+    }
+    public var supported: Bool { ["credential", "trust", "refresh", "adoption", "apiAccess"].contains(kind) }
     public var id: String { request["id"].string }
-    public var boxID: String { request["sandboxId"].string }
+    public var boxID: String {
+        let requester = request["requesterSandboxId"].string
+        return requester.isEmpty ? request["sandboxId"].string : requester
+    }
     public var title: String {
-        if kind == "trust" { return "Trust " + request["host"].string }
-        let name = request["name"].string.isEmpty ? request["wellKnownId"].string : request["name"].string
-        return (request["reason"].string == "refresh" ? "Refresh " : "Approve ") + (name.isEmpty ? "credential" : name)
+        switch kind {
+        case "trust": return "Trust " + request["host"].string
+        case "apiAccess": return "Allow Discobox API access?"
+        case "adoption": return "Allow this box to lead another box?"
+        case "refresh": return "Refresh " + (request["secretName"].string.isEmpty ? "credential" : request["secretName"].string)
+        case "credential":
+            let name = request["name"].string.isEmpty ? request["wellKnownId"].string : request["name"].string
+            return (request["reason"].string == "refresh" ? "Refresh " : "Approve ") + (name.isEmpty ? "credential" : name)
+        default: return "Review " + kind + " request"
+        }
     }
 }

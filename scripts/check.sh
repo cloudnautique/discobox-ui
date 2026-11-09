@@ -4,6 +4,14 @@ source "$(dirname "$0")/dev-env.sh"
 
 case "${1:-}" in
     lint)
+        python3 scripts/generate-brand.py --check
+        python3 - <<'PYFONT'
+import hashlib
+from pathlib import Path
+font = Path("Resources/Fonts/JetBrainsMono-Regular.ttf")
+assert hashlib.sha256(font.read_bytes()).hexdigest() == "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f", "Bundled font differs from pinned upstream asset"
+assert "SIL OPEN FONT LICENSE" in Path("Resources/Fonts/OFL.txt").read_text()
+PYFONT
         # Use the compiler's Swift diagnostics without imposing a new source style.
         swift build --disable-sandbox --cache-path .build/package-cache -Xswiftc -warnings-as-errors
         unformatted=$(gofmt -l Companion/*.go)

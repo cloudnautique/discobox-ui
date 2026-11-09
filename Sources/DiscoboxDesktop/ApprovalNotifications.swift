@@ -299,7 +299,7 @@ struct ApprovalNotificationConfiguration {
         // No credential values, policies, justifications, addresses, or tokens
         // in the OS payload. Opaque keys resolve to a live in-memory snapshot.
         content.userInfo = ["computer": Self.computerKey(notice.computerID)]
-        content.categoryIdentifier = direct ? Self.directCategory : Self.reviewCategory
+        content.categoryIdentifier = notice.item.supported ? (direct ? Self.directCategory : Self.reviewCategory) : ""
         content.sound = .default
         return content
     }

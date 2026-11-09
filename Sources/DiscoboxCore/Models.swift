@@ -18,6 +18,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     public let platform: String?
     public let createdAt: String?
     public let harnessConfig: JSONValue?
+    public var preparationStatus: String? = nil
 
     public struct Configuration: Codable, Sendable, Equatable {
         public let name: String?
@@ -139,7 +140,7 @@ public struct InputPart: Codable, Sendable, Equatable {
 }
 
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public enum Operation: String, Encodable, Sendable { case poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
     public let operation: Operation
     public let projectID: String?
     public let sandboxID: String?

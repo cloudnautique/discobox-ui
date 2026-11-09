@@ -43,3 +43,15 @@ private actor InboxFixture: DiscoboxClient {
     #expect(inbox.approvalRequests.count == 1)
     #expect(inbox.approvalRequests[0].request["policy"]["resolved"]["primary.repo"].string == "example/project")
 }
+
+@Test func allInboxKindsRetainTheirIdentityAndUnknownKindsStayVisible() throws {
+    for kind in ["credential", "trust", "refresh", "adoption", "apiAccess", "future"] {
+        let value: JSONValue = .object(["kind": .string(kind), kind: .object(["id": .string("r-" + kind), "requesterSandboxId": .string("requester"), "status": .string("pending"), "futurePolicy": .bool(true)])])
+        let item = try JSONDecoder().decode(ApprovalItem.self, from: JSONEncoder().encode(value))
+        #expect(item.id == "r-" + kind)
+        #expect(item.boxID == "requester")
+        #expect(item.request["futurePolicy"] == .bool(true))
+        #expect(item.supported == (kind != "future"))
+        if kind != "credential" { #expect(item.notificationApprovalPayload == nil) }
+    }
+}

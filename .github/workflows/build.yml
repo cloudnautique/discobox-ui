@@ -23,7 +23,7 @@ jobs:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DISCOBOX_REVISION: 9750837cb5122c0cf6390f68150a23fb4d62da79
+      DISCOBOX_REVISION: e9444637b9d7919d1cc2a45912356ac34847048c
       GOPRIVATE: github.com/discobox-ai/*
       GIT_TERMINAL_PROMPT: '0'
 

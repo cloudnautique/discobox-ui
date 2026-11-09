@@ -6,6 +6,9 @@ struct WorkspaceView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @State private var refreshingBoxes = false
+    @State private var contentWidth: CGFloat = 0
+    @State private var sidebarWidth: CGFloat = 282
+    @State private var responsiveRail = false
     @State private var showInbox = false
     @State private var boxAction: BoxActionRequest?
     @State private var archiveSelection: Set<String> = []
@@ -38,7 +41,7 @@ struct WorkspaceView: View {
     @AppStorage("boxGrouping") private var grouping = "repository"
     @AppStorage("boxGroupingTagKey") private var groupingTagKey = ""
     @AppStorage("inspectorCompactRail") private var compactRail = true
-    private var inspectorRailVisible: Bool { compactRail && !commands.showInspector && workspace.selectedBox != nil }
+    private var inspectorRailVisible: Bool { (compactRail || responsiveRail) && !commands.showInspector && workspace.selectedBox != nil }
     @State private var localTags: Set<String> = []
     @State private var localMatchAnyTag = false
     @State private var showTagFilters = false
@@ -125,7 +128,7 @@ struct WorkspaceView: View {
                             } label: { Text(currentFilter.rawValue).fontWeight(.semibold) }
                             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(.primary)
                             Spacer()
-                            Button { commands.showCreateBox = true } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New box")
+                            Button { commands.newBox() } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New box")
                             if refreshingBoxes { ProgressView().controlSize(.small) }
                             if let connections {
                                 Text("\(connections.browserBoxes.count)").font(.caption).foregroundStyle(.secondary)
@@ -155,17 +158,13 @@ struct WorkspaceView: View {
                             if grouping != "none" {
                                 ForEach(repositories, id: \.self) { repository in
                                     let boxes = groupedBoxes[repository] ?? []
-                                    Button {
-                                        if collapsedRepositories.contains(collapseKey(repository)) { collapsedRepositories.remove(collapseKey(repository)) }
-                                        else { collapsedRepositories.insert(collapseKey(repository)) }
-                                    } label: {
-                                        RepositoryGroupHeader(repository: repository, count: boxes.count, symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
-                                                              expanded: !collapsedRepositories.contains(collapseKey(repository)))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 4, trailing: 0))
-                                    .accessibilityLabel("\(repository), \(boxes.count) boxes")
-                                    .accessibilityValue(collapsedRepositories.contains(collapseKey(repository)) ? "Collapsed" : "Expanded")
+                                    let choice = grouping == "repository" ? boxes.compactMap(RepositoryChoice.init(box:)).first : nil
+                                    RepositoryGroupHeader(repository: repository, count: boxes.count, symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
+                                        expanded: !collapsedRepositories.contains(collapseKey(repository)), toggle: {
+                                            if collapsedRepositories.contains(collapseKey(repository)) { collapsedRepositories.remove(collapseKey(repository)) }
+                                            else { collapsedRepositories.insert(collapseKey(repository)) }
+                                        }, newBox: choice.map { value in { commands.newBox(repository: value.source) } })
+                                        .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 4, trailing: 0))
                                     if !collapsedRepositories.contains(collapseKey(repository)) {
                                         ForEach(boxes) { box in sidebarRow(box) }
                                     }
@@ -203,6 +202,9 @@ struct WorkspaceView: View {
                         .allowsHitTesting(!commands.focusMode)
                         .accessibilityHidden(commands.focusMode)
                         .accessibilityLabel("Boxes").background(DiscoboxAppearance.sidebar)
+                        .background(GeometryReader { geometry in
+                            Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in sidebarWidth = width; fitInspector() }
+                        })
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Group {
@@ -229,6 +231,12 @@ struct WorkspaceView: View {
 
                     }
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in contentWidth = width; fitInspector() }
+                })
+                .onChange(of: commands.showInspector) { fitInspector() }
+                .onChange(of: commands.currentLayout?.isSplit) { fitInspector() }
+                .onChange(of: commands.currentLayout?.shellSideBySide) { fitInspector() }
                 Divider()
                 // Status changes must not resize an inline terminal UI while it
                 // is drawing its prompt. Keep hints and approvals in one row.
@@ -268,18 +276,32 @@ struct WorkspaceView: View {
                     }
                     ToolbarItem(id: "workspace.actions", placement: .automatic) {
                         HStack(spacing: 12) {
+                            let hidden = commands.currentLayout?.isSplit != true
+                            Button { commands.performAppShortcut(.toggleShells) } label: {
+                                let count = commands.currentLayout?.terminalIDs.count ?? 0
+                                Label(count == 0 ? "New shell" : "Shells · \(count)", systemImage: "terminal")
+                            }.labelStyle(.titleAndIcon).buttonStyle(.borderless).frame(width: 92)
+                                .opacity(hidden ? 1 : 0).disabled(!hidden || workspace.selectedBox?.isRunning != true && commands.currentLayout?.companionIDs.isEmpty != false)
+                                .allowsHitTesting(hidden).accessibilityHidden(!hidden)
+                                .accessibilityIdentifier("workspace.restoreShells")
+                                .help("Show the last shell (" + commands.appShortcuts[.toggleShells] + ")")
+                            WorkspaceDesktopButton()
+                            Button { commands.toggleServices() } label: { Label("Services", systemImage: "network") }
+                                .labelStyle(.titleAndIcon).buttonStyle(.borderless)
+                                .foregroundStyle(commands.showInspector && commands.inspectorSection == "services" ? DiscoboxAppearance.accent : .secondary)
+                                .disabled(workspace.selectedBox == nil).help("Show or hide services")
+                                .accessibilityIdentifier("workspace.services")
                             Menu {
+                                Button("Box Inspector") { commands.inspectorSection = "box"; commands.showInspector = true }
+                                Button("Files") { commands.perform(.files) }.disabled(workspace.selectedBox == nil)
+                                Button("Tools & Additional Agent…") { commands.showTools = true }
+                                Divider()
                                 if let box = workspace.selectedBox { BoxActionMenu(box: box) { choose($0, box: box) } }
                             } label: { Image(systemName: "ellipsis.circle") }
-                            .menuStyle(.borderlessButton).fixedSize()
-                            .disabled(workspace.selectedBox == nil).help("Actions for this box")
-                            Button { commands.toggleInspector() } label: { Image(systemName: "sidebar.right") }
-                                .buttonStyle(.borderless).help("Toggle inspector (" + commands.appShortcuts[.toggleInspector] + ")")
-                                .opacity(inspectorRailVisible ? 0 : 1)
-                                .disabled(inspectorRailVisible)
-                                .allowsHitTesting(!inspectorRailVisible)
-                                .accessibilityHidden(inspectorRailVisible)
-                        }.foregroundStyle(.secondary).frame(width: 70)
+                                .menuStyle(.borderlessButton).fixedSize()
+                                .disabled(workspace.selectedBox == nil).help("Actions for this box")
+                        }.font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 340, alignment: .trailing)
+
                     }
                 }
                 .toolbar(removing: .sidebarToggle)
@@ -323,6 +345,20 @@ struct WorkspaceView: View {
             TagFilterSheet(choices: tagChoices, selected: tagBinding, matchAny: matchAnyBinding)
         }
         .onChange(of: workspace.connectionID) { _, _ in if connections == nil { localTags.removeAll() } }
+    }
+    private func fitInspector() {
+        guard contentWidth > 0 else { return }
+        let available = contentWidth - (commands.focusMode ? 0 : sidebarWidth)
+        if let layout = commands.currentLayout, layout.shellsSplit, layout.shellSideBySide, available < 1140 {
+            layout.shellSideBySide = false
+        }
+        let minimum: CGFloat = commands.currentLayout?.isSplit == true ? (commands.currentLayout?.shellsSplit == true && commands.currentLayout?.shellSideBySide == true ? 1080 : 720) : 360
+        if commands.showInspector && available < minimum + 322 {
+            responsiveRail = true
+            commands.showInspector = false
+        } else if commands.showInspector {
+            responsiveRail = false
+        }
     }
     private func openShell(in box: Sandbox) {
         let connection = workspace.connectionID
@@ -395,7 +431,7 @@ private struct WorkspaceDialogs: View {
     var body: some View {
         @Bindable var commands = commands
         Color.clear.frame(width: 0, height: 0)
-            .sheet(isPresented: $commands.showCreateBox) { NewBoxSheet().environment(workspace) }
+            .sheet(isPresented: $commands.showCreateBox) { NewBoxSheet(repository: commands.creationSeed?.repository ?? "", computer: commands.creationSeed?.computer).environment(workspace) }
             .sheet(isPresented: $commands.choosingBox) { BoxChooser().environment(workspace) }
     }
 }
@@ -649,23 +685,33 @@ struct RepositoryGroupHeader: View {
     let count: Int
     let symbol: String
     let expanded: Bool
+    var toggle: (() -> Void)? = nil
+    var newBox: (() -> Void)? = nil
     private var parts: [String] { repository.split(separator: "/").map(String.init) }
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .font(.system(size: 9, weight: .semibold)).frame(width: 10)
-            Image(systemName: symbol).foregroundStyle(.secondary)
-            if symbol == "folder" && parts.count > 1 {
-                (Text(parts.dropLast().joined(separator: "/") + " / ").foregroundColor(.secondary)
-                 + Text(parts.last ?? repository).bold())
-                    .lineLimit(1).truncationMode(.middle)
-            } else { Text(repository).bold().lineLimit(1) }
-            Spacer(minLength: 2)
-            Text(String(count)).monospacedDigit().foregroundStyle(.secondary)
-        }
-        .font(.system(size: 11)).padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 6)
-        .overlay(alignment: .top) { DiscoboxAppearance.border.opacity(0.7).frame(height: 1) }
-        .contentShape(Rectangle()).help(repository)
+        HStack(spacing: 4) {
+            Button { toggle?() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+                    Image(systemName: symbol).foregroundStyle(.secondary)
+                    if symbol == "folder" && parts.count > 1 {
+                        (Text(parts.dropLast().joined(separator: "/") + " / ").foregroundColor(.secondary)
+                         + Text(parts.last ?? repository).bold()).lineLimit(1).truncationMode(.middle)
+                    } else { Text(repository).bold().lineLimit(1) }
+                    Spacer(minLength: 2)
+                    Text(String(count)).monospacedDigit().foregroundStyle(.secondary)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).help(repository)
+                .accessibilityLabel("\(repository), \(count) boxes").accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            if let newBox {
+                Button(action: newBox) { Image(systemName: "plus").font(.system(size: 11, weight: .medium)).frame(width: 22, height: 23) }
+                    .buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
+                    .help("New box in " + repository).accessibilityLabel("New box in " + repository)
+                    .accessibilityIdentifier("repository.newBox")
+            }
+        }.font(.system(size: 11)).padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 6)
+            .overlay(alignment: .top) { DiscoboxAppearance.border.opacity(0.7).frame(height: 1) }
     }
 }
 
@@ -676,7 +722,7 @@ struct BoxRow: View {
     @State private var showInbox = false
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Circle().fill(box.needsRepair ? Color.red : box.isRunning ? .green : (box.matchesAttention ? .orange : .secondary.opacity(0.4)))
+            Circle().fill(box.needsRepair ? DiscoboxAppearance.danger : box.isRunning ? DiscoboxAppearance.success : (box.matchesAttention ? DiscoboxAppearance.warning : .secondary.opacity(0.4)))
                 .frame(width: 7, height: 7).padding(.top, 6)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -719,9 +765,9 @@ struct StatusLabel: View {
     }
     private var color: Color {
         switch status.lowercased() {
-        case "running": .green
-        case "failed", "error": .red
-        case "starting", "pending", "awaiting source", "stopping": .orange
+        case "running": DiscoboxAppearance.success
+        case "failed", "error": DiscoboxAppearance.danger
+        case "starting", "pending", "awaiting source", "stopping", "repairing": DiscoboxAppearance.warning
         default: .secondary
         }
     }
@@ -733,10 +779,10 @@ struct Notice: View {
     var warning = true
     var body: some View {
         Label(text, systemImage: symbol)
-            .font(.caption).foregroundStyle(warning ? Color.orange : Color.secondary)
+            .font(.caption).foregroundStyle(warning ? DiscoboxAppearance.warning : Color.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(warning ? Color.orange.opacity(0.07) : Color.accentColor.opacity(0.05))
+            .background(warning ? DiscoboxAppearance.warning.opacity(0.07) : Color.accentColor.opacity(0.05))
             .textSelection(.enabled)
     }
 }

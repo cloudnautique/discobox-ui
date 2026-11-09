@@ -408,9 +408,9 @@ public final class Workspace {
             throw DiscoboxError("The request changed or was answered elsewhere. Check the approval inbox.")
         }
     }
-    public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil) async throws -> JSONValue {
+    public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
-        let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, action: action, payload: payload, localPath: localPath))
+        let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, action: action, payload: payload, localPath: localPath, poolID: poolID))
         if data.isEmpty { return .object([:]) }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }

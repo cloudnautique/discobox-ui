@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AppShortcutAction: String, CaseIterable, Codable, Identifiable, Sendable {
-    case newBox, switchBox, previousTab, nextTab, previousPane, nextPane, toggleInspector, help
+    case newBox, switchBox, previousTab, nextTab, previousPane, nextPane, toggleInspector, toggleShells, help
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -12,6 +12,7 @@ public enum AppShortcutAction: String, CaseIterable, Codable, Identifiable, Send
         case .previousPane: "Previous Pane"
         case .nextPane: "Next Pane"
         case .toggleInspector: "Toggle Inspector"
+        case .toggleShells: "Hide / Show Shells"
         case .help: "Workspace Help"
         }
     }
@@ -24,6 +25,7 @@ public enum AppShortcutAction: String, CaseIterable, Codable, Identifiable, Send
         case .previousPane: "cmd+["
         case .nextPane: "cmd+]"
         case .toggleInspector: "cmd+option+i"
+        case .toggleShells: "cmd+j"
         case .help: "cmd+h"
         }
     }

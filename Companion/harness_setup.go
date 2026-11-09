@@ -14,7 +14,7 @@ func harnessSetupArgs(endpoint, project, harness string) ([]string, error) {
 	if strings.HasPrefix(harness, "-") || endpoint == "" || validID(project) != nil || validID(harness) != nil {
 		return nil, errors.New("invalid harness setup destination")
 	}
-	return []string{"--server", endpoint, "--project", project, "--auto-start-server=false", "configure"}, nil
+	return []string{"--server", resolveLocalEndpoint(endpoint), "--project", project, "--auto-start-server=false", "configure"}, nil
 }
 
 func runHarnessSetup(endpoint, project, harness string) error {

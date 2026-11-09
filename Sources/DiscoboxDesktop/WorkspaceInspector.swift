@@ -43,8 +43,10 @@ struct WorkspaceInspector: View {
                     Text("Services").tag("services")
                     Text("Box").tag("box")
                     Text("Tags").tag("tags")
-                }.pickerStyle(.segmented)
-            }.padding(10)
+                }.pickerStyle(.segmented).labelsHidden()
+                Button { commands.showInspector = false } label: { Image(systemName: "xmark").font(.system(size: 10)) }
+                    .buttonStyle(.borderless).help("Close inspector").accessibilityLabel("Close inspector")
+            }.padding(.horizontal, 12).frame(height: 42)
             Divider()
             switch commands.inspectorSection {
             case "box": BoxInspector(box: box)
@@ -90,10 +92,6 @@ struct ServiceRail: View {
         HStack(spacing: 0) {
             Divider()
             VStack(spacing: 10) {
-                Button { commands.toggleInspector() } label: { Image(systemName: "sidebar.right") }
-                    .help("Expand inspector (" + commands.appShortcuts[.toggleInspector] + ")")
-                    .padding(.top, 12)
-                Divider().padding(.horizontal, 8)
                 ScrollView {
                     VStack(spacing: 12) {
                         if session?.loading == true { ProgressView().controlSize(.mini) }

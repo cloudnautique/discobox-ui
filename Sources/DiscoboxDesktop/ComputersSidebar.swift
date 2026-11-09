@@ -5,6 +5,7 @@ struct ComputersSidebar: View {
     @Environment(Connections.self) private var connections
     @Environment(ConnectionRuntimes.self) private var runtimes
     @Environment(Workspace.self) private var workspace
+    @Environment(WorkspaceCommands.self) private var commands
     let grouping: String
     let tagKey: String
     @State private var resourceHost: ConnectionSession?
@@ -67,13 +68,19 @@ struct ComputersSidebar: View {
                         let groups = Dictionary(grouping: items) { BoxOrganization.group($0.box, by: grouping, tagKey: tagKey) }
                         ForEach(groups.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { group in
                             let key = collapseKey(group)
-                            Button {
-                                if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
-                            } label: {
-                                RepositoryGroupHeader(repository: group, count: groups[group]?.count ?? 0,
-                                    symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
-                                    expanded: !collapsed.contains(key))
-                            }.buttonStyle(.plain)
+                            let groupItems = groups[group] ?? []
+                            let seed = grouping == "repository" ? groupItems.sorted { left, right in
+                                let preferred = browser.computerID ?? connections.activeID
+                                return left.location.connection == preferred && right.location.connection != preferred
+                            }.first(where: { connections.session($0.location.connection)?.workspace.isConnected == true && RepositoryChoice(box: $0.box) != nil }) : nil
+                            RepositoryGroupHeader(repository: group, count: groupItems.count,
+                                symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
+                                expanded: !collapsed.contains(key), toggle: {
+                                    if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
+                                }, newBox: seed.map { item in {
+                                    guard let choice = RepositoryChoice(box: item.box) else { return }
+                                    commands.newBox(repository: choice.source, computer: item.location.connection)
+                                } })
                                 .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 5, trailing: 0))
                                 .listRowSeparator(.hidden)
                             if !collapsed.contains(key) { ForEach(groups[group] ?? []) { item in row(item) } }

@@ -15,6 +15,7 @@ import DiscoboxCore
             guard workspace.isDemo else { throw Failure("offline workspace required") }
             try await wait { commands.window != nil }
             let window = commands.window!
+            window.setContentSize(NSSize(width: 1320, height: 850))
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             try await wait {
@@ -117,8 +118,13 @@ import DiscoboxCore
             let splitViews = terminalViews(window.contentView!)
             guard splitViews.allSatisfy({ $0.bounds.width > 150 && $0.bounds.height > 200 }) else { throw Failure("split terminal has collapsed bounds") }
             guard let divider = splitViews[0].ancestorSplitView else { throw Failure("native split divider missing") }
+            try await Task.sleep(for: .milliseconds(350))
             let oldWidth = splitViews[0].bounds.width
-            divider.setPosition(divider.bounds.width * 0.6, ofDividerAt: 0)
+            print("COMMAND: initial split \(divider.bounds), terminals \(splitViews.map { $0.bounds.size }), window \(window.contentLayoutRect), inspector \(commands.showInspector)"); fflush(stdout)
+            guard !commands.showInspector else { throw Failure("closed inspector reopened while opening a shell") }
+            let minimumShell = min(360, (divider.bounds.width - divider.dividerThickness) / 2) - 2 * DiscoboxAppearance.terminalInset
+            guard splitViews[1].bounds.width >= minimumShell - 2 else { throw Failure("new shell was squeezed to minimum width: \(splitViews[1].bounds), expected at least \(minimumShell)") }
+            divider.setPosition(divider.bounds.width * (oldWidth > divider.bounds.width * 0.5 ? 0.4 : 0.65), ofDividerAt: 0)
             try await wait { abs(splitViews[0].bounds.width - oldWidth) > 10 }
             let frames = splitViews.map { $0.convert($0.bounds, to: window.contentView) }
             guard !frames[0].intersects(frames[1]) else { throw Failure("split terminals overlap") }
@@ -126,6 +132,8 @@ import DiscoboxCore
                 capture(window, path: directory + "/split-shell.png")
             }
             print("COMMAND: split"); fflush(stdout)
+            window.setContentSize(NSSize(width: 1680, height: 850))
+            try await Task.sleep(for: .milliseconds(250))
             let beforeMaximize = commands.currentLayout!.selected
             let beforeFocus = commands.currentLayout!.agentFocused
             let beforeSidebar = commands.focusMode
@@ -223,25 +231,25 @@ import DiscoboxCore
             try await post(window, code: 30, text: "}", plain: "]", flags: [.command, .shift])
             try await wait { commands.currentLayout?.selected == "audit" && terminalViews(window.contentView!).count == 1 }
             try await wait { !(window.firstResponder is GhosttyTerminalView) }
-            // Layout controls support side-by-side and a single maximized tab.
-            commands.currentLayout?.sideBySide = true
+            // Shell visibility and focus are independent from the retained agent.
             commands.currentLayout?.open("exec:shell-1")
             try await wait { terminalViews(window.contentView!).count == 2 }
             try await Task.sleep(for: .milliseconds(200))
             let sideFrames = terminalViews(window.contentView!).map { $0.convert($0.bounds, to: window.contentView) }
             guard abs(sideFrames[0].minY - sideFrames[1].minY) < 1 else { throw Failure("side-by-side headers misaligned") }
-            commands.currentLayout?.keepAgent = false
-            do { try await wait { terminalViews(window.contentView!).count == 1 } }
-            catch { throw Failure("single tab: count=\(terminalViews(window.contentView!).count) selected=\(commands.currentLayout?.selected ?? "nil") split=\(commands.currentLayout?.isSplit ?? false)") }
-            guard terminalViews(window.contentView!).first === splitViews[1] else { throw Failure("maximize selected wrong terminal") }
-            commands.currentLayout?.keepAgent = true
-            commands.currentLayout?.sideBySide = false
+            try await post(window, code: 38, text: "j", flags: .command)
+            try await wait { terminalViews(window.contentView!).count == 1 }
+            guard terminalViews(window.contentView!).first === splitViews[0], commands.currentLayout?.lastCompanion == "exec:shell-1" else {
+                throw Failure("hiding shells lost the agent or its remembered shell")
+            }
+            try await post(window, code: 38, text: "j", flags: .command)
+            try await wait { terminalViews(window.contentView!).count == 2 && window.firstResponder === splitViews[1] }
             commands.currentLayout?.open("audit")
             if let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"] {
                 try await Task.sleep(for: .milliseconds(400))
                 capture(window, path: directory + "/split-audit.png")
             }
-            print("COMMAND: tabs, pane shortcuts, keep-agent and layout modes OK"); fflush(stdout)
+            print("COMMAND: tab navigation, retained agent, shell hide/restore and focus OK"); fflush(stdout)
             let snapshot = try await workspace.auditSnapshot(box: workspace.sandboxID!)
             guard snapshot.records.count == 2 else { throw Failure("audit fixture missing") }
             try await post(window, code: 4, text: "h", flags: .command)
@@ -297,7 +305,16 @@ import DiscoboxCore
             commands.showCreateBox = false
             try await wait { window.attachedSheet == nil }
             commands.appShortcuts = AppShortcuts()
-            print("COMMAND: Cmd-N, Cmd-K and remapped app shortcut OK"); fflush(stdout)
+            commands.newBox(repository: "git@github.com:acme/private.git")
+            try await wait { window.attachedSheet != nil }
+            guard let seededSheet = window.attachedSheet else { throw Failure("contextual New Box did not open") }
+            try await wait { descendants(seededSheet.contentView!).compactMap { $0 as? NSTextField }.contains { $0.stringValue == "git@github.com:acme/private.git" } }
+            if let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"] {
+                capture(seededSheet, path: directory + "/new-box-prefilled.png")
+            }
+            commands.showCreateBox = false
+            try await wait { window.attachedSheet == nil }
+            print("COMMAND: Cmd-N, Cmd-K, remapped shortcut and contextual repository prefill OK"); fflush(stdout)
             print("COMMAND: sheets"); fflush(stdout)
             commands.showTools = true
             try await wait { window.attachedSheet != nil }
@@ -321,6 +338,45 @@ import DiscoboxCore
             guard await client.lastApprovalAction == "deny" else { throw Failure("approval form default was not Deny") }
             print("COMMAND: single request opens directly; Return denies without review step"); fflush(stdout)
             window.makeKeyAndOrderFront(nil)
+            await client.setAdditionalShells(1)
+            await workspace.refreshDetails()
+            try await wait { commands.currentLayout?.terminalIDs.contains("exec:shell-extra-1") == true }
+            let layout = commands.currentLayout!
+            layout.open("exec:shell-1"); layout.split(with: "exec:shell-extra-1")
+            try await wait { terminalViews(window.contentView!).count == 3 }
+            try await Task.sleep(for: .milliseconds(250))
+            guard terminalViews(window.contentView!).allSatisfy({ $0.bounds.width >= 340 }) else { throw Failure("split insertion squeezed a terminal to minimum width") }
+            guard terminalViews(window.contentView!).contains(where: { $0 === harness }) else { throw Failure("split shells replaced the agent") }
+            layout.rename("exec:shell-extra-1", to: "Tests")
+            window.setContentSize(NSSize(width: 1680, height: 850))
+            layout.shellSideBySide = true
+            try await Task.sleep(for: .milliseconds(300))
+            let triple = terminalViews(window.contentView!)
+            for (index, view) in triple.enumerated() {
+                guard view.bounds.width > 100, view.bounds.height > 100 else { throw Failure("collapsed split shell") }
+                let rect = view.convert(view.bounds, to: window.contentView)
+                for other in triple.dropFirst(index + 1) {
+                    guard !rect.intersects(other.convert(other.bounds, to: window.contentView)) else { throw Failure("split shell surfaces overlap") }
+                }
+            }
+            window.setContentSize(NSSize(width: 1000, height: 850))
+            try await Task.sleep(for: .milliseconds(350))
+            guard !layout.shellSideBySide else { throw Failure("narrow window kept three squeezed columns") }
+            let narrow = terminalViews(window.contentView!)
+            for view in narrow {
+                let rect = view.convert(view.bounds, to: nil)
+                guard rect.minX >= 0, rect.maxX <= window.contentLayoutRect.maxX + 2 else { throw Failure("narrow split extends outside the window") }
+            }
+            window.setContentSize(NSSize(width: 1320, height: 850))
+            commands.toggleShells()
+            try await wait { terminalViews(window.contentView!).count == 1 }
+            commands.toggleShells()
+            try await wait { terminalViews(window.contentView!).count == 3 }
+            layout.mergeShells()
+            try await wait { terminalViews(window.contentView!).count == 2 }
+            try await workspace.closeShell("shell-extra-1")
+            try await wait { layout.selected == "exec:shell-1" }
+            print("COMMAND: two-shell split/merge, hide/restore, names, retained agent and closed-session fallback OK"); fflush(stdout)
             try await workspace.closeShell("shell-1")
             guard !workspace.execs.contains(where: { $0.id == "shell-1" }) else { throw Failure("closed shell remains") }
             commands.tab = .terminal
@@ -337,7 +393,7 @@ import DiscoboxCore
                 settings.orderOut(nil)
             }
             terminals.closeAll()
-            print("COMMAND_SMOKE_OK: remapped leader, multi-key services, text-field isolation, agent navigation, demo shell, split terminal bounds, cancellation, tab navigation, pane focus, keep-agent layouts and aligned headers, Cmd-H help, new-box prompt, tools sheet, files drawer, approval sheet and resolution, shell close")
+            print("COMMAND_SMOKE_OK: remapped leader, multi-key services, text-field isolation, agent navigation, demo shell, split terminal bounds, cancellation, tab navigation, pane focus, shell split/merge, hide/restore and aligned headers, Cmd-H help, new-box prompt, tools sheet, files drawer, approval sheet and resolution, shell close")
             fflush(stdout); exit(0)
         } catch {
             print("COMMAND_SMOKE_FAILED: \(error)"); fflush(stdout)

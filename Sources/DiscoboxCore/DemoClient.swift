@@ -8,6 +8,8 @@ public actor DemoClient: DiscoboxClient {
     private var newBoxes: [[String: Any]] = []
     private var messages: [String] = []
     public private(set) var lastApprovalAction: String?
+    private var additionalShells = 0
+    public func setAdditionalShells(_ count: Int) { additionalShells = min(2, max(0, count)) }
     private var pendingRequests: Bool
     public init(pendingRequests: Bool = false) { self.pendingRequests = pendingRequests }
 
@@ -15,6 +17,7 @@ public actor DemoClient: DiscoboxClient {
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
+        case .poolConfiguration, .updatePoolProxy: return Data(#"{"id":"local","name":"Development","proxy":null,"outbound":{"mode":"direct","source":"server-default","restartRequired":false,"probes":{"server":{"https":{"state":"untested"}}}}}"#.utf8)
         case .poolResources:
             let gib = 1_073_741_824.0
             let report: [String: Any] = [
@@ -65,6 +68,7 @@ public actor DemoClient: DiscoboxClient {
         case .upload, .download: throw DiscoboxError("File transfer is unavailable in the offline demo.")
         case .tools: return Data(#"{"tools":[]}"#.utf8)
         case .openTool, .newAgent: throw DiscoboxError("Tool execution is unavailable in the offline demo.")
+        case .approvalContext: return Data(#"{"secrets":[],"held":[],"bindings":[],"fingerprint":"demo"}"#.utf8)
         case .approvals:
             return Data((pendingRequests ? #"{"approvalRequests":[{"kind":"credential","credential":{"id":"demo-request","sandboxId":"demo-ui","status":"pending","name":"GitHub","hosts":["api.github.com"],"grantTTLSeconds":3600,"justification":"Read repository issues to investigate a reported bug.","policy":{"statements":[{"effect":"allow","actions":["read"],"resource":{"type":"issue"}}],"resolved":{"primary.repo":"example/project"}}}}]}"# : #"{"approvalRequests":[]}"#).utf8)
         case .secrets: return Data(#"{"secrets":[{"id":"demo-token","name":"GitHub token","host":"api.github.com","maxGrantTTLSeconds":28800}]}"#.utf8)
@@ -102,17 +106,20 @@ public actor DemoClient: DiscoboxClient {
         case .execs:
             let runtime = boxOverrides[request.sandboxID ?? ""]?["runtime"] as? [String: Any]
             let stopped = runtime.map { $0["runtimeState"] as? String != "running" } ?? (request.sandboxID == "demo-api")
-            let rows: [[String: Any]] = [
+            var rows: [[String: Any]] = [
                 ["id":"agent-1", "status": stopped ? "exited" : "running", "command":["bash"],
                  "startupCommand":["claude"], "workdir":"/workspace/discobox", "tty":true, "primary":true],
                 ["id":"shell-1", "status":stopped ? "exited" : "running", "command":["bash"],
                  "workdir":"/workspace/discobox", "tty":true]
             ]
+            for index in 0..<additionalShells {
+                rows.append(["id": "shell-extra-" + String(index + 1), "status": stopped ? "exited" : "running", "command": ["bash"], "workdir": "/workspace/discobox", "tty": true])
+            }
             return try JSONSerialization.data(withJSONObject: ["execs": rows.filter { !closedShells.contains($0["id"] as! String) }])
         case .services:
             return Data(#"{"services":[{"id":"web","name":"Development server","description":"Vite preview","status":"running","ports":[5173]},{"id":"api","name":"API","description":"Local application API","status":"running","ports":[8080]}]}"#.utf8)
         case .screen:
-            let lines = request.execID == "shell-1"
+            let lines = request.execID?.hasPrefix("shell-") == true
                 ? ["discobox /workspace/discobox", "", "$ git status", "On branch feature/native-workspace", "nothing to commit, working tree clean", "", "$ "]
                 : ["╭─ Claude Code ───────────────────────────────────────╮", "│ /workspace/discobox                                │", "╰────────────────────────────────────────────────────╯", "", "❯ Build a native workspace for our existing boxes.", "", "● I’ve reviewed the API and the client boundaries.", "  Existing boxes remain available from every client.", "", "  ✓ Project and box navigation", "  ✓ Services and terminal inspection", "  ✓ Read-only by default", "", "Ready for your next message.", ""]
             return try JSONSerialization.data(withJSONObject: [

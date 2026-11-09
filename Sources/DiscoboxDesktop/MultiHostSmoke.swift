@@ -69,7 +69,7 @@ import GhosttyKit
             catch {
                 print("RETURN DEBUG: active=\(hub.activeID) localBox=\(local.workspace.sandboxID ?? "nil") exec=\(local.workspace.execID ?? "nil") live=\(local.workspace.hasLiveTerminal) surface=\(localTerminal.view.surface != nil) ended=\(localTerminal.ended) parent=\(String(describing: localTerminal.view.superview)) localWindow=\(String(describing: localTerminal.view.window))")
                 print("RETURN DEBUG: mounted terminals=\(descendants(window.contentView!).compactMap { $0 as? GhosttyTerminalView }.map { "surface=\($0.surface != nil) sameLocal=\($0 === localTerminal.view)" })")
-                print("RETURN DEBUG: containers=\(descendants(window.contentView!).filter { String(describing: type(of: $0)).contains("TerminalContainer") }.map { "\(type(of: $0)) children=\($0.subviews.count)" }) layout=\(commands.currentLayout?.selected ?? "nil") keepAgent=\(commands.currentLayout?.keepAgent ?? false) frame=\(window.contentView!.frame)")
+                print("RETURN DEBUG: containers=\(descendants(window.contentView!).filter { String(describing: type(of: $0)).contains("TerminalContainer") }.map { "\(type(of: $0)) children=\($0.subviews.count)" }) layout=\(commands.currentLayout?.selected ?? "nil") split=\(commands.currentLayout?.isSplit ?? false) frame=\(window.contentView!.frame)")
                 throw error
             }
             guard resources.runtime(local.id).terminals.session(localID) === localTerminal else { throw DiscoboxError("Local terminal was recreated on return") }

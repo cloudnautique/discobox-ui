@@ -8,9 +8,13 @@ struct BoxMaintenanceIndicators: View {
 
     var body: some View {
         HStack(spacing: 7) {
+            if let warning = box.runningWarning {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(DiscoboxAppearance.warning)
+                    .help("Running with a warning: " + warning).accessibilityLabel("Running with a warning").accessibilityHint(warning)
+            }
             if let tooltip = box.repairTooltip {
                 Image(systemName: box.needsRepair ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
-                    .foregroundStyle(box.needsRepair ? Color.red : .orange)
+                    .foregroundStyle(box.needsRepair ? DiscoboxAppearance.danger : DiscoboxAppearance.warning)
                     .help(tooltip)
                     .accessibilityLabel(box.needsRepair ? "Needs repair" : "Repair in progress")
                     .accessibilityHint(tooltip)

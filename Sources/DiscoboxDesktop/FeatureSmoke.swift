@@ -130,7 +130,8 @@ import UserNotifications
                 ("services", AnyView(ServicesView(box: box).environment(workspace).environment(ServiceForwards()))),
                 ("files", AnyView(FilesView().environment(workspace)))
             ]
-            let auditPanels: [(String, AnyView)] = [
+            let upstreamPanels = try await UpstreamIntegrationSmoke.panels()
+            let auditPanels: [(String, AnyView)] = upstreamPanels + [
                 ("audit-tools", AnyView(ToolsSheet().environment(toolsWorkspace))),
                 ("audit-tools-empty", AnyView(ToolsSheet().environment(workspace))),
                 ("audit-welcome", AnyView(WelcomeView().environment(Workspace()).defaultAppStorage(settingsDefaults).frame(width: 1000, height: 800))),

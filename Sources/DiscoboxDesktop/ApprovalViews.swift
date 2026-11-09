@@ -35,7 +35,7 @@ struct ApprovalInboxView: View {
     }
 }
 
-struct ApprovalSheet: View {
+struct LegacyApprovalSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     let item: ApprovalItem
     @Environment(Workspace.self) private var workspace

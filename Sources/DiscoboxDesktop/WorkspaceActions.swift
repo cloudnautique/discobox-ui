@@ -8,6 +8,12 @@ struct NewBoxSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(ConnectionRuntimes.self) private var runtimes: ConnectionRuntimes?
     @State private var targetComputer = ""
+    init(repository: String = "", computer: String? = nil) {
+        _repository = State(initialValue: repository)
+        _targetComputer = State(initialValue: computer ?? "")
+    }
+    private var currentRepository: RepositoryChoice? { workspace.selectedBox.flatMap(RepositoryChoice.init(box:)) }
+    private var recentRepositories: [RepositoryChoice] { RepositoryChoice.recent(in: workspace.sandboxes).filter { $0.id != currentRepository?.id } }
     private var workspace: Workspace { connections?.session(targetComputer)?.workspace ?? initialWorkspace }
     @Environment(\.dismiss) private var dismiss
     private var harnesses: [Harness] { workspace.cachedHarnesses }
@@ -52,6 +58,13 @@ struct NewBoxSheet: View {
                             StudioDestinationRow(title: "Harness", symbol: "sparkles") {
                                 StudioMenuPicker(title: "Harness", selection: $harness, options:
                                     [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
+                                Button("Manage…") {
+                                    if let selected = harnesses.first(where: { $0.id == harness }) {
+                                        HarnessSetupWindows.shared.open(selected, workspace: workspace)
+                                    }
+                                }.font(.caption).buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
+                                    .disabled(harness.isEmpty || workspace.isDemo)
+                                    .help("Manage this harness on the chosen computer")
                             }
                         }
                         .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 8))
@@ -63,6 +76,24 @@ struct NewBoxSheet: View {
                             Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
                             TextField("Repository", text: $repository, prompt: Text("owner/repository or Git URL"))
                                 .textFieldStyle(.plain).focused($focusedField, equals: .repository)
+                                .accessibilityIdentifier("newBox.repository")
+                            Menu {
+                                if let currentRepository {
+                                    Section("Current repository") { repositoryButton(currentRepository) }
+                                }
+                                if !recentRepositories.isEmpty {
+                                    Section("Recent repositories on this computer") {
+                                        ForEach(recentRepositories) { choice in repositoryButton(choice) }
+                                    }
+                                }
+                                if currentRepository == nil && recentRepositories.isEmpty {
+                                    Text("No recent repositories on this computer")
+                                }
+                                Divider()
+                                Button("No repository") { repository = ""; focusedField = .prompt }
+                            } label: { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)) }
+                                .menuStyle(.borderlessButton).fixedSize().help("Choose a recent repository")
+                                .accessibilityLabel("Recent repositories").accessibilityIdentifier("newBox.repositories")
                         }
                         .padding(12).background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .repository ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .repository ? 1 : 0.5))
@@ -110,7 +141,7 @@ struct NewBoxSheet: View {
         .interactiveDismissDisabled(creating)
         .onChange(of: workspace.connectionID) { _, _ in credentialDrafts.removeAll() }
         .onDisappear { credentialDrafts.removeAll() }
-        .onAppear { focusedField = .repository }
+        .onAppear { focusedField = repository.isEmpty ? .repository : .prompt }
         .sheet(isPresented: $showResources) {
             if let host = connections?.session(targetComputer), let runtimes {
                 PoolResourcesView(computer: host.profile.displayName, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID)
@@ -146,6 +177,13 @@ struct NewBoxSheet: View {
             }
             loading = false
         }
+    }
+
+    private func repositoryButton(_ choice: RepositoryChoice) -> some View {
+        Button { repository = choice.source; focusedField = .prompt } label: {
+            if repository == choice.source { Label(choice.title, systemImage: "checkmark") }
+            else { Text(choice.title) }
+        }.help(choice.source)
     }
 
     private func create() {

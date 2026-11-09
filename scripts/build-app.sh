@@ -2,6 +2,7 @@
 set -euo pipefail
 # This script builds artifacts only; it never launches the app or backend.
 source "$(dirname "$0")/dev-env.sh"
+python3 scripts/generate-brand.py --check
 # Keep this local artifact independent of dsymutil's external cache writes.
 # Debug builds (including tests and Xcode runs) retain their normal symbols.
 swift build --disable-sandbox --cache-path .build/package-cache --configuration release -debug-info-format none
@@ -26,6 +27,7 @@ ditto "$GHOSTTY_SDK/Resources/ghostty" "$APP/Contents/Resources/ghostty"
 cp "$GHOSTTY_SDK/LICENSE" "$APP/Contents/Resources/Ghostty-LICENSE"
 bash scripts/build-icon.sh
 cp .build/Discobox.icns "$APP/Contents/Resources/Discobox.icns"
+ditto Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP/Contents/MacOS/discobox-desktop-bridge"
 codesign --force --sign - "$APP"

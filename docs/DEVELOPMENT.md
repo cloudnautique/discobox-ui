@@ -24,7 +24,7 @@ source repository is required:
 
 ```sh
 git clone https://github.com/discobox-ai/discobox.git discobox
-git -C discobox checkout 9750837cb5122c0cf6390f68150a23fb4d62da79
+git -C discobox checkout e9444637b9d7919d1cc2a45912356ac34847048c
 make ghostty
 make build
 open dist/Discobox.app
@@ -58,6 +58,7 @@ caches live under `.build/`.
 | `make test` | Run Swift tests, Go race tests, and Go vet |
 | `make lint` | Check Swift compiler warnings, Go formatting, script syntax, plist, and diff whitespace |
 | `make vet` | Run Go static analysis alone |
+| `make brand-tokens` | Regenerate the native palette after updating pinned backend brand tokens |
 | `make fmt-go` | Format companion Go source and tests |
 | `make verify` | Verify the built app’s signature and plist |
 | `make ci` | Run lint → test → build → verify |
@@ -143,3 +144,9 @@ notarization, and complete third-party notices remain release work. The packaged
 app includes Ghostty’s license and the Iroh binding’s upstream README.
 
 For implementation details, see [Architecture](../ARCHITECTURE.md).
+
+The release bundles JetBrains Mono Regular v2.304 (OFL-1.1) for brand headings.
+The original font, license, source and checksum are in `Resources/Fonts/`.
+It is registered for the app process only and is never installed system-wide.
+`make lint` checks its checksum and the palette generated from the backend's
+canonical brand tokens.
