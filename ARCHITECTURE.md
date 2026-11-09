@@ -88,11 +88,13 @@ the scrolling change list. File comparisons load on expansion with bounded diff
 work; large files retain full before/after views. Refreshing an unavailable source
 box never erases the durable save receipt or automatically repeats a write.
 
-Native colors are generated from `discobox/assets/brand/tokens.json` by
-`make brand-tokens`. Lint verifies the generated copy; the UI never defines a
-second palette. Studio layout and system controls remain native. JetBrains Mono
-is bundled under OFL-1.1 and registered privately to the app for brand headings;
-Ghostty configuration and terminal content remain unchanged.
+The native wrapper uses the app-owned Studio palette in `DiscoboxAppearance`:
+soft charcoal surfaces, muted purple accents, and native semantic status colors,
+with matching Light/Dark variants. Dialog titles use native system typography.
+The generated upstream `BrandTokens` reference remains checked by lint but does
+not override Studio colors. JetBrains Mono remains bundled under OFL-1.1 and
+registered privately to the app. Ghostty configuration and terminal content
+retain their own palettes.
 
 ## Safety boundary
 
@@ -100,9 +102,10 @@ Development and automated verification must not contact the operator's running
 Discobox. Use fixtures and injected transports. Never run `discobox` implicitly:
 the CLI can autolaunch the server, deliver source, or revive a primary terminal.
 
-Normal launch attempts the default local endpoint once. Demo and smoke modes stay
-offline. A connecting screen covers the initial project/list reads; failure or
-cancellation returns to the manual connection form. Connecting reads existing resources. Selecting a
+Normal launch requests the default local endpoint; transient failures retry with
+backoff and cancellation stops the attempt. Demo and smoke modes stay offline.
+A connecting screen covers the initial project/list reads; a failed attempt
+shows connection controls and recovery status. Connecting reads existing resources. Selecting a
 live terminal opens an interactive stream, resizes it, and holds activity while
 attached. Stopped/cached terminals use the observational screen endpoint.
 Lifecycle, file-write, and approval mutations require explicit UI actions; the

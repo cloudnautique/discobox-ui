@@ -53,8 +53,8 @@ struct HarnessFileChangeView: View {
                         fullVersion("Proposed", content: after)
                     } else {
                         HStack(spacing: 14) {
-                            Text("− Removed").foregroundStyle(BrandTokens.err)
-                            Text("+ Added").foregroundStyle(BrandTokens.green)
+                            Text("− Removed").foregroundStyle(DiscoboxAppearance.danger)
+                            Text("+ Added").foregroundStyle(DiscoboxAppearance.success)
                         }.font(.system(size: 10))
                         ScrollView([.horizontal, .vertical]) {
                             Text(diffText(diff)).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
@@ -68,7 +68,7 @@ struct HarnessFileChangeView: View {
             HStack(spacing: 12) {
                 Text(file["path"].string).font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file["path"].string)
                 Spacer(minLength: 8)
-                Text(status).font(.system(size: 10, weight: .medium)).foregroundStyle(status == "Removed" ? BrandTokens.err : Color.secondary)
+                Text(status).font(.system(size: 10, weight: .medium)).foregroundStyle(status == "Removed" ? DiscoboxAppearance.danger : Color.secondary)
             }
         }
         .task(id: expanded) {
@@ -97,7 +97,7 @@ struct HarnessFileChangeView: View {
             let marker = line.kind == .removed ? "− " : line.kind == .added ? "+ " : "  "
             var text = AttributedString(marker + line.text + "\n")
             if line.kind != .unchanged {
-                let color = line.kind == .removed ? BrandTokens.err : BrandTokens.green
+                let color = line.kind == .removed ? DiscoboxAppearance.danger : DiscoboxAppearance.success
                 text.foregroundColor = color; text.backgroundColor = color.opacity(0.08)
             }
             result.append(text)

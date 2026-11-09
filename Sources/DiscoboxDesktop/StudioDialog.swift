@@ -19,7 +19,7 @@ struct StudioDialogHeader: View {
                 .frame(width: 36, height: 36)
                 .background(destructive ? Color.red.opacity(0.1) : DiscoboxAppearance.selection, in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(BrandTypography.mono(17, weight: .semibold)).foregroundStyle(BrandTokens.onGold).padding(.horizontal, 6).padding(.vertical, 3).background(BrandTokens.gold, in: RoundedRectangle(cornerRadius: 4))
+                Text(title).font(.system(size: 17, weight: .semibold))
                 if let subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 12)
