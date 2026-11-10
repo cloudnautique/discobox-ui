@@ -57,6 +57,28 @@ import Testing
     #expect(try await task.value)
 }
 
+@MainActor @Test func structuredApprovalReceiptReleasesQueueBeforeStalledRead() async throws {
+    let client = ReceiptFixture(), workspace = Workspace()
+    await workspace.connect(client: client, label: "Receipt fixture", demo: true)
+    defer { workspace.disconnect() }
+    await workspace.refreshApprovals()
+    let queue = ApprovalQueue(workspace: workspace, boxID: nil)
+    queue.synchronize(); queue.reviewSelected()
+    let item = try #require(queue.reviewing)
+    await client.holdRefresh()
+    var accepted = false
+    let task = Task {
+        try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { _ in
+            accepted = true; queue.back()
+        })
+    }
+    try await waitForReceiptRefresh(client)
+    #expect(accepted && queue.reviewing == nil && queue.requests.isEmpty)
+    #expect(await client.writes == 1)
+    await client.release()
+    _ = try await task.value
+}
+
 @MainActor @Test func rejectedMutationDoesNotReportAcceptanceOrRetry() async throws {
     let client = ReceiptFixture(fail: true), workspace = Workspace()
     await workspace.connect(client: client, label: "Receipt fixture", demo: true)

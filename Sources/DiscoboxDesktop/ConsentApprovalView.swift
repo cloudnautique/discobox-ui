@@ -4,11 +4,12 @@ import DiscoboxCore
 struct ApprovalSheet: View {
     let item: ApprovalItem
     var initialDuration: String? = nil
+    var onClose: (() -> Void)? = nil
     var body: some View {
         switch item.kind {
-        case "credential" where item.request["use"] != .null || item.request["delegate"] != .null: ScopedCredentialApprovalView(item: item)
-        case "credential", "trust": LegacyApprovalSheet(item: item, initialDuration: initialDuration)
-        default: ConsentApprovalView(item: item)
+        case "credential" where item.request["use"] != .null || item.request["delegate"] != .null: ScopedCredentialApprovalView(item: item, onClose: onClose)
+        case "credential", "trust": LegacyApprovalSheet(item: item, initialDuration: initialDuration, onClose: onClose)
+        default: ConsentApprovalView(item: item, onClose: onClose)
         }
     }
 }
@@ -17,6 +18,7 @@ struct ApprovalSheet: View {
 /// These are not credential grants and never inherit credential-approval fields.
 struct ConsentApprovalView: View {
     let item: ApprovalItem
+    var onClose: (() -> Void)? = nil
     @Environment(Workspace.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
@@ -92,7 +94,7 @@ struct ConsentApprovalView: View {
         }
     }
     private func name(_ id: String) -> String { workspace.sandboxes.first { $0.id == id }?.displayName ?? id }
-    private func close() { closed = true; value = ""; dismiss() }
+    private func close() { closed = true; value = ""; if let onClose { onClose() } else { dismiss() } }
     private func submit(approve: Bool) {
         guard !busy, !resolved, connection == workspace.connectionID else { return }
         busy = true; error = nil

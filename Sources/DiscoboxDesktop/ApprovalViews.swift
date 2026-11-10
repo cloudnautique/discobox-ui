@@ -3,41 +3,101 @@ import DiscoboxCore
 
 struct ApprovalInboxView: View {
     @Environment(Workspace.self) private var workspace
-    @Environment(\.dismiss) private var dismiss
     let boxID: String?
-    @State private var selected: ApprovalItem?
-    private var requests: [ApprovalItem] { workspace.approvals.filter { boxID == nil || $0.boxID == boxID } }
+    var body: some View { ApprovalQueueContent(workspace: workspace, boxID: boxID) }
+}
+
+private struct ApprovalQueueContent: View {
+    @Environment(Connections.self) private var connections: Connections?
+    @Environment(\.dismiss) private var dismiss
+    @State private var queue: ApprovalQueue
+    @State private var refreshing = false
+    @FocusState private var listFocused: Bool
+    init(workspace: Workspace, boxID: String?) {
+        _queue = State(initialValue: ApprovalQueue(workspace: workspace, boxID: boxID))
+    }
+    private var workspace: Workspace { queue.workspace }
+    private var subtitle: String {
+        let computer = connections?.sessions.first { $0.workspace === workspace }?.profile.displayName
+        let box = queue.boxID.flatMap { id in workspace.sandboxes.first { $0.id == id }?.displayName }
+        return [computer, box].compactMap { $0 }.joined(separator: " · ")
+    }
     var body: some View {
-        if let item = selected ?? (requests.count == 1 ? requests.first : nil) {
-            // Present the form in this sheet, without an intermediate inbox or
-            // a nested sheet. Retain the item if polling resolves it elsewhere.
-            ApprovalSheet(item: item).environment(workspace)
-                .id(item.id)
-                .onAppear { selected = item }
-        } else {
-            StudioConfirmation(title: "Needs your attention", symbol: "bell.badge", width: 620) {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let error = workspace.approvalError { Notice(text: "Inbox refresh failed: " + error, symbol: "wifi.exclamationmark") }
-                    List(requests) { item in
-                        Button { selected = item } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Label(item.title, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red)
-                                Text(item.request["justification"].string).lineLimit(3).foregroundStyle(.secondary)
-                            }.padding(.vertical, 6)
-                        }.buttonStyle(.plain)
-                    }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
-                        .overlay { if requests.isEmpty { ContentUnavailableView("Nothing waiting", systemImage: "checkmark.circle") } }
+        @Bindable var queue = queue
+        Group {
+            if let item = queue.reviewing {
+                VStack(spacing: 0) {
+                    HStack {
+                        Button("Back to requests", systemImage: "chevron.left") { queue.back() }
+                        Spacer()
+                        Text("\(queue.requests.count) pending").font(.caption).foregroundStyle(.secondary)
+                    }.font(.system(size: 12)).padding(.horizontal, 24).padding(.vertical, 12)
+                        .background(DiscoboxAppearance.chrome)
+                    Divider()
+                    ApprovalSheet(item: item, onClose: {
+                        if queue.reviewing?.id == item.id { queue.back() }
+                    }).environment(workspace).id(item.id)
+                }.frame(width: 720)
+            } else {
+                StudioConfirmation(title: "Approval requests", symbol: "bell.badge", subtitle: subtitle, width: 720) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let error = workspace.approvalError { Notice(text: "Could not refresh requests: " + error, symbol: "wifi.exclamationmark") }
+                        if !queue.valid {
+                            ContentUnavailableView("Connection changed", systemImage: "network", description: Text("Reopen the inbox on this computer."))
+                        } else if queue.requests.isEmpty {
+                            ContentUnavailableView("No pending requests", systemImage: "checkmark.circle", description: Text("There is nothing left to answer in this inbox."))
+                        } else {
+                            Text("Review each request to allow or deny it. Closing this window leaves requests pending.").font(.callout).foregroundStyle(.secondary)
+                            List(selection: $queue.selection) {
+                                ForEach(queue.requests) { item in
+                                    HStack(spacing: 12) {
+                                        Image(systemName: item.intent.contains("Share") || item.intent.contains("share") ? "person.2" : item.kind == "credential" ? "key" : "checkmark.shield")
+                                            .foregroundStyle(DiscoboxAppearance.accent).frame(width: 24)
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            HStack { Text(item.reviewTitle).fontWeight(.semibold); Text(item.intent).font(.caption).foregroundStyle(.secondary) }
+                                            if queue.boxID == nil { Text(workspace.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID).font(.caption).foregroundStyle(.secondary) }
+                                            if !item.destinationSummary.isEmpty { Text(item.destinationSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                                            if !item.request["justification"].string.isEmpty { Text(item.request["justification"].string).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                        Button("Review", systemImage: "chevron.right") { queue.review(item) }
+                                            .buttonStyle(.borderless).accessibilityIdentifier("approval.review." + item.id)
+                                    }.padding(.vertical, 8).contentShape(Rectangle()).tag(item.id)
+                                }
+                            }.listStyle(.inset).scrollContentBackground(.hidden).studioCard().focused($listFocused)
+                                .onKeyPress(.return) { queue.reviewSelected(); return .handled }
+                        }
+                    }.frame(height: 340)
+                } footer: {
+                    HStack {
+                        Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                        Button { refresh() } label: { Image(systemName: "arrow.clockwise") }.help("Refresh requests").disabled(refreshing || !queue.valid)
+                        if refreshing { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Text("\(queue.requests.count) pending").font(.caption).foregroundStyle(.secondary)
+                        if !queue.requests.isEmpty {
+                            Button("Review selected") { queue.reviewSelected() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                                .disabled(queue.selected == nil).accessibilityIdentifier("approval.reviewSelected")
+                        }
+                    }
                 }
-            } footer: {
-                HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction) }
-            }.frame(height: 460)
+            }
         }
+        .onAppear { queue.synchronize(); listFocused = true }
+        .onChange(of: queue.reviewing) { listFocused = queue.reviewing == nil }
+        .onChange(of: workspace.approvals) { queue.synchronize() }
+        .onChange(of: workspace.connectionID) { queue.back() }
+    }
+    private func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
+        Task { await workspace.refreshApprovals(); refreshing = false; queue.synchronize() }
     }
 }
 
 struct LegacyApprovalSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     let item: ApprovalItem
+    let onClose: (() -> Void)?
     @Environment(Workspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var connection: UUID?
@@ -58,8 +118,8 @@ struct LegacyApprovalSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var closed = false
-    init(item: ApprovalItem, initialDuration: String? = nil) {
-        self.item = item
+    init(item: ApprovalItem, initialDuration: String? = nil, onClose: (() -> Void)? = nil) {
+        self.item = item; self.onClose = onClose
         let wanted = item.request["grantTTLSeconds"].number ?? 3600
         let explicit = wanted.isFinite && wanted >= 0 && wanted < Double(Int.max) ? String(Int(wanted)) : "3600"
         _duration = State(initialValue: initialDuration ?? (item.kind == "credential" ? ApprovalDuration.automatic : explicit))
@@ -103,7 +163,7 @@ struct LegacyApprovalSheet: View {
             } else { form }
         }.onDisappear { closed = true }
     }
-    private func close() { closed = true; dismiss() }
+    private func close() { closed = true; if let onClose { onClose() } else { dismiss() } }
 
     private var form: some View {
         StudioConfirmation(title: item.title, symbol: item.kind == "trust" ? "checkmark.shield" : "key",

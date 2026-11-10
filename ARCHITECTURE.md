@@ -50,6 +50,12 @@ console. Consent requests use their own routes and authority summaries. They
 never inherit a credential payload. Refresh writes only a manually entered token;
 the bridge never executes a suggested refresh command.
 
+The native inbox uses a selected request with a visible Review action and Return
+as its default action. Each review can return to the remaining queue; closing or
+choosing Later never answers a request. A successful server acknowledgement removes
+only that request locally before a follow-up inbox read, so a slow refresh cannot
+leave its attention badge stuck. Queue state is tied to its original connection.
+
 Structured credential requests have separate use/delegate decisions and modern
 `ttlSeconds`/scope/delivery fields. Scalar requests on older servers retain their
 legacy form. A read-only `approvalContext` loads limits, effective holdings and
@@ -59,6 +65,12 @@ The form sends an opaque context fingerprint with its decisions; the bridge
 re-reads the context before its single POST and refuses a changed review.
 The server still enforces the final authority and lifetime at commit time.
 No new automatic approval rules or changed secret ceilings are implicit.
+Requested routes remain visible; scope broadening and raw delivery warnings stay
+visible even when advanced controls collapse. Applying a structured decision requires
+an explicit review checkbox, reset whenever its draft or server context changes.
+The submitted decision and fingerprint are captured before the fresh validation read.
+`--approval-queue-smoke` exercises native multi-request review and decisions using
+an isolated fixture, without contacting a real host or answering real requests.
 
 Pool Network & Trust reads effective source, revisions and observations without
 running probes. A reviewed save sends only a proxy PATCH. Explicit null removes

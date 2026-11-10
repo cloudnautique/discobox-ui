@@ -439,13 +439,19 @@ public final class Workspace {
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
     public func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
+        _ = try await answerWithReceipt(item, action: action, payload: payload, onAccepted: { _ in onAccepted() })
+    }
+    /// Publish the acknowledgment and remove this request before an unrelated
+    /// inbox refresh can stall. A committed response is never submitted twice.
+    @discardableResult public func answerWithReceipt(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue {
         let connection = connectionID
-        _ = try await operation(.answer, requestID: item.id, kind: item.kind, action: action, payload: payload)
-        guard connection == connectionID else { return }
+        let result = try await operation(.answer, requestID: item.id, kind: item.kind, action: action, payload: payload)
+        guard connection == connectionID else { throw CancellationError() }
         approvalRequest = UUID()
         approvals.removeAll { $0.id == item.id }
-        onAccepted()
+        onAccepted(result)
         await refreshApprovals()
+        return result
     }
 
     public func terminalSnapshot(exec: String) async throws -> TerminalScreen {
