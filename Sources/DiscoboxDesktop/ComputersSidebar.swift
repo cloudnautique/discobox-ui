@@ -52,6 +52,9 @@ struct ComputersSidebar: View {
             computerSection
             ScrollViewReader { reader in
                 List(selection: selection) {
+                    if let pin = connections.browserSelectionPin, !pins.contains(where: { $0.id == pin.location }) {
+                        Section("Current box") { row(pin) }
+                    }
                     if !pins.isEmpty {
                         Section("New boxes") {
                             ForEach(pins) { creation in
@@ -87,7 +90,7 @@ struct ComputersSidebar: View {
                         }
                     }
                 }.listStyle(.sidebar).scrollContentBackground(.hidden)
-                    .overlay { if items.isEmpty && pins.isEmpty { emptyState } }
+                    .overlay { if items.isEmpty && pins.isEmpty && connections.browserSelectionPin == nil { emptyState } }
                     .onDeleteCommand { confirmPurge() }
                     .onChange(of: connections.browserBoxes.map(\.location)) { connections.reconcileCreations() }
                     .onChange(of: browser.revealRevision, initial: true) {
@@ -189,6 +192,9 @@ struct ComputersSidebar: View {
     @ViewBuilder private var emptyState: some View {
         VStack(spacing: 8) {
             Text("No matching boxes").font(.callout).foregroundStyle(.secondary)
+            if browser.activityFilter != nil {
+                Button("Clear activity filter") { browser.activityFilter = nil }.font(.caption)
+            }
             if browser.computerID != nil {
                 Button("Show all computers") { browser.computerID = nil }.font(.caption)
             }

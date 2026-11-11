@@ -53,6 +53,13 @@ public final class Workspace {
     public var draft = ""
     public var searchText = ""
     public var filter: BoxFilter = .all
+    public var activityFilter: BoxActivityFilter?
+    var activityObservationTime: Date {
+        // Depend on the existing refresh tick so unchanged snapshots still
+        // age out in the UI. This adds neither a timer nor a network request.
+        _ = lastRefresh
+        return now()
+    }
 
     @ObservationIgnored private var client: (any DiscoboxClient)?
     @ObservationIgnored private var revision = UUID()
@@ -109,7 +116,7 @@ public final class Workspace {
     public var switcherBoxes: [Sandbox] {
         let waiting = Set(approvals.map(\.boxID))
         func priority(_ box: Sandbox) -> Int {
-            if box.matchesAttention || waiting.contains(box.id) { return 0 }
+            if box.matchesAttention || waiting.contains(box.id) || activity(for: box).needsYou { return 0 }
             if box.isRunning { return 1 }
             switch box.status.lowercased() {
             case "starting", "pending", "awaiting source", "stopping": return 2
@@ -125,17 +132,20 @@ public final class Workspace {
         }
     }
 
-    public var visibleBoxes: [Sandbox] {
+    public var browsingBoxes: [Sandbox] {
         sandboxes.filter { box in
             let included: Bool
             switch filter {
             case .all: included = !box.isArchived
             case .running: included = box.isRunning
-            case .attention: included = box.matchesAttention || approvals.contains { $0.boxID == box.id }
+            case .attention: included = !box.isArchived && (box.matchesAttention || activity(for: box).needsYou)
             case .archived: included = box.isArchived
             }
             return included && box.matchesSearch(searchText)
         }
+    }
+    public var visibleBoxes: [Sandbox] {
+        browsingBoxes.filter { box in filter == .archived || activityFilter?.matches(activity(for: box), box: box) != false }
     }
 
     public func connect(client: any DiscoboxClient, label: String, demo: Bool = false) async {

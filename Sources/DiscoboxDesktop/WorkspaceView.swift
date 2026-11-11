@@ -63,6 +63,31 @@ struct WorkspaceView: View {
     }) }
     private var tagBinding: Binding<Set<String>> { Binding(get: { selectedTags }, set: { selectedTags = $0 }) }
     private var matchAnyBinding: Binding<Bool> { Binding(get: { matchAnyTag }, set: { matchAnyTag = $0 }) }
+    private var activityBinding: Binding<BoxActivityFilter?> {
+        Binding(get: { connections?.browser.activityFilter ?? (connections == nil ? workspace.activityFilter : nil) }, set: {
+            if let connections { connections.browser.activityFilter = $0 } else { workspace.activityFilter = $0 }
+        })
+    }
+    private var localActivityCandidates: [Sandbox] {
+        workspace.browsingBoxes.filter { BoxOrganization.matches(tags: $0.meta?.tags ?? [:], selectors: selectedTags, matchAny: matchAnyTag) }
+    }
+    private var activityCounts: (needsYou: Int, working: Int) {
+        if let connections {
+            return connections.browserCandidates.reduce(into: (needsYou: 0, working: 0)) { counts, item in
+                if item.needsAttention { counts.needsYou += 1 }
+                if item.activity?.isWorking == true { counts.working += 1 }
+            }
+        }
+        return localActivityCandidates.reduce(into: (needsYou: 0, working: 0)) { counts, box in
+            let activity = workspace.activity(for: box)
+            if activity.needsYou || box.matchesAttention { counts.needsYou += 1 }
+            if activity.isWorking { counts.working += 1 }
+        }
+    }
+    private var localActivityPin: Sandbox? {
+        guard connections == nil, currentFilter != .archived, let filter = workspace.activityFilter, let selected = workspace.sandboxID else { return nil }
+        return localActivityCandidates.first { $0.id == selected && !filter.matches(workspace.activity(for: $0), box: $0) }
+    }
     private var archiveCount: Int { connections?.browser.archivedSelection.count ?? archiveSelection.count }
     private var selectedCreation: Bool {
         guard let connections else { return false }
@@ -80,12 +105,10 @@ struct WorkspaceView: View {
     var body: some View {
         @Bindable var workspace = workspace
         @Bindable var commands = commands
-        let waiting = Set(workspace.approvals.map(\.boxID))
-        let visibleBoxes = workspace.visibleBoxes.filter { BoxOrganization.matches(tags: $0.meta?.tags ?? [:], selectors: selectedTags, matchAny: matchAnyTag) }.enumerated().sorted { lhs, rhs in
-            func rank(_ box: Sandbox) -> Int { waiting.contains(box.id) || box.matchesAttention ? 0 : (box.isRunning ? 1 : 2) }
-            let left = rank(lhs.element), right = rank(rhs.element)
-            return left == right ? lhs.offset < rhs.offset : left < right
-        }.map(\.element)
+        let visibleBoxes = workspace.visibleBoxes.filter { BoxOrganization.matches(tags: $0.meta?.tags ?? [:], selectors: selectedTags, matchAny: matchAnyTag) }.sorted {
+            let names = $0.sidebarTitle.localizedStandardCompare($1.sidebarTitle)
+            return names == .orderedSame ? $0.id < $1.id : names == .orderedAscending
+        }
         let groupedBoxes = Dictionary(grouping: visibleBoxes) { BoxOrganization.group($0, by: grouping, tagKey: groupingTagKey) }
         let repositories = groupedBoxes.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         Group {
@@ -136,6 +159,11 @@ struct WorkspaceView: View {
                         }.padding(.horizontal, 16).padding(.vertical, 12)
                         TextField("Find a box", text: searchBinding)
                             .textFieldStyle(.roundedBorder).font(.system(size: 12)).padding(.horizontal, 14).padding(.bottom, 10)
+                        if currentFilter != .archived {
+                            let counts = activityCounts
+                            BoxActivityFilters(selection: activityBinding, needsYou: counts.needsYou, working: counts.working)
+                                .padding(.horizontal, 14).padding(.bottom, 10)
+                        }
                         if !selectedTags.isEmpty {
                             ScrollView(.horizontal) {
                                 HStack(spacing: 5) {
@@ -155,6 +183,9 @@ struct WorkspaceView: View {
                             ComputersSidebar(grouping: grouping, tagKey: groupingTagKey)
                         } else {
                         List(selection: sidebarSelection) {
+                            if let pin = localActivityPin {
+                                Section("Current box") { sidebarRow(pin) }
+                            }
                             if grouping != "none" {
                                 ForEach(repositories, id: \.self) { repository in
                                     let boxes = groupedBoxes[repository] ?? []
@@ -263,11 +294,11 @@ struct WorkspaceView: View {
                     ToolbarItem(id: "workspace.sidebar", placement: .navigation) {
                         Button { commands.focusMode.toggle() } label: { Label("Toggle sidebar", systemImage: "sidebar.left") }
                             .help("Show or hide boxes")
-                    }
+                    }.studioPlainBackground()
                     ToolbarItem(id: "workspace.title", placement: .principal) {
                         Text([connections?.active.profile.displayName, workspace.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › ").isEmpty ? "Discobox" : [connections?.active.profile.displayName, workspace.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › "))
                             .font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
-                    }
+                    }.studioPlainBackground()
                     if #available(macOS 26, *) {
                         ToolbarSpacer(.flexible, placement: .automatic)
                     } else {
@@ -287,7 +318,7 @@ struct WorkspaceView: View {
                             WorkspaceDesktopButton()
                             Button { commands.toggleServices() } label: { Label("Services", systemImage: "network") }
                                 .labelStyle(.titleAndIcon).buttonStyle(.borderless)
-                                .foregroundStyle(commands.showInspector && commands.inspectorSection == "services" ? DiscoboxAppearance.accent : .secondary)
+                                .foregroundStyle(commands.showInspector && commands.inspectorSection == "services" ? DiscoboxAppearance.accent : .primary)
                                 .disabled(workspace.selectedBox == nil).help("Show or hide services")
                                 .accessibilityIdentifier("workspace.services")
                             Menu {
@@ -299,10 +330,12 @@ struct WorkspaceView: View {
                             } label: { Image(systemName: "ellipsis.circle") }
                                 .menuStyle(.borderlessButton).fixedSize()
                                 .disabled(workspace.selectedBox == nil).help("Actions for this box")
-                        }.font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 340, alignment: .trailing)
+                        }.font(.system(size: 12)).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
 
-                    }
+                    }.studioPlainBackground()
                 }
+                .toolbarBackground(DiscoboxAppearance.chrome, for: .windowToolbar)
+                .toolbarBackground(.visible, for: .windowToolbar)
                 .toolbar(removing: .sidebarToggle)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if workspace.connectionError != nil {
@@ -722,38 +755,77 @@ struct BoxRow: View {
     let box: Sandbox
     var computer: String? = nil
     @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var showInbox = false
+    private func tint(for activity: AgentActivity) -> Color {
+        switch activity.state {
+        case .working: DiscoboxAppearance.accent
+        case .approval, .question, .signIn, .blocked: DiscoboxAppearance.activityAttention
+        case .failed: DiscoboxAppearance.activityFailure
+        default: .secondary.opacity(0.7)
+        }
+    }
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle().fill(box.needsRepair ? DiscoboxAppearance.danger : box.isRunning ? DiscoboxAppearance.success : (box.matchesAttention ? DiscoboxAppearance.warning : .secondary.opacity(0.4)))
-                .frame(width: 7, height: 7).padding(.top, 6)
-            VStack(alignment: .leading, spacing: 4) {
+        let activity = workspace.activity(for: box)
+        let tint = tint(for: activity)
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: activity.symbol).font(.system(size: 12))
+                .foregroundStyle(tint).frame(width: 17).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(box.displayName).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    Text(box.sidebarTitle).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     Spacer(minLength: 0)
                     BoxMaintenanceIndicators(box: box)
-                    if workspace.approvals.contains(where: { $0.boxID == box.id }) {
-                        Button { showInbox = true } label: { Text("!").font(.headline.bold()).foregroundStyle(.red) }.buttonStyle(.borderless).help("Pending approval requests")
-                    }
                 }
-                HStack {
-                    Text(box.harnessName ?? box.config.name ?? "Agent").lineLimit(1)
+                HStack(spacing: 4) {
+                    Text([box.harnessName ?? box.config.name ?? "Agent", computer].compactMap { $0 }.joined(separator: " · ")).lineLimit(1)
                     Spacer(minLength: 4)
                     if workspace.pendingBoxActions.contains(box.id) { ProgressView().controlSize(.mini) }
                     if let branch = box.branch, !branch.isEmpty {
                         Label(branch, systemImage: "arrow.triangle.branch")
-                            .font(.caption2).lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: 110, alignment: .trailing)
+                            .font(.system(size: 9)).lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: 90, alignment: .trailing)
                     }
-                }.font(.system(size: 11)).foregroundStyle(.secondary)
-                if let computer {
-                    Text(computer).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                }
+                }.font(.system(size: 10)).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text(activity.label).fontWeight(activity.needsYou ? .medium : .regular)
+                        .foregroundStyle(activity.needsYou ? tint : .secondary)
+                    if !activity.message.isEmpty && ![.idle, .finished, .inactive].contains(activity.state) {
+                        Text("· " + activity.message).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if activity.approvalCount > 0 {
+                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
+                            .buttonStyle(.borderless).fontWeight(.medium).foregroundStyle(tint)
+                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
+                            .accessibilityIdentifier("box.activity.review." + box.id)
+                            .help("Review pending requests for this box")
+                    } else if activity.needsYou || box.matchesAttention {
+                        Button("Open", action: openAgent).buttonStyle(.borderless).fontWeight(.medium).foregroundStyle(tint)
+                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
+                            .accessibilityIdentifier("box.activity.open." + box.id)
+                            .help("Open the agent on this box’s computer")
+                    }
+                }.font(.system(size: 10)).lineLimit(1)
             }
-        }.padding(.vertical, 7)
-        .accessibilityValue([box.status, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
-        .help([box.displayName, box.status, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.joined(separator: "\n"))
+        }.padding(.vertical, 8)
+        .accessibilityValue([box.status, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
+        .help([box.displayName, "Box: " + box.status, "Agent: " + activity.label, activity.message, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
+    }
+    private func openAgent() {
+        let generation = workspace.connectionID
+        let host = connections?.sessions.first { $0.workspace === workspace }
+        Task {
+            if let connections, let host {
+                await connections.selectBox(.init(connection: host.id, box: box.id))
+                guard connections.active.workspace === workspace else { return }
+            } else { await workspace.selectBox(box.id) }
+            guard workspace.connectionID == generation, workspace.sandboxID == box.id else { return }
+            commands?.install(workspace: workspace, connections: connections)
+            commands?.perform(.agent)
+        }
     }
 }
 

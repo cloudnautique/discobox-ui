@@ -63,6 +63,7 @@ public extension Connections {
             }
             if !creation.item.matches(browser.searchText) { browser.searchText = "" }
             if !BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) { browser.selectedTags.removeAll() }
+            if browser.activityFilter?.matches(host.workspace.activity(for: box), box: box) == false { browser.activityFilter = nil }
         }
         await selectBox(location)
         guard host.workspace.connectionID == creation.connection else { return }

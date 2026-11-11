@@ -45,6 +45,7 @@ struct DiscoboxApp: App {
                     if let url = Bundle.main.url(forResource: "Discobox", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
                         NSApp.applicationIconImage = icon
                     }
+                    if ProcessInfo.processInfo.arguments.contains("--agent-activity-smoke") { await AgentActivitySmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--approval-queue-smoke") { await ApprovalQueueSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--harness-smoke") { await HarnessManagementSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--recovery-smoke") { await ConnectionRecoverySmoke.run() }
@@ -165,6 +166,10 @@ enum DiscoboxAppearance {
     static let surface = adaptive(light: NSColor(red: 0.958, green: 0.954, blue: 0.973, alpha: 1), dark: NSColor(red: 0.18, green: 0.175, blue: 0.20, alpha: 1))
     static let border = adaptive(light: NSColor(red: 0.86, green: 0.85, blue: 0.89, alpha: 1), dark: NSColor(red: 0.225, green: 0.22, blue: 0.25, alpha: 1))
     static let warning = Color.orange
+    // Quieter signals reserved for sidebar activity; lifecycle warnings retain
+    // their existing semantic colors.
+    static let activityAttention = adaptive(light: NSColor(red: 0.588, green: 0.388, blue: 0.078, alpha: 1), dark: NSColor(red: 0.898, green: 0.702, blue: 0.427, alpha: 1))
+    static let activityFailure = adaptive(light: NSColor(red: 0.729, green: 0.271, blue: 0.306, alpha: 1), dark: NSColor(red: 0.925, green: 0.557, blue: 0.592, alpha: 1))
     static let danger = Color.red
     static let success = Color.green
     static let selection = accent.opacity(0.14)

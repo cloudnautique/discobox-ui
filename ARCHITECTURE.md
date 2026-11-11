@@ -50,6 +50,26 @@ console. Consent requests use their own routes and authority summaries. They
 never inherit a credential payload. Refresh writes only a manually entered token;
 the bridge never executes a suggested refresh command.
 
+Sidebar activity comes from the newest primary session's structured
+`runtime.agentStatus.sessions[].programStatus`, not terminal output or title text.
+Container lifecycle, maintenance and agent activity remain separate. A disconnected
+host, an expired containing snapshot (two minutes; the pool normally reports every
+15 seconds), or an unknown/newer status is not shown as Working or Idle. The age
+check uses the snapshot's `observedAt`, never the program's `reportedAt`, since an
+unchanged report can remain valid. Old servers without activity show unavailable.
+Pending Discobox requests take precedence; Review opens only that box's inbox.
+Other blocked states and agent failures offer Open to focus the correct host/agent.
+
+Needs you and Working are mutually exclusive quick filters layered over computer,
+lifecycle, search and tag scope. Their counts are boxes before the quick filter,
+so multiple requests on one box count once. Archived browsing ignores them. A
+selected box that stops matching is retained in a separate Current box section,
+excluded from counts/results; explicit search or computer changes still apply.
+Sidebar ordering uses the stable title fields without the appended activity message;
+the keyboard switcher retains attention-first ordering. Activity uses the existing
+inventory refresh and adds no polling, terminal parsing, network calls or animation.
+`--agent-activity-smoke` exercises native controls and row Review using fixtures.
+
 The native inbox uses a selected request with a visible Review action and Return
 as its default action. Each review can return to the remaining queue; closing or
 choosing Later never answers a request. A successful server acknowledgement removes

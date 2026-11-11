@@ -10,6 +10,7 @@ import Observation
     public var searchText = ""
     public var selectedTags: Set<String> = []
     public var matchAnyTag = false
+    public var activityFilter: BoxActivityFilter?
     public var archivedSelection: Set<BoxLocation> = []
     public private(set) var revealLocation: BoxLocation?
     public private(set) var revealRevision = UUID()
@@ -31,11 +32,13 @@ import Observation
 }
 
 public extension Connections {
-    var browserBoxes: [ConnectedBox] {
+    /// Counts use this set, before the quick filter, so selecting a filter does
+    /// not change its own count or the other filter's count.
+    var browserCandidates: [ConnectedBox] {
         sessions.filter { $0.workspace.isConnected && (browser.computerID == nil || browser.computerID == $0.id) }.flatMap { host in
-            let waiting = Set(host.workspace.approvals.map(\.boxID))
             return host.workspace.sandboxes.compactMap { box -> ConnectedBox? in
-                let attention = box.matchesAttention || waiting.contains(box.id)
+                let activity = host.workspace.activity(for: box)
+                let attention = box.matchesAttention || activity.needsYou
                 let include: Bool
                 switch browser.filter {
                 case .all: include = !box.isArchived
@@ -44,16 +47,29 @@ public extension Connections {
                 case .archived: include = box.isArchived
                 }
                 guard include, BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) else { return nil }
-                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention)
+                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity)
                 return item.matches(browser.searchText) ? item : nil
             }
         }.sorted {
-            func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.box.isRunning ? 1 : 2 }
-            if rank($0) != rank($1) { return rank($0) < rank($1) }
-            let names = $0.box.displayName.localizedStandardCompare($1.box.displayName)
+            let names = $0.box.sidebarTitle.localizedStandardCompare($1.box.sidebarTitle)
             if names != .orderedSame { return names == .orderedAscending }
             if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-            return $0.location.box < $1.location.box
+            if $0.location.box != $1.location.box { return $0.location.box < $1.location.box }
+            return $0.location.connection < $1.location.connection
+        }
+    }
+    var browserBoxes: [ConnectedBox] {
+        browserCandidates.filter { item in
+            browser.filter == .archived || browser.activityFilter.map { $0.matches(item.activity ?? AgentActivity(box: item.box), box: item.box) } != false
+        }
+    }
+    /// Keep a selected box that stops matching activity visible as context,
+    /// without adding it to the filter results or inflating either count.
+    var browserSelectionPin: ConnectedBox? {
+        guard browser.filter != .archived, let filter = browser.activityFilter, let selected = active.workspace.sandboxID else { return nil }
+        return browserCandidates.first { item in
+            item.location.connection == activeID && item.box.id == selected &&
+                !filter.matches(item.activity ?? AgentActivity(box: item.box), box: item.box)
         }
     }
 }

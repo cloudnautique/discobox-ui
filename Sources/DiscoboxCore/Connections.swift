@@ -58,8 +58,9 @@ public struct ConnectedBox: Identifiable, Sendable {
     public let computer: String
     public let box: Sandbox
     public let needsAttention: Bool
-    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool) {
-        self.location = location; self.computer = computer; self.box = box; self.needsAttention = needsAttention
+    public let activity: AgentActivity?
+    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil) {
+        self.location = location; self.computer = computer; self.box = box; self.needsAttention = needsAttention; self.activity = activity
     }
     public func matches(_ query: String) -> Bool {
         query.split(whereSeparator: { $0.isWhitespace }).allSatisfy {
@@ -166,7 +167,7 @@ public struct ConnectedBox: Identifiable, Sendable {
             let waiting = Set(host.workspace.approvals.map(\.boxID))
             return host.workspace.switcherBoxes.map { box in
                 ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box,
-                             needsAttention: box.matchesAttention || waiting.contains(box.id))
+                             needsAttention: box.matchesAttention || waiting.contains(box.id) || host.workspace.activity(for: box).needsYou)
             }
         }.sorted {
             func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.box.isRunning ? 1 : 2 }
