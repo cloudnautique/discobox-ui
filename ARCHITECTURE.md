@@ -89,6 +89,14 @@ Requested routes remain visible; scope broadening and raw delivery warnings stay
 visible even when advanced controls collapse. Applying a structured decision requires
 an explicit review checkbox, reset whenever its draft or server context changes.
 The submitted decision and fingerprint are captured before the fresh validation read.
+The preview also names delegated bindings that the server would refuse to replace.
+Conflicts disable Apply and review consent. Where the requested variable is already
+delivered by the same sandbox-level sentinel credential, an explicit draft action
+offers adding requested use access beside it; it never removes or edits a binding,
+changes delivery/scope, or submits an approval. The changed draft must get a fresh
+preview and review. Delegation-only conflicts have no addition shortcut. The companion
+recomputes the actual candidate's plan before POST and refuses remaining conflicts.
+`--binding-conflict-smoke` exercises this flow without live requests or credentials.
 `--approval-queue-smoke` exercises native multi-request review and decisions using
 an isolated fixture, without contacting a real host or answering real requests.
 

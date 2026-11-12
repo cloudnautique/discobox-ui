@@ -23,6 +23,7 @@ struct ScopedCredentialApprovalView: View {
     @State private var newValue = ""
     @State private var showReason = false
     @State private var reviewRequest = UUID()
+    @State private var contextDraft = ""
     private var request: JSONValue { item.request }
     private var secret: JSONValue { context["secrets"].array.first { $0["id"].string == secretID } ?? .null }
     private var payload: JSONValue? { try? CredentialDecision.payload(request: request, secret: secret, held: context["held"].array, use: use, delegate: delegate) }
@@ -32,7 +33,9 @@ struct ScopedCredentialApprovalView: View {
     }
     private var resolved: Bool { connection != nil && (workspace.connectionID != connection || !workspace.approvals.contains(item)) }
     private var draftKey: String { (payload?.pretty ?? "") + secretID }
-    private var revision: String { draftKey + context["fingerprint"].string + context["usePlan"].pretty + context["delegatePlan"].pretty }
+    private var conflicts: [JSONValue] { context["conflicts"].array }
+    private var contextMatchesDraft: Bool { contextDraft == draftKey }
+    private var revision: String { [draftKey, context["fingerprint"].string, context["usePlan"].pretty, context["delegatePlan"].pretty, context["conflicts"].pretty].joined(separator: "|") }
     private var applyTitle: String {
         if request["use"] != .null && request["delegate"] != .null { return "Apply choices" }
         if use.decision == "approve" { return "Allow access" }
@@ -70,7 +73,15 @@ struct ScopedCredentialApprovalView: View {
                             }
                             DisclosureGroup("Full request and constraints") { Text(request.pretty).font(.caption.monospaced()).textSelection(.enabled) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(height: 420).disabled(busy)
+                    }.frame(height: conflicts.isEmpty ? 420 : 280).disabled(busy)
+                    if !conflicts.isEmpty {
+                        CredentialBindingConflictNotice(conflicts: conflicts) {
+                            // This edits only the draft. A fresh context and a
+                            // new explicit review are required before approval.
+                            reviewed = false
+                            use.mode = "add"
+                        }.disabled(busy || loading || payload == nil)
+                    }
                     if loading { Label("Checking current limits and existing access…", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary) }
                     if let validation { Text(validation).font(.caption).foregroundStyle(.secondary) }
                     if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
@@ -80,7 +91,7 @@ struct ScopedCredentialApprovalView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if receipt == nil && !resolved {
                     Toggle("I reviewed the requested access and its effect", isOn: $reviewed).toggleStyle(.checkbox).font(.system(size: 12))
-                        .disabled(busy || loading || payload == nil || context["fingerprint"].string.isEmpty).accessibilityIdentifier("approval.reviewed")
+                        .disabled(busy || loading || !contextMatchesDraft || payload == nil || !conflicts.isEmpty || context["fingerprint"].string.isEmpty).accessibilityIdentifier("approval.reviewed")
                 }
                 HStack {
                     Button(receipt != nil || resolved || busy ? "Close" : "Later", action: close).keyboardShortcut(.cancelAction)
@@ -90,7 +101,7 @@ struct ScopedCredentialApprovalView: View {
                         Button("Reload") { Task { await reload() } }.disabled(busy || loading)
                         Button("Deny request", role: .destructive) { submit(deny: true) }.disabled(busy || connection == nil)
                         Button(applyTitle) { submit(deny: false) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                            .disabled(busy || loading || !reviewed || payload == nil || context["fingerprint"].string.isEmpty).accessibilityIdentifier("approval.apply")
+                            .disabled(busy || loading || !contextMatchesDraft || !reviewed || payload == nil || !conflicts.isEmpty || context["fingerprint"].string.isEmpty).accessibilityIdentifier("approval.apply")
                     } else { Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
                 }
             }
@@ -229,6 +240,7 @@ struct ScopedCredentialApprovalView: View {
     private func reload(selectDefault: Bool = true) async {
         guard !closed, !resolved else { return }
         let token = UUID(); reviewRequest = token
+        let requestedDraft = draftKey
         loading = true; error = nil; reviewed = false
         defer { if token == reviewRequest { loading = false } }
         do {
@@ -236,6 +248,7 @@ struct ScopedCredentialApprovalView: View {
             guard !closed, workspace.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
             guard result["request"] == request else { throw DiscoboxError("The request changed. Reopen it from the current inbox.") }
             context = result
+            contextDraft = requestedDraft
             if selectDefault && secretID.isEmpty {
                 let holder = CredentialDecision.holder(request: request, held: result["held"].array)
                 secretID = holder["secretId"].string
@@ -265,7 +278,7 @@ struct ScopedCredentialApprovalView: View {
     private func submit(deny: Bool) {
         guard !busy, !resolved, let connection else { return }
         let decision = payload, fingerprint = context["fingerprint"]
-        guard deny || (!loading && reviewed && decision != nil && !fingerprint.string.isEmpty) else { return }
+        guard deny || (!loading && contextMatchesDraft && reviewed && decision != nil && conflicts.isEmpty && !fingerprint.string.isEmpty) else { return }
         busy = true; error = nil
         Task {
             defer { busy = false }

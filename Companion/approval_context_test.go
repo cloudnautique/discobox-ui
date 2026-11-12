@@ -130,3 +130,111 @@ func TestCredentialReviewUsesRequesterAndCanonicalCombinedPlan(t *testing.T) {
 		t.Fatal("approval without binding review accepted")
 	}
 }
+
+func TestDelegatedBindingConflictIsReviewedBeforeAnyWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name, as, parent, raw, variable, notApplied string
+		use, delegate, combined                     bool
+		conflicts                                   int
+		canAdd                                      bool
+	}{
+		{name: "delegated replacement", as: "replace", parent: "parent", variable: "TOKEN", use: true, conflicts: 1, canAdd: true},
+		{name: "explicit addition preserves delegated base", as: "add", parent: "parent", variable: "TOKEN", use: true},
+		{name: "person-owned replacement", as: "replace", variable: "TOKEN", use: true},
+		{name: "combined delegation still conflicts", as: "replace", parent: "parent", variable: "TOKEN", use: true, delegate: true, combined: true, conflicts: 2, canAdd: true},
+		{name: "delegation cannot become an addition", parent: "parent", variable: "TOKEN", delegate: true, combined: true, conflicts: 1},
+		{name: "raw delivery has no addition shortcut", as: "replace", parent: "parent", raw: "env", variable: "TOKEN", use: true, conflicts: 1},
+		{name: "another variable has no addition shortcut", as: "replace", parent: "parent", variable: "OTHER", use: true, conflicts: 1},
+		{name: "inactive base has no addition shortcut", as: "replace", parent: "parent", variable: "TOKEN", notApplied: "expired", use: true, conflicts: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := newBridge("http://fixture", false)
+			b.allowManage = true
+			writes := 0
+			parent := tc.parent
+			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+				var value any
+				switch r.URL.Path {
+				case "/projects/p/secret-requests/ask":
+					value = map[string]any{"id": "ask", "sandboxId": "requester", "envName": "TOKEN", "status": "pending", "use": map[string]any{}, "delegate": map[string]any{}}
+				case "/projects/p/secrets":
+					value = map[string]any{"secrets": []any{map[string]any{"id": "sec", "name": "Repository"}}}
+				case "/projects/p/bound-secrets":
+					value = map[string]any{"boundSecrets": []any{map[string]any{"bindingId": "existing", "secretId": "sec", "envVar": tc.variable, "use": true, "notApplied": tc.notApplied}}}
+				case "/projects/p/secret-bindings":
+					value = map[string]any{"secretBindings": []any{map[string]any{"id": "existing", "secretId": "sec", "targetKind": "sandbox", "targetId": "requester", "envVar": tc.variable,
+						"use": true, "delegate": tc.combined, "parentId": parent, "raw": tc.raw, "createdAt": "2026-11-01T00:00:00Z"}}}
+				case "/projects/p/secret-requests/ask/approve":
+					if r.Method != http.MethodPost {
+						t.Fatalf("unexpected mutation %s", r.Method)
+					}
+					writes++
+					var body struct {
+						Use      struct{ As, Scope, Raw string }
+						Delegate struct{ Decision string }
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					if tc.use && (body.Use.As != tc.as || body.Use.Scope != "routes" || body.Use.Raw != "") {
+						t.Fatalf("reviewed decision was altered: %+v", body)
+					}
+					value = map[string]any{"recorded": true}
+				default:
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL)
+				}
+				if r.Method != http.MethodGet && !strings.HasSuffix(r.URL.Path, "/approve") {
+					t.Fatalf("preview changed bindings: %s %s", r.Method, r.URL)
+				}
+				raw, _ := json.Marshal(value)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(raw))), Header: make(http.Header)}, nil
+			})
+			use, delegate := map[string]any{"decision": "deny"}, map[string]any{"decision": "deny"}
+			if tc.use {
+				use = map[string]any{"decision": "approve", "as": tc.as, "scope": "routes"}
+			}
+			if tc.delegate {
+				delegate = map[string]any{"decision": "approve", "scope": "routes"}
+			}
+			candidate, _ := json.Marshal(map[string]any{"secretId": "sec", "use": use, "delegate": delegate})
+			req := request{Operation: "approvalContext", ProjectID: "p", RequestID: "ask", Payload: candidate}
+			res, err := b.execute(t.Context(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var review approvalContext
+			if err = json.Unmarshal(res.Body, &review); err != nil {
+				t.Fatal(err)
+			}
+			if len(review.Conflicts) != tc.conflicts {
+				t.Fatalf("conflicts = %+v", review.Conflicts)
+			}
+			for _, conflict := range review.Conflicts {
+				if conflict.BindingID != "existing" || conflict.ParentID != tc.parent || conflict.CanAdd != (conflict.Part == "use" && tc.canAdd) {
+					t.Fatalf("wrong conflict: %+v", conflict)
+				}
+			}
+			if writes != 0 {
+				t.Fatal("preview performed a write")
+			}
+			req.Operation, req.Kind, req.Action = "answer", "credential", "approve"
+			req.Payload, _ = json.Marshal(map[string]any{"approval": json.RawMessage(candidate), "contextFingerprint": review.Fingerprint})
+			_, err = b.execute(t.Context(), req)
+			if tc.conflicts > 0 {
+				if err == nil || writes != 0 {
+					t.Fatalf("conflicting approval wrote: %d, %v", writes, err)
+				}
+			} else if err != nil || writes != 1 {
+				t.Fatalf("reviewed approval writes = %d, err = %v", writes, err)
+			}
+			parent += "-changed"
+			_, err = b.execute(t.Context(), req)
+			if err == nil || !strings.Contains(err.Error(), "changed") {
+				t.Fatalf("changed binding did not invalidate review: %v", err)
+			}
+			if tc.conflicts > 0 && writes != 0 || tc.conflicts == 0 && writes != 1 {
+				t.Fatal("stale review wrote or repeated a mutation")
+			}
+		})
+	}
+}

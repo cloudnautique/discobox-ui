@@ -13,13 +13,22 @@ import (
 )
 
 type approvalContext struct {
-	Request     json.RawMessage   `json:"request"`
-	Secrets     []json.RawMessage `json:"secrets"`
-	Held        []json.RawMessage `json:"held"`
-	Bindings    []json.RawMessage `json:"bindings"`
-	Fingerprint string            `json:"fingerprint"`
-	Use         bindingplan.Plan  `json:"usePlan"`
-	Delegate    bindingplan.Plan  `json:"delegatePlan"`
+	Request     json.RawMessage           `json:"request"`
+	Secrets     []json.RawMessage         `json:"secrets"`
+	Held        []json.RawMessage         `json:"held"`
+	Bindings    []json.RawMessage         `json:"bindings"`
+	Fingerprint string                    `json:"fingerprint"`
+	Use         bindingplan.Plan          `json:"usePlan"`
+	Delegate    bindingplan.Plan          `json:"delegatePlan"`
+	Conflicts   []approvalBindingConflict `json:"conflicts,omitempty"`
+}
+
+type approvalBindingConflict struct {
+	Part      string `json:"part"`
+	BindingID string `json:"bindingId"`
+	ParentID  string `json:"parentId"`
+	Message   string `json:"message"`
+	CanAdd    bool   `json:"canAdd"`
 }
 
 // A read-only, request-scoped snapshot. Always use the requester from the
@@ -88,6 +97,7 @@ func (b *bridge) credentialContext(ctx context.Context, req request) (approvalCo
 		Use    struct {
 			Decision string `json:"decision"`
 			As       string `json:"as"`
+			Raw      string `json:"raw"`
 		} `json:"use"`
 		Delegate struct {
 			Decision string `json:"decision"`
@@ -99,9 +109,13 @@ func (b *bridge) credentialContext(ctx context.Context, req request) (approvalCo
 		}
 	}
 	var standing []bindingplan.Binding
+	parents := map[string]string{}
+	rawDelivery := map[string]string{}
 	for _, raw := range out.Bindings {
 		var row struct {
 			ID, SecretID, TargetKind, TargetID, EnvVar string
+			ParentID                                   string `json:"parentId"`
+			Raw                                        string `json:"raw"`
 			Use, Delegate, Adds                        bool
 			CreatedAt                                  time.Time
 		}
@@ -109,6 +123,7 @@ func (b *bridge) credentialContext(ctx context.Context, req request) (approvalCo
 			return out, response{}, err
 		}
 		if row.SecretID == candidate.Secret && row.TargetKind == "sandbox" && row.TargetID == ask.Sandbox {
+			parents[row.ID], rawDelivery[row.ID] = row.ParentID, row.Raw
 			standing = append(standing, bindingplan.Binding{ID: row.ID, Use: row.Use, Delegate: row.Delegate, Adds: row.Adds, EnvName: row.EnvVar, Created: row.CreatedAt})
 		}
 	}
@@ -120,6 +135,39 @@ func (b *bridge) credentialContext(ctx context.Context, req request) (approvalCo
 		}
 	}
 	out.Use, out.Delegate = bindingplan.Answer(standing, ask.Env, as, candidate.Delegate.Decision == "approve")
+	// A person's approval has no parent. The server refuses replacing a grant
+	// handed on under another delegation, even when the credential is the same.
+	// Preview that refusal before the user consents, without changing the plan.
+	canAdd := false
+	if as == bindingplan.Replace && candidate.Use.Raw == "" {
+		for _, raw := range out.Held {
+			var held struct {
+				BindingID, SecretID, EnvVar, NotApplied string
+				Use, Adds                               bool
+			}
+			if err = json.Unmarshal(raw, &held); err != nil {
+				return out, response{}, err
+			}
+			_, known := parents[held.BindingID]
+			if known && held.SecretID == candidate.Secret && held.EnvVar == ask.Env && held.Use && !held.Adds && held.NotApplied == "" && rawDelivery[held.BindingID] == "" {
+				canAdd = true
+			}
+		}
+	}
+	for _, part := range []struct {
+		name string
+		plan bindingplan.Plan
+	}{{"use", out.Use}, {"delegate", out.Delegate}} {
+		for _, step := range part.plan.Steps {
+			if parent := parents[step.Binding.ID]; parent != "" {
+				message := "This box’s existing access was delegated by another box. This approval cannot replace that grant."
+				if part.name == "delegate" {
+					message = "This box’s existing delegation came from another box. Changing it requires managing that binding separately; denying the sharing part leaves it unchanged."
+				}
+				out.Conflicts = append(out.Conflicts, approvalBindingConflict{Part: part.name, BindingID: step.Binding.ID, ParentID: parent, Message: message, CanAdd: part.name == "use" && canAdd})
+			}
+		}
+	}
 	return out, response{}, nil
 }
 
@@ -145,12 +193,17 @@ func (b *bridge) reviewedCredential(ctx context.Context, req request) (json.RawM
 	if review.Fingerprint == "" || len(review.Approval) == 0 {
 		return nil, response{}, errors.New("review the credential's current routes and bindings before approving")
 	}
-	snapshot, res, err := b.credentialContext(ctx, req)
+	candidate := req
+	candidate.Payload = review.Approval
+	snapshot, res, err := b.credentialContext(ctx, candidate)
 	if err != nil || res.Status != 0 {
 		return nil, res, err
 	}
 	if snapshot.Fingerprint != review.Fingerprint {
 		return nil, response{}, errors.New("the credential or its bindings changed; reload and review the effect before applying")
+	}
+	if len(snapshot.Conflicts) > 0 {
+		return nil, response{}, errors.New("existing delegated access cannot be replaced; review the binding conflict before applying")
 	}
 	return review.Approval, response{}, nil
 }
