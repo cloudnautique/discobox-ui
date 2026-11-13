@@ -7,7 +7,7 @@ import DiscoboxCore
     static func run() async {
         do {
             try await verify()
-            print("BINDING_CONFLICT_SMOKE_OK: replacement blocked, explicit addition edits only the draft, fresh review still required; no approval/binding writes")
+            print("BINDING_CONFLICT_SMOKE_OK: replacement blocked, explicit addition edits only the draft, explicit footer approval still required; no approval/binding writes")
             fflush(stdout); exit(0)
         } catch { print("BINDING_CONFLICT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
@@ -20,11 +20,7 @@ import DiscoboxCore
         window.contentView = NSHostingView(rootView: ApprovalSheet(item: item).environment(workspace))
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil); workspace.disconnect() }
-        guard let root = window.contentView else { throw DiscoboxError("Missing review view") }
-        try await wait { views(root).contains { $0 is NSSegmentedControl } }
-        let decision = views(root).compactMap { $0 as? NSSegmentedControl }.first!
-        decision.selectedSegment = 1
-        decision.sendAction(decision.action, to: decision.target)
+        guard window.contentView != nil else { throw DiscoboxError("Missing review view") }
         try await wait { addButton(window) != nil && addButton(window)?.isEnabled == true }
         guard submit(window)?.isEnabled == false else { throw DiscoboxError("Conflicting replacement was submittable") }
         for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
@@ -33,12 +29,12 @@ import DiscoboxCore
             try capture(window, name: "binding-conflict-" + theme)
         }
         addButton(window)?.performClick(nil)
-        try await wait { addButton(window) == nil }
+        try await wait { addButton(window) == nil && submit(window)?.isEnabled == true }
         let candidate = await client.candidate
         guard candidate["use"]["as"].string == "add", candidate["use"]["scope"].string == "routes",
-              candidate["use"]["raw"] == .null, submit(window)?.isEnabled == false,
+              candidate["use"]["raw"] == .null, submit(window)?.isEnabled == true,
               await client.writes == 0, workspace.approvals.count == 1 else {
-            throw DiscoboxError("Addition changed access, widened scope, lost review gating or answered the request")
+            throw DiscoboxError("Addition changed access, widened scope, lost fresh-preview validation or answered the request")
         }
         try capture(window, name: "binding-addition-review")
     }

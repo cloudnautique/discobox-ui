@@ -31,21 +31,22 @@ const maxBody = 8 << 20
 var errEndpointRedirect = errors.New("redirects are not accepted")
 
 type request struct {
-	RemotePath string          `json:"remotePath,omitempty"`
-	LocalPath  string          `json:"localPath,omitempty"`
-	Operation  string          `json:"operation"`
-	ProjectID  string          `json:"projectID"`
-	SandboxID  string          `json:"sandboxID"`
-	ExecID     string          `json:"execID"`
-	HarnessID  string          `json:"harnessID,omitempty"`
-	PoolID     string          `json:"poolID,omitempty"`
-	Repository string          `json:"repository,omitempty"`
-	Prompt     string          `json:"prompt,omitempty"`
-	RequestID  string          `json:"requestID,omitempty"`
-	Kind       string          `json:"kind,omitempty"`
-	Action     string          `json:"action,omitempty"`
-	Payload    json.RawMessage `json:"payload,omitempty"`
-	Input      []inputPart     `json:"input,omitempty"`
+	DiscoboxAPI *bool           `json:"discoboxAPI,omitempty"`
+	RemotePath  string          `json:"remotePath,omitempty"`
+	LocalPath   string          `json:"localPath,omitempty"`
+	Operation   string          `json:"operation"`
+	ProjectID   string          `json:"projectID"`
+	SandboxID   string          `json:"sandboxID"`
+	ExecID      string          `json:"execID"`
+	HarnessID   string          `json:"harnessID,omitempty"`
+	PoolID      string          `json:"poolID,omitempty"`
+	Repository  string          `json:"repository,omitempty"`
+	Prompt      string          `json:"prompt,omitempty"`
+	RequestID   string          `json:"requestID,omitempty"`
+	Kind        string          `json:"kind,omitempty"`
+	Action      string          `json:"action,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Input       []inputPart     `json:"input,omitempty"`
 }
 
 type inputPart struct {
@@ -371,6 +372,10 @@ func validateInput(parts []inputPart) error {
 
 func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
+	case "setDefaultHarness":
+		return b.setDefaultHarness(ctx, req)
+	case "updateSecretLimits":
+		return b.credentialLimits(ctx, req)
 	case "harnessDetails", "harnessChanges", "saveHarnessChanges", "discardHarnessChanges":
 		return b.harnessManagement(ctx, req)
 	case "poolConfiguration", "updatePoolProxy":

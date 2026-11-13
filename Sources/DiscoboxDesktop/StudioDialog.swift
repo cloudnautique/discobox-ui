@@ -196,6 +196,23 @@ struct StudioDestinationRow<Content: View>: View {
     }
 }
 
+/// Labelled dropdown row for Settings, forms, and dialog cards. The same
+/// native popup used in destination rows owns selection and keyboard access.
+struct StudioMenuField: View {
+    let title: String
+    @Binding var selection: String
+    let options: [StudioMenuPicker.Option]
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Text(title)
+            Spacer(minLength: 0)
+            StudioMenuPicker(title: title, selection: $selection, options: options)
+                .frame(minWidth: 120, maxWidth: 320)
+        }.frame(maxWidth: .infinity)
+    }
+}
+
 /// A borderless native popup keeps the compact down-chevron presentation and
 /// the same menu keyboard/accessibility behavior as the standard macOS picker.
 struct StudioMenuPicker: View {
@@ -208,6 +225,7 @@ struct StudioMenuPicker: View {
     @Binding var selection: String
     let options: [Option]
     var alignment: NSTextAlignment = .right
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         StudioNativeMenuPicker(title: title, selection: $selection, options: options)
@@ -219,6 +237,7 @@ struct StudioMenuPicker: View {
                     Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
                 }.font(.system(size: 12)).foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: alignment == .left ? .leading : .trailing)
+                    .opacity(isEnabled ? 1 : 0.45)
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
     }

@@ -187,11 +187,11 @@ struct ConnectionEditor: View {
                 Form {
                     TextField("Name", text: $name, prompt: Text("Studio")).focused($nameFocused)
                         .accessibilityIdentifier("connection.name")
-                    Picker("Connect to", selection: $kind) {
-                        Text("Remote computer").tag("remote")
-                        Text("Custom local socket").tag("socket")
-                        Text("HTTP/S server").tag("http")
-                    }
+                    StudioMenuField(title: "Connect to", selection: $kind, options: [
+                        .init(id: "remote", title: "Remote computer"),
+                        .init(id: "socket", title: "Custom local socket"),
+                        .init(id: "http", title: "HTTP/S server")
+                    ])
                     VStack(alignment: .leading, spacing: 8) {
                         Text(kind == "socket" ? "Socket address" : "Server address")
                         TextEditor(text: $address)

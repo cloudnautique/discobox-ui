@@ -17,6 +17,7 @@ public actor DemoClient: DiscoboxClient {
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
+        case .updateSecretLimits: return Data("{}".utf8)
         case .harnessDetails: return Data(#"{"harness":{"id":"demo-harness","name":"Demo agent","revision":2,"saveBack":{"version":1},"configuredFiles":[{"path":"~/.config/agent/settings.json","content":"{}"}]},"bindings":[{"bindingId":"login","secretId":"demo-login","secretName":"Agent subscription","envVar":"AGENT_TOKEN","use":true,"from":"harnessConfig"}],"secrets":[{"id":"demo-login","type":"oauth","name":"Agent subscription"}]}"#.utf8)
         case .harnessChanges: return Data(#"{"changes":{"candidateId":"demo-candidate","harnessConfigId":"demo-harness","state":"pending","configRevision":2,"files":[{"path":"~/.config/agent/settings.json","previous":{"content":"{}"},"file":{"content":"{\"theme\":\"dark\"}"}}],"credentials":[{"provider":"claude-code","envName":"AGENT_TOKEN","type":"oauth","account":"Demo subscription"}],"diagnostics":[]},"fingerprint":"fixture"}"#.utf8)
         case .saveHarnessChanges: return Data(#"{"candidateId":"demo-candidate","harnessConfigId":"demo-harness","configRevision":3,"state":"saved"}"#.utf8)
@@ -80,6 +81,7 @@ public actor DemoClient: DiscoboxClient {
         case .deleteSecret: return Data("{}".utf8)
         case .createSecret: return Data(#"{"id":"demo-token"}"#.utf8)
         case .ruleProposals: return Data("{}".utf8)
+        case .setDefaultHarness: throw DiscoboxError("Default harness editing is unavailable in the offline demo.")
         case .harnesses:
             return Data(#"{"harnessConfigs":[{"id":"demo-harness","name":"Demo agent","configured":true}]}"#.utf8)
         case .createBox:

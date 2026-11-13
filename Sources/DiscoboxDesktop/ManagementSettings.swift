@@ -8,14 +8,15 @@ struct HarnessSettings: View {
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var error: String?
     @State private var loading = false
-    @State private var defaultID = ""
+    @State private var savingDefault = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            StudioDialogHeader(title: "Harnesses", symbol: "terminal", subtitle: "Configure harnesses on the selected computer.")
+            StudioDialogHeader(title: "Harnesses", symbol: "terminal", subtitle: "Shared logins, settings and launch defaults on the selected computer.")
             if !workspace.isConnected {
                 ContentUnavailableView("Connect to Discobox", systemImage: "network", description: Text("Choose a server in Connection settings."))
             } else {
+                Text("The default is shared with other Discobox clients on this computer and project. New boxes preselect it; existing boxes keep their harness.").font(.caption).foregroundStyle(.secondary)
                 Text(workspace.endpointLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 List(workspace.cachedHarnesses) { harness in
@@ -24,25 +25,37 @@ struct HarnessSettings: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(harness.name).fontWeight(.medium)
-                                if harness.id == defaultID { Text("Default").font(.caption).foregroundStyle(.secondary) }
+                                if harness.id == workspace.defaultHarnessID { Text("Default").font(.caption).foregroundStyle(.secondary) }
                             }
-                            Text(harness.usesLegacySetup ? (harness.configured ? "Configured" : "Needs setup") : "Ready to run · manage saved logins and settings")
+                            Text(harness.usesLegacySetup ? (harness.configured ? "Configured" : "Needs setup") : "Sign in inside a box · review changes to share")
                                 .font(.caption).foregroundStyle(harness.configured ? Color.secondary : Color.orange)
                         }
                         Spacer()
-                        Button("Manage…") {
+                        if harness.id != workspace.defaultHarnessID {
+                            Button("Make Default") { Task { await makeDefault(harness.id) } }
+                                .disabled(loading || savingDefault || !harness.configured || workspace.isDemo)
+                        }
+                        Button("Login & Settings…") {
                             HarnessSetupWindows.shared.open(harness, workspace: workspace, connections: connections, commands: commands)
                         }.disabled(workspace.isDemo)
                     }.padding(.vertical, 6)
                 }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
                 HStack {
-                    if loading { ProgressView().controlSize(.small) }
+                    if loading || savingDefault { ProgressView().controlSize(.small) }
                     Spacer()
-                    Button("Refresh") { Task { await refresh() } }.disabled(loading)
+                    Button("Refresh") { Task { await refresh() } }.disabled(loading || savingDefault)
                 }
             }
         }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
-        .task(id: workspace.connectionID) { defaultID = ""; error = nil; await refresh() }
+        .task(id: workspace.connectionID) { error = nil; await refresh() }
+    }
+
+    private func makeDefault(_ harnessID: String) async {
+        let connection = workspace.connectionID
+        savingDefault = true; error = nil
+        defer { savingDefault = false }
+        do { try await workspace.setDefaultHarness(harnessID, connection: connection) }
+        catch { if connection == workspace.connectionID { self.error = error.localizedDescription } }
     }
 
     private func refresh() async {
@@ -52,9 +65,7 @@ struct HarnessSettings: View {
         defer { loading = false }
         do {
             _ = try await workspace.harnesses(force: true)
-            let project = try await workspace.operation(.defaultProject)
-            guard connection == workspace.connectionID else { return }
-            defaultID = project["defaultHarnessConfigId"].string
+            try await workspace.refreshDefaultHarness()
         } catch {
             guard connection == workspace.connectionID else { return }
             self.error = error.localizedDescription
@@ -65,6 +76,7 @@ struct HarnessSettings: View {
 struct CredentialSettings: View {
     @Environment(Workspace.self) private var workspace
     @State private var credentials: [JSONValue] = []
+    @State private var details: CredentialDetailsRequest?
     @State private var search = ""
     @State private var pendingDelete: JSONValue?
     @State private var pendingDeleteConnection: UUID?
@@ -95,6 +107,8 @@ struct CredentialSettings: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Button("Details…") { details = .init(secret: item, connection: workspace.connectionID) }
+                            .disabled(busy || workspace.isDemo)
                         Button("Delete…", role: .destructive) {
                             pendingDeleteConnection = workspace.connectionID
                             pendingDelete = item
@@ -118,6 +132,9 @@ struct CredentialSettings: View {
         .task(id: workspace.connectionID) {
             credentials = []; pendingDelete = nil; error = nil
             await refresh()
+        }
+        .sheet(item: $details) { request in
+            CredentialDetailsView(request: request) { Task { await refresh() } }.environment(workspace)
         }
         .sheet(isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             if let item = pendingDelete, let connection = pendingDeleteConnection {

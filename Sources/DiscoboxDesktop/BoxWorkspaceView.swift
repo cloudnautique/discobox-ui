@@ -29,6 +29,10 @@ struct BoxWorkspaceView: View {
         VStack(spacing: 0) {
             if let error = workspace.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
             if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
+            if box.isRunning, let configuration = harnessConfiguration,
+               !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
+                HarnessChangesBanner(box: box, harness: configuration) { manageHarness(configuration) }
+            }
             if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id) }
             // The agent is always the first child of this split. Never mount it
             // as a tab or reparent it when opening a supporting tool.
@@ -73,11 +77,6 @@ struct BoxWorkspaceView: View {
                     Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
-                if box.isRunning, !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty, let configuration = harnessConfiguration {
-                    Button("Save login/settings…", systemImage: "square.and.arrow.up") { manageHarness(configuration) }
-                        .labelStyle(.iconOnly).font(.caption).foregroundStyle(DiscoboxAppearance.accent)
-                        .help("Review this box’s harness changes before sharing them with other boxes")
-                }
                 Spacer()
                 Menu {
                     if let configuration = harnessConfiguration {
@@ -86,7 +85,7 @@ struct BoxWorkspaceView: View {
                     }
                     Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
                     supportingTools
-                } label: { Image(systemName: "ellipsis") }.help("Agent and workspace actions")
+                } label: { Image(systemName: "ellipsis") }.menuIndicator(.hidden).help("Agent and workspace actions")
                 Button { commands.perform(.focus) } label: {
                     Image(systemName: commands.isAgentMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 }.help(commands.isAgentMaximized ? "Restore workspace layout" : "Maximize agent")
@@ -210,7 +209,7 @@ struct BoxWorkspaceView: View {
                     Divider()
                 }
                 supportingTools
-            } label: { Image(systemName: "ellipsis") }.help("Files, changes and additional tools")
+            } label: { Image(systemName: "ellipsis") }.menuIndicator(.hidden).help("Files, changes and additional tools")
             Button { commands.toggleShells() } label: { Image(systemName: "chevron.right") }
                 .help("Hide shells without stopping them (" + commands.appShortcuts[.toggleShells] + ")")
                 .accessibilityLabel("Hide shell area").accessibilityIdentifier("workspace.hideShells")
@@ -443,6 +442,7 @@ struct BoxInspector: View {
             Section("Agent") {
                 detail("Model", box.config.model)
                 detail("Harness", box.config.harnessConfigId)
+                LabeledContent("Manager API access", value: box.discoboxApi == true ? "Enabled" : workspace.approvals.contains(where: { $0.kind == "apiAccess" && $0.boxID == box.id }) ? "Pending approval" : box.discoboxApi == nil ? "Not reported" : "Off")
             }
             Section("Resources") {
                 LabeledContent("CPU cores", value: ResourceValue.cpu(box.resourceCPU))

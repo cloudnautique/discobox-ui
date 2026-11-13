@@ -5,11 +5,16 @@ struct ApprovalSheet: View {
     let item: ApprovalItem
     var initialDuration: String? = nil
     var onClose: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
-        switch item.kind {
-        case "credential" where item.request["use"] != .null || item.request["delegate"] != .null: ScopedCredentialApprovalView(item: item, onClose: onClose)
-        case "credential", "trust": LegacyApprovalSheet(item: item, initialDuration: initialDuration, onClose: onClose)
-        default: ConsentApprovalView(item: item, onClose: onClose)
+        switch item.presentation {
+        case .bindingCredential: ScopedCredentialApprovalView(item: item, onClose: onClose)
+        case .legacyCredential, .certificate: LegacyApprovalSheet(item: item, initialDuration: initialDuration, onClose: onClose)
+        case .consent: ConsentApprovalView(item: item, onClose: onClose)
+        case .unsupported:
+            StudioMessageSheet(title: "Request needs a compatible client", symbol: "exclamationmark.shield",
+                message: "This request uses an unsupported approval format. No access has been granted. Use the matching Discobox console to review it.",
+                confirmTitle: "Close") { if let onClose { onClose() } else { dismiss() } }
         }
     }
 }
@@ -26,14 +31,20 @@ struct ConsentApprovalView: View {
     @State private var value = ""
     @State private var busy = false
     @State private var reviewed = false
+    @State private var receipt: JSONValue?
+    @State private var approved = false
     @State private var closed = false
     @State private var error: String?
     private var resolved: Bool { connection != nil && (connection != workspace.connectionID || !workspace.approvals.contains(item)) }
     private var isRefresh: Bool { item.kind == "refresh" }
     private var approveTitle: String { isRefresh ? "Update credential" : item.kind == "apiAccess" ? "Enable API access" : "Allow leadership" }
     var body: some View {
-        StudioConfirmation(title: resolved ? "Request no longer pending" : item.title, symbol: isRefresh ? "key" : "checkmark.shield", width: 660) {
-            if resolved {
+        StudioConfirmation(title: receipt != nil ? "Decision recorded" : resolved ? "Request no longer pending" : item.title, symbol: isRefresh ? "key" : "checkmark.shield", width: 660) {
+            if let receipt {
+                Label(approved ? (isRefresh ? "Shared credential updated" : item.kind == "apiAccess" ? "Discobox API access enabled" : "Leadership allowed") : "Request denied", systemImage: "checkmark.circle").font(.headline)
+                Text(approved ? "Discobox recorded this decision on the requesting computer." : "No new access was granted.").foregroundStyle(.secondary)
+                DisclosureGroup("Server receipt") { ScrollView { Text(receipt.pretty).font(.caption.monospaced()).textSelection(.enabled) }.frame(maxHeight: 250) }
+            } else if resolved {
                 Text("This request was answered, changed, or withdrawn. Reopen the current inbox if it still needs your attention.").foregroundStyle(.secondary)
             } else {
                 ApprovalReview(reviewed: $reviewed, revision: item.request.pretty) {
@@ -59,7 +70,7 @@ struct ConsentApprovalView: View {
                 Button(resolved || busy ? "Close" : "Later", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
-                if !resolved && item.supported {
+                if receipt == nil && !resolved && item.supported {
                     Button(approveTitle) { submit(approve: true) }.buttonStyle(.bordered)
                         .disabled(busy || !reviewed || isRefresh && value.isEmpty)
                         .accessibilityIdentifier("approval.confirmConsent")
@@ -102,8 +113,9 @@ struct ConsentApprovalView: View {
         Task {
             do {
                 try await workspace.validateApproval(item, connection: connection!)
-                try await workspace.answer(item, action: approve ? (isRefresh ? "refresh" : "approve") : "deny", payload: payload, onAccepted: {
-                    busy = false; value = ""; if !closed { close() }
+                try await workspace.answerWithReceipt(item, action: approve ? (isRefresh ? "refresh" : "approve") : "deny", payload: payload, onAccepted: { result in
+                    busy = false; value = ""
+                    if !closed { receipt = result; approved = approve }
                 })
             } catch {
                 busy = false

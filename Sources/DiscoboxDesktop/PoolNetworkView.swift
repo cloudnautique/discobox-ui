@@ -26,9 +26,11 @@ struct PoolNetworkView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Toggle("Use server defaults", isOn: $draft.defaults)
                                 if !draft.defaults {
-                                    Picker("Outbound mode", selection: $draft.mode) {
-                                        Text("Direct").tag("direct"); Text("Explicit proxy").tag("explicit"); Text("Inherit server proxy environment").tag("inherit")
-                                    }
+                                    StudioMenuField(title: "Outbound mode", selection: $draft.mode, options: [
+                                        .init(id: "direct", title: "Direct"),
+                                        .init(id: "explicit", title: "Explicit proxy"),
+                                        .init(id: "inherit", title: "Inherit server proxy environment")
+                                    ])
                                     Text(draft.mode == "direct" ? "Connect directly, with this override’s additional trust certificates." : draft.mode == "inherit" ? "Explicitly use the server’s proxy environment, plus additional trust certificates." : "An empty proxy field connects directly for that protocol.").font(.caption).foregroundStyle(.secondary)
                                     if draft.mode == "explicit" {
                                         TextField("HTTP proxy URL", text: $draft.http)

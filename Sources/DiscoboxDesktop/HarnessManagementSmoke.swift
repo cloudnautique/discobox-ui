@@ -35,8 +35,13 @@ import DiscoboxCore
             create.contentView = NSHostingView(rootView: NewBoxSheet(harnessID: "demo-harness").environment(workspace))
             create.orderFront(nil)
             try await wait { descendants(create.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.titleOfSelectedItem == "Subscription agent" } }
-            create.orderOut(nil); workspace.disconnect()
-            print("HARNESS_MANAGEMENT_SMOKE_OK: overview opens focused review, fixed consent/save fit the minimum window and survive resizing, one host-scoped save, durable receipt, and sign-in box keeps its chosen harness")
+            create.orderOut(nil)
+            let defaults = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 780), styleMask: [.titled], backing: .buffered, defer: false)
+            defaults.contentView = NSHostingView(rootView: NewBoxSheet().environment(workspace))
+            defaults.orderFront(nil)
+            try await wait { descendants(defaults.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.titleOfSelectedItem == "First agent · Default" } }
+            defaults.orderOut(nil); workspace.disconnect()
+            print("HARNESS_MANAGEMENT_SMOKE_OK: overview opens focused review, fixed consent/save fit the minimum window and survive resizing, one host-scoped save, durable receipt, project default preselection, and sign-in box keeps its chosen harness")
             fflush(stdout); exit(0)
         } catch { print("HARNESS_MANAGEMENT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
@@ -80,8 +85,11 @@ private actor HarnessManagementFixture: DiscoboxClient {
     let demo = DemoClient()
     var saves = 0
     func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .defaultProject {
+            return Data(#"{"id":"demo","name":"Fixture","defaultHarnessConfigId":"first"}"#.utf8)
+        }
         if request.operation == .harnesses {
-            return Data(#"{"harnessConfigs":[{"id":"first","name":"First agent"},{"id":"demo-harness","name":"Subscription agent"}]}"#.utf8)
+            return Data(#"{"harnessConfigs":[{"id":"demo-harness","name":"Subscription agent"},{"id":"first","name":"First agent"}]}"#.utf8)
         }
         if request.operation == .saveHarnessChanges {
             saves += 1

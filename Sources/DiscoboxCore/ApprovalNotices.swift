@@ -30,24 +30,9 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
 }
 
 extension ApprovalItem {
-    /// Match the form's automatic credential approval: let the server fit the
-    /// duration to the current secret limit, preserving the exact policy and
-    /// configured credential/gate without rules or changed restrictions.
-    /// Certificate pins, refresh tokens, delegation, and non-expiring grants
-    /// need the form's explicit choices.
-    public var notificationApprovalPayload: JSONValue? {
-        guard kind == "credential", request["status"].string == "pending",
-              request["use"] == .null, request["delegate"] == .null,
-              request["reason"].string.isEmpty,
-              ["", "use"].contains(request["purpose"].string) else { return nil }
-        let ttl = request["grantTTLSeconds"]
-        guard ttl == .null || ttl.number != nil else { return nil }
-        let seconds = ttl.number ?? 3600
-        guard seconds.isFinite, seconds > 0, seconds.rounded() == seconds, seconds < Double(Int.max) else { return nil }
-        var body: [String: JSONValue] = [:]
-        if request["policy"] != .null { body["policy"] = request["policy"] }
-        return .object(body)
-    }
+    /// Notifications open the review form. A banner cannot describe the full
+    /// policy, delivery and existing-access effects needed for informed consent.
+    public var notificationApprovalPayload: JSONValue? { nil }
 }
 
 /// In-memory deduplication only. No credentials or approval policies are written

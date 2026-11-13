@@ -8,7 +8,8 @@ struct NewBoxSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(ConnectionRuntimes.self) private var runtimes: ConnectionRuntimes?
     @State private var targetComputer = ""
-    init(repository: String = "", computer: String? = nil, harnessID: String = "") {
+    init(repository: String = "", computer: String? = nil, harnessID: String = "", onCreated: ((Sandbox) -> Void)? = nil) {
+        self.onCreated = onCreated
         _repository = State(initialValue: repository)
         _targetComputer = State(initialValue: computer ?? "")
         _harness = State(initialValue: harnessID)
@@ -18,7 +19,16 @@ struct NewBoxSheet: View {
     private var workspace: Workspace { connections?.session(targetComputer)?.workspace ?? initialWorkspace }
     @Environment(\.dismiss) private var dismiss
     private var harnesses: [Harness] { workspace.cachedHarnesses }
+    @AppStorage("harnessLaunchDefaults.v1") private var launchDefaults = "{}"
+    @State private var apiChoice = "default"
+    private var selectedHarness: Harness? { harnesses.first { $0.id == harness } }
+    private var launchKey: String { HarnessLaunchDefaults.key(computer: workspace.endpointLabel, project: workspace.projectID ?? "", harness: harness) }
+    private var defaultAPI: Bool { selectedHarness?.usesLegacySetup != true && HarnessLaunchDefaults.enabled(launchDefaults, key: launchKey) }
+    private var enableAPI: Bool { selectedHarness?.usesLegacySetup != true && (apiChoice == "on" || apiChoice == "default" && defaultAPI) }
+    var onCreated: ((Sandbox) -> Void)? = nil
     @State private var harness = ""
+    @State private var explicitHarness = false
+    @State private var harnessConnection: UUID?
     @State private var poolID = ""
     @State private var showResources = false
     @State private var repository = ""
@@ -47,7 +57,7 @@ struct NewBoxSheet: View {
                             if let connections {
                                 StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
                                     StudioMenuPicker(title: "Computer", selection: $targetComputer, options:
-                                        connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) })
+                                        connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) }).disabled(onCreated != nil)
                                 }
                                 Divider().padding(.leading, 38)
                             }
@@ -57,9 +67,9 @@ struct NewBoxSheet: View {
                             }
                             Divider().padding(.leading, 38)
                             StudioDestinationRow(title: "Harness", symbol: "sparkles") {
-                                StudioMenuPicker(title: "Harness", selection: $harness, options:
-                                    [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.configured ? "" : " — not configured"), enabled: $0.configured) })
-                                Button("Manage…") {
+                                StudioMenuPicker(title: "Harness", selection: Binding(get: { harness }, set: { harness = $0; explicitHarness = true }), options:
+                                    [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.defaultHarnessID ? " · Default" : "") + ($0.configured ? "" : " — not configured"), enabled: $0.configured) }).disabled(onCreated != nil)
+                                Button("Saved settings…") {
                                     if let selected = harnesses.first(where: { $0.id == harness }) {
                                         HarnessSetupWindows.shared.open(selected, workspace: workspace, connections: connections, commands: commands)
                                     }
@@ -113,6 +123,19 @@ struct NewBoxSheet: View {
                             }
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .prompt ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .prompt ? 1 : 0.5))
                     }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("MANAGER ACCESS").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+                        StudioMenuField(title: "Discobox API access", selection: $apiChoice, options: [
+                            .init(id: "default", title: defaultAPI ? "Harness default · Enabled" : "Harness default · Off"),
+                            .init(id: "off", title: "Off for this box"),
+                            .init(id: "on", title: "Enable for this box")
+                        ]).disabled(selectedHarness == nil || selectedHarness?.usesLegacySetup == true)
+                        Text(selectedHarness?.usesLegacySetup == true ? "This host uses the legacy harness API. Update Discobox to enable API access at launch." : "API access lets this box act as a manager: discover boxes, create children and manage boxes it leads, within Discobox’s permissions. It grants no credential access.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if enableAPI {
+                            Label("Creating this box also enables its Discobox API access on the selected computer.", systemImage: "checkmark.shield").font(.caption).foregroundStyle(.orange)
+                        }
+                    }.padding(12).studioCard()
                     NewBoxCredentialsSection(drafts: $credentialDrafts)
                     if let credentialError { Text(credentialError).font(.system(size: 11)).foregroundStyle(.orange) }
                     NewBoxResourceSummary(poolID: poolID, creating: creating, manage: { showResources = true })
@@ -132,15 +155,16 @@ struct NewBoxSheet: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(creating)
                 Spacer()
-                Button("Create Box", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button(enableAPI ? "Create Manager Box" : "Create Box", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("newBox.create")
                     .disabled(credentialError != nil)
-                    .disabled(harness.isEmpty || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
+                    .disabled(!workspace.isConnected || harness.isEmpty || loading || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
             }.controlSize(.large).padding(.horizontal, 24).padding(.vertical, 16).background(DiscoboxAppearance.chrome)
         }
         .frame(width: 560).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .interactiveDismissDisabled(creating)
-        .onChange(of: workspace.connectionID) { _, _ in credentialDrafts.removeAll() }
+        .onChange(of: workspace.connectionID) { _, _ in credentialDrafts.removeAll(); apiChoice = "default" }
+        .onChange(of: harness) { apiChoice = "default" }
         .onDisappear { credentialDrafts.removeAll() }
         .onAppear { focusedField = repository.isEmpty ? .repository : .prompt }
         .sheet(isPresented: $showResources) {
@@ -165,12 +189,25 @@ struct NewBoxSheet: View {
         .task(id: workspace.connectionID) {
             let target = workspace, generation = workspace.connectionID
             error = nil
-            if harness.isEmpty { harness = harnesses.first(where: \.configured)?.id ?? "" }
-            loading = harnesses.isEmpty
+            if let previous = harnessConnection, previous != generation {
+                harness = ""; explicitHarness = false
+            } else if harnessConnection == nil, !harness.isEmpty {
+                explicitHarness = true
+            }
+            harnessConnection = generation
+            if onCreated == nil { harness = HarnessSelection.preferred(in: harnesses, defaultID: target.defaultHarnessID, explicitID: explicitHarness ? harness : nil) }
+            loading = true
             do {
                 let refreshed = try await target.harnesses()
+                try await target.refreshDefaultHarness()
                 guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
-                if !refreshed.contains(where: { $0.id == harness && $0.configured }) { harness = refreshed.first(where: \.configured)?.id ?? "" }
+                if onCreated != nil {
+                    if !refreshed.contains(where: { $0.id == harness && $0.configured }) {
+                        error = "This harness is no longer available on the selected computer. Close this window and choose it again."
+                    }
+                } else {
+                    harness = HarnessSelection.preferred(in: refreshed, defaultID: target.defaultHarnessID, explicitID: explicitHarness ? harness : nil)
+                }
             }
             catch {
                 guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
@@ -192,15 +229,17 @@ struct NewBoxSheet: View {
         let target = workspace, hostID = targetComputer, generation = workspace.connectionID
         let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
         let credentials = credentialDrafts.map(\.credential)
-        let harness = harness, prompt = prompt
+        let harness = harness, prompt = prompt, enableAPI = enableAPI
         let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             do {
+                let created: Sandbox
                 if let connections {
-                    try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials)
+                    created = try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials, discoboxAPI: enableAPI)
                 } else {
-                    try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials)
+                    created = try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials, discoboxAPI: enableAPI)
                 }
+                if target.connectionID == generation { onCreated?(created) }
                 credentialDrafts.removeAll()
                 commands?.showCreateBox = false
                 dismiss()
@@ -314,9 +353,8 @@ struct AuditView: View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 HStack {
-                Picker("Source", selection: $source) {
-                    ForEach(["All", "HTTP", "Credentials", "Refresh", "Hooks", "Execs"], id: \.self) { Text($0).tag($0) }
-                }.frame(width: 180)
+                StudioMenuField(title: "Source", selection: $source, options:
+                    ["All", "HTTP", "Credentials", "Refresh", "Hooks", "Execs"].map { .init(id: $0, title: $0) }).frame(width: 220)
                 Spacer()
                 Toggle("Follow", isOn: $following).toggleStyle(.switch).controlSize(.small)
                 }

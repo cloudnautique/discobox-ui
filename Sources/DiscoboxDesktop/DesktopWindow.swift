@@ -184,7 +184,7 @@ private struct DesktopWindowView: View {
                     Button("Reconnect") { session.reload() }
                     Button("Open in Browser") { NSWorkspace.shared.open(session.source) }
                     Button("Full Screen") { session.window.toggleFullScreen(nil) }
-                } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).fixedSize()
+                } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }.padding(10).background(DiscoboxAppearance.chrome)
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }
             DesktopSurface(web: session.web)

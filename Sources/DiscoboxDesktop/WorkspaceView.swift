@@ -328,7 +328,7 @@ struct WorkspaceView: View {
                                 Divider()
                                 if let box = workspace.selectedBox { BoxActionMenu(box: box) { choose($0, box: box) } }
                             } label: { Image(systemName: "ellipsis.circle") }
-                                .menuStyle(.borderlessButton).fixedSize()
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                                 .disabled(workspace.selectedBox == nil).help("Actions for this box")
                         }.font(.system(size: 12)).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
 
@@ -641,8 +641,7 @@ private struct BoxChooserRow: View {
     }
     var body: some View {
         HStack(spacing: 10) {
-            Circle().fill(item.box.needsRepair ? Color.red : item.needsAttention ? .orange : item.box.isRunning ? .green : .secondary.opacity(0.5))
-                .frame(width: 5, height: 5).accessibilityLabel(item.needsAttention ? "Needs attention" : item.box.status)
+            BoxStatusLight(indicator: .init(box: item.box, activity: item.activity ?? AgentActivity(box: item.box)))
             VStack(alignment: .leading, spacing: 5) {
                 Text(item.box.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 if !metadata.isEmpty { Text(metadata).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
@@ -662,6 +661,8 @@ private struct BoxChooserRow: View {
         .background(selected ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(selected ? DiscoboxAppearance.accent.opacity(0.45) : .clear, lineWidth: 0.5))
         .contentShape(Rectangle())
+        .accessibilityValue(["Box: " + item.box.status, item.activity.map { "Agent: " + $0.label }].compactMap { $0 }.joined(separator: ", "))
+        .help(["Box: " + item.box.status, item.activity.map { "Agent: " + $0.label }, item.activity?.message].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 }
 
@@ -758,24 +759,28 @@ struct BoxRow: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var showInbox = false
-    private func tint(for activity: AgentActivity) -> Color {
-        switch activity.state {
-        case .working: DiscoboxAppearance.accent
-        case .approval, .question, .signIn, .blocked: DiscoboxAppearance.activityAttention
-        case .failed: DiscoboxAppearance.activityFailure
-        default: .secondary.opacity(0.7)
-        }
-    }
     var body: some View {
         let activity = workspace.activity(for: box)
-        let tint = tint(for: activity)
+        let indicator = BoxIndicator(box: box, activity: activity, reachable: workspace.isConnected && workspace.connectionError == nil)
+        let tint = indicator.state == .error ? DiscoboxAppearance.activityFailure : DiscoboxAppearance.activityAttention
         HStack(alignment: .top, spacing: 9) {
-            Image(systemName: activity.symbol).font(.system(size: 12))
-                .foregroundStyle(tint).frame(width: 17).padding(.top, 2)
+            BoxStatusLight(indicator: indicator)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(box.sidebarTitle).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     Spacer(minLength: 0)
+                    if activity.approvalCount > 0 {
+                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
+                            .buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
+                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
+                            .accessibilityIdentifier("box.activity.review." + box.id)
+                            .help("Review pending requests for this box")
+                    } else if activity.needsYou || box.matchesAttention {
+                        Button("Open", action: openAgent).buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
+                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
+                            .accessibilityIdentifier("box.activity.open." + box.id)
+                            .help("Open the agent on this box’s computer")
+                    }
                     BoxMaintenanceIndicators(box: box)
                 }
                 HStack(spacing: 4) {
@@ -788,26 +793,7 @@ struct BoxRow: View {
                             .frame(maxWidth: 90, alignment: .trailing)
                     }
                 }.font(.system(size: 10)).foregroundStyle(.secondary)
-                HStack(spacing: 5) {
-                    Text(activity.label).fontWeight(activity.needsYou ? .medium : .regular)
-                        .foregroundStyle(activity.needsYou ? tint : .secondary)
-                    if !activity.message.isEmpty && ![.idle, .finished, .inactive].contains(activity.state) {
-                        Text("· " + activity.message).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    if activity.approvalCount > 0 {
-                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
-                            .buttonStyle(.borderless).fontWeight(.medium).foregroundStyle(tint)
-                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
-                            .accessibilityIdentifier("box.activity.review." + box.id)
-                            .help("Review pending requests for this box")
-                    } else if activity.needsYou || box.matchesAttention {
-                        Button("Open", action: openAgent).buttonStyle(.borderless).fontWeight(.medium).foregroundStyle(tint)
-                            .disabled(!workspace.isConnected || workspace.connectionError != nil)
-                            .accessibilityIdentifier("box.activity.open." + box.id)
-                            .help("Open the agent on this box’s computer")
-                    }
-                }.font(.system(size: 10)).lineLimit(1)
+
             }
         }.padding(.vertical, 8)
         .accessibilityValue([box.status, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))

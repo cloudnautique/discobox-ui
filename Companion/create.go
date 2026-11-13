@@ -68,6 +68,9 @@ func (b *bridge) createBox(ctx context.Context, req request) (out response, fail
 	if h.Configured != nil && !*h.Configured {
 		return response{}, errors.New("choose a configured harness")
 	}
+	if req.DiscoboxAPI != nil && *req.DiscoboxAPI && h.Configured != nil {
+		return response{}, errors.New("this host uses the legacy harness API; update Discobox before enabling manager API access at launch")
+	}
 	target := platform.Platform{OS: "linux", Arch: runtime.GOARCH}
 	project, err := b.call(ctx, "GET", "/projects/"+req.ProjectID, nil)
 	if err != nil {
@@ -127,6 +130,9 @@ func (b *bridge) createBox(ctx context.Context, req request) (out response, fail
 	body.HarnessName = api.OptString{}
 	body.Config.HarnessConfigId = api.NewOptString(req.HarnessID)
 	body.Config.Secrets = secrets
+	if req.DiscoboxAPI != nil && *req.DiscoboxAPI {
+		body.SetDiscoboxApi(api.NewOptBool(true))
+	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return response{}, err

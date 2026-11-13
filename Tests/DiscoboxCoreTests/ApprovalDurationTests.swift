@@ -31,14 +31,18 @@ import Testing
     #expect(ApprovalDuration.selectedSecret(id: "", request: request, secrets: [short, short]) == .null)
 }
 
-@MainActor @Test func twoHourNotificationRequestApprovesWithinThirtyMinuteSecretCap() async throws {
+@MainActor @Test func twoHourNotificationRequiresReviewThenUsesThirtyMinuteSecretCap() async throws {
     let client = CappedApprovalFixture()
     let workspace = Workspace()
     await workspace.connect(client: client, label: "Capped fixture", demo: true)
     await workspace.refreshApprovals()
     let item = try #require(workspace.approvals.first)
     let notice = ApprovalNotice(id: "fixture", computerID: "fixture", connection: workspace.connectionID, item: item)
-    #expect(try await notice.respond(.approve, workspace: workspace))
+    #expect(try await !notice.respond(.approve, workspace: workspace))
+    #expect(await client.answers.isEmpty)
+    try await workspace.validateApproval(item, connection: workspace.connectionID)
+    let decision = try LegacyCredentialDecision.payload(request: item.request, secretID: "", duration: ApprovalDuration.automatic, maximum: 1800)
+    try await workspace.answer(item, action: "approve", payload: decision)
     #expect(await client.grantedSeconds == 1800)
     let answer = try #require(await client.answers.first)
     #expect(answer.payload?["grantTTLSeconds"] == .null)

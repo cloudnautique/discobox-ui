@@ -45,6 +45,7 @@ struct DiscoboxApp: App {
                     if let url = Bundle.main.url(forResource: "Discobox", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
                         NSApp.applicationIconImage = icon
                     }
+                    if ProcessInfo.processInfo.arguments.contains("--approval-workflow-smoke") { await ApprovalWorkflowSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--binding-conflict-smoke") { await BindingConflictSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--agent-activity-smoke") { await AgentActivitySmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--approval-queue-smoke") { await ApprovalQueueSmoke.run() }

@@ -178,3 +178,49 @@ func TestHarnessSaveBackHasTimeForTheServerHandoff(t *testing.T) {
 		t.Fatal("metadata reads were needlessly slowed")
 	}
 }
+
+func TestHarnessCaptureUnsupportedAndTransientStatesDoNotBecomeSaveable(t *testing.T) {
+	for _, state := range []string{"unsupported", "initializing", "unavailable", "wrong-owner", "missing-owner", "old-route"} {
+		t.Run(state, func(t *testing.T) {
+			b, _ := newBridge("http://fixture", false)
+			writes := 0
+			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method != "GET" {
+					writes++
+					t.Fatalf("read changed state: %s", r.URL)
+				}
+				if r.URL.Path == "/projects/p/sandboxes/source" {
+					return reply(`{"config":{"harnessConfigId":"h"}}`), nil
+				}
+				if state == "old-route" {
+					res := reply(`404 page not found`)
+					res.StatusCode = 404
+					return res, nil
+				}
+				value := map[string]any{"state": state, "files": []any{}, "credentials": []any{}}
+				if state == "wrong-owner" {
+					value["state"] = "unsupported"
+					value["harnessConfigId"] = "other"
+				}
+				if state == "missing-owner" {
+					value["state"] = "pending"
+					value["candidateId"] = "candidate"
+				}
+				data, _ := json.Marshal(value)
+				return reply(string(data)), nil
+			})
+			result, err := b.execute(t.Context(), request{Operation: "harnessChanges", ProjectID: "p", HarnessID: "h", SandboxID: "source"})
+			invalid := state == "wrong-owner" || state == "missing-owner"
+			if invalid {
+				if err == nil {
+					t.Fatal("invalid owner accepted")
+				}
+			} else if err != nil || result.Status != 200 || !json.Valid(result.Body) {
+				t.Fatalf("normal state rejected: %v %s", err, result.Body)
+			}
+			if writes != 0 {
+				t.Fatal("capture check mutated a harness")
+			}
+		})
+	}
+}

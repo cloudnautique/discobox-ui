@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/discobox-ai/discobox/pkg/bindingplan"
 )
@@ -236,5 +238,49 @@ func TestDelegatedBindingConflictIsReviewedBeforeAnyWrite(t *testing.T) {
 				t.Fatal("stale review wrote or repeated a mutation")
 			}
 		})
+	}
+}
+
+// Independent metadata must not add three serial remote round trips to every
+// draft edit. All remain read-only, request-scoped, and bounded by one context.
+func TestCredentialContextFetchesIndependentMetadataTogether(t *testing.T) {
+	b, _ := newBridge("http://fixture", false)
+	entered := make(chan string, 3)
+	release := make(chan struct{})
+	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/projects/p/secret-requests/ask" {
+			return reply(`{"id":"ask","sandboxId":"requester","envName":"TOKEN","status":"pending","use":{}}`), nil
+		}
+		if r.Method != "GET" || r.URL.Query().Get("target") != "requester" && r.URL.Path != "/projects/p/secrets" {
+			t.Errorf("unexpected metadata route %s %s", r.Method, r.URL)
+		}
+		entered <- r.URL.Path
+		<-release
+		switch r.URL.Path {
+		case "/projects/p/secrets":
+			return reply(`{"secrets":[]}`), nil
+		case "/projects/p/bound-secrets":
+			return reply(`{"boundSecrets":[]}`), nil
+		default:
+			return reply(`{"secretBindings":[]}`), nil
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.execute(context.Background(), request{Operation: "approvalContext", ProjectID: "p", RequestID: "ask"})
+		done <- err
+	}()
+	for range 3 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			close(release)
+			<-done
+			t.Fatal("metadata reads were serialized")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

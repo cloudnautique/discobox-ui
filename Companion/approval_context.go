@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/discobox-ai/discobox/pkg/bindingplan"
@@ -63,8 +64,24 @@ func (b *bridge) credentialContext(ctx context.Context, req request) (approvalCo
 		query := "?targetKind=sandbox&target=" + url.QueryEscape(ask.Sandbox)
 		paths = append(paths, base+"/bound-secrets"+query, base+"/secret-bindings"+query)
 	}
+	// These metadata reads are independent. Fetch them together so remote
+	// review takes two round trips, rather than four, under one deadline.
+	type readResult struct {
+		response response
+		err      error
+	}
+	reads := make([]readResult, len(paths))
+	var pending sync.WaitGroup
 	for i, path := range paths {
-		res, e := b.call(ctx, "GET", path, nil)
+		pending.Add(1)
+		go func(i int, path string) {
+			defer pending.Done()
+			reads[i].response, reads[i].err = b.call(ctx, "GET", path, nil)
+		}(i, path)
+	}
+	pending.Wait()
+	for i, read := range reads {
+		res, e := read.response, read.err
 		if e != nil || res.Status != 200 {
 			return out, res, e
 		}

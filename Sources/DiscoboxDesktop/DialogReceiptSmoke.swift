@@ -24,12 +24,22 @@ import DiscoboxCore
             model.dialog = first
             try await wait { window.attachedSheet?.defaultButtonCell != nil }
             let sheet = window.attachedSheet!
+            if approval {
+                try await wait { views(sheet.contentView!).compactMap { $0 as? NSButton }.contains { $0.cell === sheet.defaultButtonCell && $0.isEnabled } }
+            }
             guard let root = sheet.contentView,
                   let button = views(root).compactMap({ $0 as? NSButton }).first(where: { $0.cell === sheet.defaultButtonCell && $0.isEnabled }) else {
                 throw DiscoboxError("Dialog receipt submit button missing")
             }
             button.performClick(nil)
             try await wait { await client.waiting }
+            if approval {
+                try await wait { workspace.approvals.isEmpty }
+                // The acknowledged decision has a receipt even while the next
+                // read stalls; its Close action must remain usable.
+                try await wait { views(sheet.contentView!).compactMap { $0 as? NSButton }.contains { $0.cell === sheet.defaultButtonCell && $0.isEnabled } }
+                views(sheet.contentView!).compactMap { $0 as? NSButton }.first { $0.cell === sheet.defaultButtonCell }?.performClick(nil)
+            }
             try await wait { window.attachedSheet == nil && model.dialog == nil }
             let next = DialogReceiptPresentation.action(.init(box: other, action: .rename, connection: workspace.connectionID))
             model.dialog = next
@@ -43,7 +53,7 @@ import DiscoboxCore
             }
         }
         try await verifyPurgeConfirmations()
-        print("DIALOG_RECEIPT_SMOKE_OK: archive and approval close before stalled refresh; late completion leaves newer dialog open; one mutation each")
+        print("DIALOG_RECEIPT_SMOKE_OK: archive closes and approval receipt remains dismissible before stalled refresh; late completion leaves newer dialog open; one mutation each")
     }
 
     private static func verifyPurgeConfirmations() async throws {

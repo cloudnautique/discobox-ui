@@ -84,3 +84,31 @@ private struct FixtureExecutable {
         #expect(try Data(contentsOf: fixture.url.appendingPathExtension("calls")) == Data("x".utf8))
     }
 }
+
+@Test func stalledApprovalHelpersTimeOutWithoutReplayingDecisions() async throws {
+    for operation in [BridgeRequest.Operation.approvalContext, .approvals, .answer, .createSecret] {
+        let fixture = try FixtureExecutable(script: """
+        #!/bin/sh
+        /bin/cat >/dev/null
+        printf x >> "$0.calls"
+        trap '' TERM
+        exec /bin/sleep 30
+        """)
+        defer { fixture.remove() }
+        let client = CompanionClient(executable: fixture.url, endpoint: "unix://", approvalTimeout: 0.2)
+        let started = ContinuousClock.now
+        do {
+            _ = try await client.perform(.init(operation, projectID: "p", requestID: "ask", kind: "credential", action: "approve"))
+            Issue.record("A stalled approval helper returned success")
+        } catch {
+            #expect(error.localizedDescription.contains("timed out"))
+            #expect(ConnectionRecovery.canRetry(error))
+            if operation == .answer || operation == .createSecret {
+                #expect(error.localizedDescription.contains("may have been recorded"))
+                #expect(error.localizedDescription.contains("Nothing was retried"))
+            } else { #expect(error.localizedDescription.contains("no decision was sent")) }
+        }
+        #expect(ContinuousClock.now - started < .seconds(3))
+        #expect(try Data(contentsOf: fixture.url.appendingPathExtension("calls")) == Data("x".utf8))
+    }
+}

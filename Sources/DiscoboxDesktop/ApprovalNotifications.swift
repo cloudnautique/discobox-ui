@@ -111,7 +111,7 @@ struct ApprovalNotificationConfiguration {
                 UNNotificationAction(identifier: "approve", title: "Approve", options: [.authenticationRequired]), deny, later
             ], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: Self.reviewCategory, actions: [
-                UNNotificationAction(identifier: "approve", title: "Approve…", options: [.foreground]), deny, later
+                UNNotificationAction(identifier: "approve", title: "Review…", options: [.foreground]), deny, later
             ], intentIdentifiers: [], options: [])
         ]
     }
@@ -454,7 +454,7 @@ struct ApprovalNotificationSettings: View {
                     }
                 }.padding(.vertical, 6)
             } footer: {
-                Text("Approve or deny from the notification. Later keeps the request pending. Discobox must be running. Focus and screen sharing can hide banners.")
+                Text("Review or deny from the notification. Later keeps the request pending. Discobox must be running. Focus and screen sharing can hide banners.")
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
             .task { await notifications.refreshAuthorization() }

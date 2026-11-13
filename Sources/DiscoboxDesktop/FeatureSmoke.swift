@@ -213,15 +213,15 @@ import UserNotifications
               !content.body.contains("example/project"),
               let category = ApprovalNotifications.categories.first(where: { $0.identifier == content.categoryIdentifier }),
               category.actions.map(\.identifier) == ["approve", "deny", "later"],
-              category.actions[0].options.contains(.authenticationRequired),
+              category.actions[0].options.contains(.foreground),
               category.actions[1].options.contains(.destructive),
               category.actions[1].options.contains(.authenticationRequired),
               category.actions[2].options.isEmpty,
-              ApprovalNotifications.categories.contains(where: { $0.actions.first?.title == "Approve…" && $0.actions.first?.options.contains(.foreground) == true }) else {
+              ApprovalNotifications.categories.contains(where: { $0.actions.first?.title == "Review…" && $0.actions.first?.options.contains(.foreground) == true }) else {
             throw DiscoboxError("Notification routing, private payload, or native actions changed")
         }
         workspace.disconnect()
-        print("NOTIFICATION_SMOKE_OK: native Approve/Deny/Later actions, authentication options, review category, private payload and Notifications settings; no OS notifications posted")
+        print("NOTIFICATION_SMOKE_OK: native Review/Deny/Later actions, authentication options, review category, private payload and Notifications settings; no OS notifications posted")
     }
 
     private static func verifyComputerUsage() async throws {

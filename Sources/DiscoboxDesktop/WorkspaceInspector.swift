@@ -21,10 +21,10 @@ struct AppearanceSettings: View {
                 Text("Closing a shell ends its running process. Additional agent terminals always require confirmation.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Inspector") {
-                Picker("When inspector is collapsed", selection: $compactRail) {
-                    Text("Show compact rail").tag(true)
-                    Text("Hide completely").tag(false)
-                }
+                StudioMenuField(title: "When inspector is collapsed", selection: Binding(get: { compactRail ? "rail" : "hidden" }, set: { compactRail = $0 == "rail" }), options: [
+                    .init(id: "rail", title: "Show compact rail"),
+                    .init(id: "hidden", title: "Hide completely")
+                ])
                 Text("The compact rail keeps the selected box’s services one click away. Change Toggle Inspector in Keybindings to customize its shortcut.")
                     .font(.caption).foregroundStyle(.secondary)
             }

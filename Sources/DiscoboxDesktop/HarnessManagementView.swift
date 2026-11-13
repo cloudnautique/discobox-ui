@@ -46,7 +46,10 @@ struct HarnessManagementView: View {
         }
         .frame(minWidth: 620, idealWidth: 720, maxWidth: .infinity, minHeight: 560, idealHeight: 640, maxHeight: .infinity)
         .background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
-        .task { await manager.load() }
+        .task(id: manager.reviewRevision) {
+            if manager.details == .null { await manager.load() }
+            if manager.reviewRevision > 0 { await manager.refreshPreview() }
+        }
         .onChange(of: manager.review) { _, value in reviewed = false; showingReview = value != .null }
         .onChange(of: manager.boxID) { reviewed = false; showingReview = false }
         .sheet(isPresented: $confirmingDiscard) {
@@ -74,14 +77,14 @@ struct HarnessManagementView: View {
                 Button("Refresh saved state") { run(.load) }.disabled(blocked)
                 if showingReview { Button("Refresh changes") { run(.review) }.disabled(blocked) }
                 Divider()
-                Button("New sign-in box…", action: newBox).disabled(blocked)
+                Button("New box to sign in…", action: newBox).disabled(blocked)
                 Button("Advanced console…", action: console).disabled(legacySetup || blocked)
                 if showingReview {
                     Divider()
                     Button("Discard unsaved changes…", role: .destructive) { confirmingDiscard = true }.disabled(!manager.canDiscard)
                 }
             } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)) }
-                .menuStyle(.borderlessButton).fixedSize().help("Harness actions").accessibilityLabel("Harness actions")
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Harness actions").accessibilityLabel("Harness actions")
         }.padding(.horizontal, 24).padding(.vertical, 18).background(DiscoboxAppearance.chrome)
     }
     private var overview: some View {
@@ -132,6 +135,7 @@ struct HarnessManagementView: View {
             } else if manager.busy {
                 ProgressView("Loading saved login and settings…").controlSize(.small).padding(.vertical, 12)
             }
+            HarnessLaunchSettings(harness: harness, workspace: manager.workspace)
             sourceChooser
         }
     }
@@ -145,7 +149,7 @@ struct HarnessManagementView: View {
             VStack(alignment: .leading, spacing: 14) {
                 if manager.boxes.isEmpty {
                     Text("Start a box with this harness to sign in or change its settings.").font(.callout).foregroundStyle(.secondary)
-                    Button("New sign-in box…", action: newBox).disabled(blocked)
+                    Button("New box to sign in…", action: newBox).disabled(blocked)
                 } else {
                     HStack(spacing: 10) {
                         Image(systemName: "shippingbox").foregroundStyle(.secondary)
@@ -155,11 +159,11 @@ struct HarnessManagementView: View {
                     }
                     HStack {
                         Button("Open box") { openBox(manager.boxID) }.disabled(manager.boxID.isEmpty || blocked)
-                        Button("New sign-in box…", action: newBox).disabled(blocked).font(.system(size: 12))
+                        Button("New box to sign in…", action: newBox).disabled(blocked).font(.system(size: 12))
                         Spacer()
                         Button("Review changes", systemImage: "arrow.right") { run(.review) }
                             .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                            .disabled(manager.boxID.isEmpty || blocked).accessibilityIdentifier("harness.review")
+                            .disabled(manager.boxID.isEmpty || blocked || legacySetup).accessibilityIdentifier("harness.review")
                     }
                 }
             }.padding(14).studioCard()
@@ -205,14 +209,21 @@ struct HarnessManagementView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(reviewTitle).font(.system(size: 16, weight: .semibold))
-                Text("Shared with boxes using \(harness.name) on \(computer).")
+                Text("Save for \(harness.name) · \(computer) · project \(manager.workspace.projectID ?? "").")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Open source box") { openBox(manager.boxID) }.disabled(manager.boxID.isEmpty || blocked)
+            Text("This updates the shared login and settings for this harness on this server. Other computers and account variants are separate. New boxes receive the saved settings; existing boxes keep their local settings. Replacing a shared login affects boxes already using that credential. Settings may include hooks and commands.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let explanation = HarnessCapture.explanation(manager.changes) {
+                Label(explanation, systemImage: manager.changes["state"].string == "unsupported" ? "info.circle" : "clock")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             if handoffPending {
                 Label("Your changes are saved. You can retry updating the source box without signing in again.", systemImage: "clock")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            if manager.changes["credentials"].array.isEmpty && manager.changes["files"].array.isEmpty && !handoffPending {
+            if HarnessCapture.explanation(manager.changes) == nil && manager.changes["credentials"].array.isEmpty && manager.changes["files"].array.isEmpty && !handoffPending {
                 Label("No changes to save", systemImage: "checkmark.circle").font(.callout)
                 Text("After signing in or changing settings, wait briefly and check again.").font(.callout).foregroundStyle(.secondary)
             }
@@ -226,6 +237,7 @@ struct HarnessManagementView: View {
                                 Label(credential["account"].string.isEmpty ? credential["envName"].string : credential["account"].string, systemImage: "key")
                                     .font(.system(size: 13, weight: .medium))
                                 Text(credentialDescription(credential)).font(.caption).foregroundStyle(.secondary)
+                                Text(existingCredentialDescription(credential)).font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
                         }
                     }.studioCard()
@@ -253,6 +265,11 @@ struct HarnessManagementView: View {
         let files = manager.changes["files"].array.count
         let parts = [logins > 0 ? "\(logins) credential update\(logins == 1 ? "" : "s")" : "", files > 0 ? "\(files) file change\(files == 1 ? "" : "s")" : ""]
         return parts.filter { !$0.isEmpty }.joined(separator: " · ").isEmpty ? "Review changes" : parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+    private func existingCredentialDescription(_ credential: JSONValue) -> String {
+        let existing = manager.details["bindings"].array.filter { $0["envVar"] == credential["envName"] }
+        let names = existing.map { $0["secretName"].string }.filter { !$0.isEmpty }
+        return names.isEmpty ? "No existing shared login reported for this variable." : "Replaces shared login: " + names.joined(separator: ", ")
     }
     private func credentialDescription(_ credential: JSONValue) -> String {
         let kind = credential["type"].string == "oauth" ? "Refreshable OAuth" : credential["type"].string
@@ -380,7 +397,7 @@ struct HarnessManagementView: View {
         }
         let host = connections?.sessions.first { $0.workspace === workspace }
         let manager = HarnessManagement(workspace: workspace, harnessID: harness.id)
-        if let sourceBoxID { manager.selectBox(sourceBoxID) }
+        if let sourceBoxID { manager.requestReview(box: sourceBoxID) }
         let controller = HarnessManagementWindow(harness: harness, manager: manager, computer: host?.profile.displayName ?? workspace.endpointLabel,
             computerID: host?.id, connections: connections, commands: commands, openBox: { boxID in
                 Task {
@@ -403,14 +420,14 @@ struct HarnessManagementView: View {
         self.manager = manager; self.onClose = onClose
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
-        window.title = "Manage " + harness.name; window.isReleasedWhenClosed = false; window.delegate = self
+        window.title = harness.name + " · Shared login and settings"; window.isReleasedWhenClosed = false; window.delegate = self
         window.contentMinSize = NSSize(width: 620, height: 560)
         var root = AnyView(HarnessManagementHost(harness: harness, manager: manager, computer: computer, computerID: computerID, openBox: openBox, console: console, close: { [weak self] in self?.window.close() }).environment(manager.workspace))
         if let connections { root = AnyView(root.environment(connections)) }
         if let commands { root = AnyView(root.environment(commands)) }
         window.contentView = NSHostingView(rootView: root); window.center()
     }
-    func selectSource(_ id: String) { manager.selectBox(id) }
+    func selectSource(_ id: String) { manager.requestReview(box: id) }
     func windowWillClose(_ notification: Notification) { manager.close(); onClose() }
 }
 
@@ -425,6 +442,9 @@ private struct HarnessManagementHost: View {
     @State private var showNewBox = false
     var body: some View {
         HarnessManagementView(harness: harness, manager: manager, computer: computer, openBox: openBox, newBox: { showNewBox = true }, console: console, close: close)
-            .sheet(isPresented: $showNewBox) { NewBoxSheet(computer: computerID, harnessID: harness.id).environment(manager.workspace) }
+            .sheet(isPresented: $showNewBox) { NewBoxSheet(computer: computerID, harnessID: harness.id, onCreated: { box in
+                guard manager.validConnection, box.projectId == manager.workspace.projectID, box.config.harnessConfigId == harness.id else { return }
+                manager.requestReview(box: box.id)
+            }).environment(manager.workspace) }
     }
 }

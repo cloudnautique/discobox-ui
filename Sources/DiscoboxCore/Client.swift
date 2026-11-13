@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 public protocol DiscoboxClient: Sendable {
     func perform(_ request: BridgeRequest) async throws -> Data
@@ -23,11 +28,18 @@ public actor CompanionClient: DiscoboxClient {
     private let executable: URL
     private let endpoint: String
     private nonisolated let remote: IrohConnection?
+    private let approvalTimeout: TimeInterval
 
     public init(executable: URL, endpoint: String, identitySeed: Data? = nil, relayURLs: [String] = [], directOnly: Bool = false) {
         self.executable = executable
         self.endpoint = endpoint
+        approvalTimeout = 25
         remote = identitySeed.map { IrohConnection(executable: executable, endpoint: endpoint, seed: $0, relayURLs: relayURLs, directOnly: directOnly) }
+    }
+    // Short deadlines let offline tests exercise a truly unresponsive helper.
+    init(executable: URL, endpoint: String, approvalTimeout: TimeInterval) {
+        self.executable = executable; self.endpoint = endpoint
+        self.approvalTimeout = approvalTimeout; remote = nil
     }
     public func prepareConnection() async throws -> String? {
         if let remote { return try await remote.prepare() }
@@ -41,8 +53,13 @@ public actor CompanionClient: DiscoboxClient {
     public func perform(_ request: BridgeRequest, progress: (@Sendable (Int64) -> Void)?) async throws -> Data {
         let destination = try await prepareConnection() ?? endpoint
         let payload = try JSONEncoder().encode(request)
-        let job = ProcessRequest(executable: executable, endpoint: destination,
-                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
+        let isApproval = [.approvalContext, .approvals, .secrets, .answer, .createSecret].contains(request.operation)
+        let writesApproval = [.answer, .createSecret].contains(request.operation)
+        let timeoutMessage = writesApproval
+            ? "The remote approval operation timed out. It may have been recorded. Reload the request and check stored credentials before trying again. Nothing was retried."
+            : "Checking approvals timed out. The computer may be unreachable. Reload to try again; no decision was sent."
+        let job = ProcessRequest(executable: executable, endpoint: destination, timeout: isApproval ? approvalTimeout : nil, timeoutMessage: timeoutMessage,
+                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await Task.detached(priority: Task.currentPriority) { try job.run() }.value
@@ -92,12 +109,16 @@ private final class ProcessRequest: @unchecked Sendable {
     }
     private let lock = NSLock()
     private var cancelled = false
+    private var timedOut = false
+    private let timeout: TimeInterval?
+    private let timeoutMessage: String
     private let process = Process()
     private let payload: Data
     private let progress: (@Sendable (Int64) -> Void)?
 
-    init(executable: URL, endpoint: String, interactive: Bool, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
+    init(executable: URL, endpoint: String, timeout: TimeInterval?, timeoutMessage: String, interactive: Bool, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
         self.progress = progress
+        self.timeout = timeout; self.timeoutMessage = timeoutMessage
         process.executableURL = executable
         if Task.currentPriority.rawValue <= TaskPriority.utility.rawValue { process.qualityOfService = .utility }
         process.arguments = ["--endpoint", endpoint] + (interactive ? ["--allow-input"] : []) + (newShell ? ["--allow-shell"] : []) + (manage ? ["--allow-manage"] : [])
@@ -108,6 +129,22 @@ private final class ProcessRequest: @unchecked Sendable {
         lock.withLock {
             cancelled = true
             if process.isRunning { process.terminate() }
+        }
+    }
+
+    private func expire() {
+        lock.withLock {
+            guard process.isRunning, !cancelled else { return }
+            timedOut = true
+            process.terminate()
+        }
+        // A stuck helper can also ignore SIGTERM. Kill only this request's
+        // child, never the shared Iroh transport or the remote server.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.lock.withLock {
+                if self.timedOut && self.process.isRunning { _ = kill(self.process.processIdentifier, SIGKILL) }
+            }
         }
     }
 
@@ -138,6 +175,9 @@ private final class ProcessRequest: @unchecked Sendable {
             do { try process.run() }
             catch { throw DiscoboxError("Could not launch the companion. Build the app with scripts/build-app.sh. \(error.localizedDescription)") }
         }
+        let deadline = DispatchWorkItem { [weak self] in self?.expire() }
+        if let timeout { DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline) }
+        defer { deadline.cancel() }
         do {
             try stdin.fileHandleForWriting.write(contentsOf: payload)
             try stdin.fileHandleForWriting.close()
@@ -150,12 +190,14 @@ private final class ProcessRequest: @unchecked Sendable {
                 }
             }
             process.waitUntilExit()
+            if lock.withLock({ timedOut }) { throw DiscoboxError(timeoutMessage, connectionRetryable: true) }
             if lock.withLock({ cancelled }) { throw CancellationError() }
             guard process.terminationStatus == 0 else { throw DiscoboxError("The companion exited unexpectedly (\(process.terminationStatus)).", connectionRetryable: true) }
             return output
         } catch {
             cancel()
             process.waitUntilExit()
+            if lock.withLock({ timedOut }) { throw DiscoboxError(timeoutMessage, connectionRetryable: true) }
             throw error
         }
     }

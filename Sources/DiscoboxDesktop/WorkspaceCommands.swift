@@ -322,11 +322,8 @@ struct KeybindingSettings: View {
                 Text("Use cmd+n or cmd+shift+[. Modifiers: cmd, shift, option, ctrl. Leave blank to disable. These shortcuts also work in search fields.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Leader") {
-                Picker("Start a command with", selection: $draft.leader) {
-                    ForEach(Array("abcdefghijklmnopqrstuvwxyz").map(String.init), id: \.self) { letter in
-                        Text("Control–\(letter.uppercased())").tag("ctrl+" + letter)
-                    }
-                }
+                StudioMenuField(title: "Start a command with", selection: $draft.leader, options:
+                    Array("abcdefghijklmnopqrstuvwxyz").map { .init(id: "ctrl+" + String($0), title: "Control–" + String($0).uppercased()) })
                 Text("Press the leader, then a command. Press it twice to send it literally to the terminal. Escape cancels; an unfinished sequence expires after 3 seconds.")
                     .font(.caption).foregroundStyle(.secondary)
             }

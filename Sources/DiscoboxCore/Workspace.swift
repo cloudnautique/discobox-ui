@@ -8,6 +8,7 @@ public final class Workspace {
     public private(set) var resources = PoolResources()
     public private(set) var clearingPools: Set<String> = []
     public private(set) var cachedHarnesses: [Harness] = []
+    public private(set) var defaultHarnessID: String?
     @ObservationIgnored private var harnessesReadAt: Date?
     @ObservationIgnored private var harnessLoad: Task<[Harness], Error>?
     public var streamsLiveTerminals = false
@@ -163,6 +164,7 @@ public final class Workspace {
             let project = try await client.decode(.init(.defaultProject), as: Project.self)
             guard current == revision, !Task.isCancelled else { return }
             projectID = project.id
+            defaultHarnessID = project.defaultHarnessConfigId
             isConnected = true
             Task { [weak self] in
                 guard let self, self.revision == current else { return }
@@ -196,6 +198,7 @@ public final class Workspace {
         approvals = []; approvalError = nil; approvalRequest = UUID()
         sandboxes = []
         pendingBoxActions = []
+        defaultHarnessID = nil
         projectID = nil
         isConnected = false
         isConnecting = false
@@ -560,7 +563,7 @@ public final class Workspace {
                 await connect(client: client, label: label, demo: demo)
                 return
             }
-            projectID = project.id; isConnected = true
+            projectID = project.id; defaultHarnessID = project.defaultHarnessConfigId; isConnected = true
             await refresh()
             guard current == revision, !Task.isCancelled else { return }
             if connectionError == nil {
@@ -583,6 +586,28 @@ public final class Workspace {
         let catalog = (try? await harnesses()) ?? cachedHarnesses
         guard connection == connectionID, !Task.isCancelled else { return }
         await usage.refresh(client: client, project: projectID, boxes: sandboxes, configuredHarnesses: catalog)
+    }
+
+    public func refreshDefaultHarness() async throws {
+        guard isConnected, let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
+        let connection = connectionID
+        let project = try await client.decode(.init(.defaultProject), as: Project.self)
+        guard connection == connectionID, !Task.isCancelled else { throw CancellationError() }
+        guard project.id == projectID else { throw DiscoboxError("The default project changed. Reconnect before creating a box.") }
+        defaultHarnessID = project.defaultHarnessConfigId
+    }
+
+    public func setDefaultHarness(_ harnessID: String, connection: UUID) async throws {
+        guard isConnected, connection == connectionID, let client, let projectID,
+              cachedHarnesses.contains(where: { $0.id == harnessID && $0.configured }) else {
+            throw DiscoboxError("Choose an available harness on the connected computer.")
+        }
+        let project = try await client.decode(.init(.setDefaultHarness, projectID: projectID, harnessID: harnessID), as: Project.self)
+        guard connection == connectionID else { throw CancellationError() }
+        guard project.id == projectID, project.defaultHarnessConfigId == harnessID else {
+            throw DiscoboxError("The server did not confirm the default harness. Refresh before retrying.")
+        }
+        defaultHarnessID = project.defaultHarnessConfigId
     }
 
     public func harnesses(force: Bool = false) async throws -> [Harness] {
@@ -647,7 +672,7 @@ public final class Workspace {
         }
     }
 
-    @discardableResult public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = []) async throws -> Sandbox {
+    @discardableResult public func createBox(harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = [], discoboxAPI: Bool = false) async throws -> Sandbox {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         guard connection == nil || connection == connectionID else { throw DiscoboxError("The destination computer reconnected. Review the new box settings again.") }
         let credentialPayload = try LaunchCredential.payload(credentials)
@@ -664,7 +689,7 @@ public final class Workspace {
             guard health.canCreate else { throw DiscoboxError(health.messages.joined(separator: " ")) }
         }
         do {
-            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, payload: credentialPayload, poolID: destination), as: Sandbox.self)
+            let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, payload: credentialPayload, poolID: destination, discoboxAPI: discoboxAPI ? true : nil), as: Sandbox.self)
             guard current == revision else { throw CancellationError() }
             await refresh()
             guard current == revision else { throw CancellationError() }

@@ -95,12 +95,27 @@ retries. Authorization or certificate errors need your attention before retrying
 - Use **Desktop** in the title bar to open the box’s desktop, or **Services**
   for its ports. The inspector also holds box details and tags.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.
-- To save a harness subscription login, sign in inside a box, then open
-  **Settings → Harnesses → Manage…**, choose that box, and **Review changes**.
-  Confirm the review and **Save changes** to share the login with that
-  harness’s other boxes. Refreshable OAuth logins renew on the server; a copied
-  access token does not include refresh credentials. This requires the newer
-  Discobox save-back API; older servers show an update/matching-CLI explanation.
+- Choose **Settings → Harnesses → Make Default** to select the harness preselected
+  in New box. This is saved on the selected server/project and shared with other
+  Discobox clients. You can choose a different harness for each box.
+- To save a harness login or settings, sign in or make changes **inside a box**.
+  Choose **Login/settings changed → Review…** in that box, review the account,
+  files and replacement behavior, then **Save changes**. The save applies to that
+  harness on that server; other computers and account variants stay separate.
+  **Settings → Harnesses → Login & Settings…** shows saved state and recovery
+  options. Refreshable OAuth logins renew on the server; a copied access token
+  does not include refresh credentials. Older servers and unsupported harnesses
+  show a matching-CLI or capability explanation.
+- For a manager box, choose **New box → Discobox API access → Enable for this
+  box**. This explicitly enables API access during creation, within Discobox’s
+  permissions; it grants no credential access. Set a default under that
+  harness’s **Login & Settings → New box defaults**. Defaults belong to this app,
+  computer, project and exact harness, and can be overridden for each launch.
+- Credential notifications offer **Review…**, **Deny**, or **Later**. Review shows
+  the computer, box, access and lifetime before approval. Shared credential limits
+  can be reviewed separately in **Settings → Credentials → Details…**. Choose an existing
+  credential or **+ New credential…** to save a token inline, then use **Approve**
+  or **Deny** at the bottom. Saving a credential does not approve the request.
 - Use **Settings** to choose System, Light, or Dark appearance, customize
   shortcuts, configure harnesses, manage credentials, and enable notifications.
 

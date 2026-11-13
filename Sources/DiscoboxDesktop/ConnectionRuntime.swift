@@ -66,9 +66,8 @@ struct ComputerPicker: View {
     @Environment(Connections.self) private var connections: Connections?
     var body: some View {
         if let connections {
-            Picker("Computer", selection: Binding(get: { connections.activeID }, set: { connections.activate($0) })) {
-                ForEach(connections.sessions) { host in Text(host.profile.displayName).tag(host.id) }
-            }
+            StudioMenuField(title: "Computer", selection: Binding(get: { connections.activeID }, set: { connections.activate($0) }), options:
+                connections.sessions.map { .init(id: $0.id, title: $0.profile.displayName) })
         }
     }
 }

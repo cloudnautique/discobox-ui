@@ -80,7 +80,9 @@ import Testing
     let browser = try FileBrowser(workspace: workspace)
     await browser.load()
     browser.upload([URL(fileURLWithPath: "/tmp/new.txt")])
-    try await waitForFiles { !browser.transferring }
+    // Failure is followed by a directory refresh; the transfer flag alone
+    // can clear before that read finishes and restores the failure notice.
+    try await waitForFiles { !browser.transferring && !browser.loading && browser.error?.contains("disk full") == true }
     #expect(browser.error?.contains("disk full") == true && browser.canTransfer)
     browser.close()
     browser.upload([URL(fileURLWithPath: "/tmp/other.txt")])

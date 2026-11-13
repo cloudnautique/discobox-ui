@@ -10,16 +10,10 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
     return .init(kind: kind, credential: kind == "credential" ? .object(body) : nil, trust: kind == "trust" ? .object(body) : nil)
 }
 
-@Test func notificationApprovalUsesBoundedDefaultWithoutRulesOrCredentialEdits() throws {
-    let item = noticeItem()
-    let body = try #require(item.notificationApprovalPayload)
-    #expect(body == .object(["policy": item.request["policy"]]))
-    #expect(noticeItem(["grantTTLSeconds": .null]).notificationApprovalPayload == .object(["policy": item.request["policy"]]))
-    for changes: [String: JSONValue] in [
-        ["reason": .string("refresh")], ["reason": .string("future")], ["purpose": .string("delegate")],
-        ["grantTTLSeconds": .number(0)], ["grantTTLSeconds": .number(-1)], ["grantTTLSeconds": .number(0.5)],
-        ["grantTTLSeconds": .number(.infinity)], ["grantTTLSeconds": .string("900")], ["status": .string("granted")]
-    ] { #expect(noticeItem(changes).notificationApprovalPayload == nil) }
+@Test func notificationApprovalAlwaysRequiresTheCurrentReviewForm() {
+    for changes: [String: JSONValue] in [[:], ["grantTTLSeconds": .null], ["purpose": .string("delegate")], ["reason": .string("refresh")]] {
+        #expect(noticeItem(changes).notificationApprovalPayload == nil)
+    }
     #expect(noticeItem(kind: "trust").notificationApprovalPayload == nil)
 }
 
@@ -66,11 +60,13 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
     let inbox = ApprovalNoticeInbox()
     let notice = try #require(inbox.update(computerID: local.id, connection: local.workspace.connectionID, items: local.workspace.approvals).added.first)
     #expect(connections.activeID == remote.id)
-    #expect(try await notice.respond(.approve, workspace: local.workspace))
+    #expect(try await !notice.respond(.approve, workspace: local.workspace))
+    #expect(await localClient.answers.isEmpty)
+    #expect(try await notice.respond(.deny, workspace: local.workspace))
     let answer = try #require(await localClient.answers.first)
-    #expect(answer.action == "approve")
+    #expect(answer.action == "deny")
     #expect(answer.requestID == notice.item.id)
-    #expect(answer.payload == notice.item.notificationApprovalPayload)
+    #expect(answer.payload == .object([:]))
     #expect(await remoteClient.answers.isEmpty)
     #expect(connections.activeID == remote.id)
     connections.disconnectAll()

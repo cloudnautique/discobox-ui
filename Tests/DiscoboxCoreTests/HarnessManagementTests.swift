@@ -64,6 +64,35 @@ import Testing
         #expect(model.error != nil && model.review == .null && !model.canSave)
         #expect(await client.writes.count == 1)
     }
+    @Test func everyReviewRefreshesTheSharedLoginAndFailureCannotReuseOldConsent() async throws {
+        let client = HarnessFixture(), workspace = Workspace()
+        await workspace.connect(client: client, label: "fixture", demo: true)
+        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        await model.load()
+        #expect(model.details["bindings"].array.first?["secretName"].string == "Old account")
+        await client.replaceSharedLogin("New account")
+        model.requestReview(box: "demo-ui")
+        await model.refreshPreview()
+        #expect(model.details["bindings"].array.first?["secretName"].string == "New account")
+        #expect(model.canSave)
+        await client.failMetadata()
+        await model.refreshPreview()
+        #expect(model.review == .null && !model.canSave && model.error != nil)
+        await model.answer(save: true)
+        #expect(await client.writes.isEmpty)
+    }
+    @Test func unsupportedHarnessIsAnExplanationWithoutASaveAction() async throws {
+        let client = HarnessFixture(unsupported: true), workspace = Workspace()
+        await workspace.connect(client: client, label: "fixture", demo: true)
+        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        model.requestReview(box: "demo-ui")
+        await model.refreshPreview()
+        #expect(model.reviewRevision == 1)
+        #expect(model.error == nil && model.changes["state"].string == "unsupported")
+        #expect(!model.canSave && !model.canDiscard)
+        await model.answer(save: true)
+        #expect(await client.writes.isEmpty)
+    }
     @Test func legacyReadinessIsDistinctFromARefreshableSavedLogin() throws {
         let current = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Agent"}"#.utf8))
         let old = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"h","name":"Agent","configured":false,"configCommand":["setup"]}"#.utf8))
@@ -78,10 +107,21 @@ private actor HarnessFixture: DiscoboxClient {
     let wrongReceipt: Bool
     let failPreviewAfterSave: Bool
     var writes: [BridgeRequest] = []
-    init(failSave: Bool = false, wrongReceipt: Bool = false, failPreviewAfterSave: Bool = false) {
+    let unsupported: Bool
+    var sharedLogin = "Old account"
+    var metadataFailed = false
+    func replaceSharedLogin(_ name: String) { sharedLogin = name }
+    func failMetadata() { metadataFailed = true }
+    init(failSave: Bool = false, wrongReceipt: Bool = false, failPreviewAfterSave: Bool = false, unsupported: Bool = false) {
+        self.unsupported = unsupported
         self.failSave = failSave; self.wrongReceipt = wrongReceipt; self.failPreviewAfterSave = failPreviewAfterSave
     }
     func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .harnessDetails {
+            if metadataFailed { throw DiscoboxError("Cannot refresh shared login") }
+            return try JSONEncoder().encode(JSONValue.object(["harness": .object(["id": .string("demo-harness")]), "bindings": .array([.object(["envVar": .string("TOKEN"), "secretName": .string(sharedLogin)])])]))
+        }
+        if request.operation == .harnessChanges, unsupported { return Data(#"{"changes":{"state":"unsupported","files":[],"credentials":[]},"fingerprint":"unsupported"}"#.utf8) }
         if request.operation == .harnessChanges, failPreviewAfterSave, !writes.isEmpty { throw DiscoboxError("Box temporarily unavailable") }
         if request.operation == .saveHarnessChanges {
             writes.append(request)

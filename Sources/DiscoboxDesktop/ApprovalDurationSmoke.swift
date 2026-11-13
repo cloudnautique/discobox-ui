@@ -14,18 +14,19 @@ import DiscoboxCore
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
             let initial: String? = mode == "too-long" ? "7200" : mode == "shorter" ? "900" : nil
             window.contentView = NSHostingView(rootView: ApprovalSheet(item: item, initialDuration: initial).environment(workspace))
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             defer { window.orderOut(nil); workspace.disconnect() }
             func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
             func buttons() -> (approve: NSButton, deny: NSButton)? {
                 guard let root = window.contentView else { return nil }
                 let all = views(root).compactMap { $0 as? NSButton }
-                guard let deny = all.first(where: { $0.cell === window.defaultButtonCell }) else { return nil }
-                let y = deny.convert(deny.bounds, to: root).midY
-                guard let approve = all.first(where: {
-                    $0 !== deny && $0.keyEquivalent.isEmpty && $0.enclosingScrollView == nil &&
-                    abs($0.convert($0.bounds, to: root).midY - y) < 2
-                }) else { return nil }
+                guard let approve = all.first(where: { $0.cell === window.defaultButtonCell }) else { return nil }
+                let y = approve.convert(approve.bounds, to: root).midY
+                let row = all.filter { abs($0.convert($0.bounds, to: root).midY - y) < 2 }
+                    .sorted { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }
+                guard row.count == 3 else { return nil }
+                let deny = row[1]
                 return (approve, deny)
             }
             if mode == "external" {
@@ -33,24 +34,26 @@ import DiscoboxCore
                 await workspace.refreshApprovals()
                 try await wait {
                     let controls = views(window.contentView!).compactMap { $0 as? NSButton }
-                    return controls.count == 1 && controls[0].keyEquivalent == "\r" && controls[0].isEnabled
+                    return controls.count == 2 && controls.contains { $0.cell === window.defaultButtonCell && $0.isEnabled }
                 }
                 guard await client.answers.isEmpty else { throw DiscoboxError("Externally resolved approval sent another response") }
                 continue
             }
-            try await wait { buttons() != nil }
+            try await wait { buttons()?.deny.isEnabled == true }
             if mode == "too-long" {
                 try await wait { buttons()?.approve.isEnabled == false }
                 guard buttons()?.deny.isEnabled == true, await client.answers.isEmpty else {
                     throw DiscoboxError("Invalid duration disabled Deny or sent an approval")
                 }
-            } else { try await wait { buttons()?.approve.isEnabled == true } }
+            } else if mode != "deny" {
+                try await wait { buttons()?.approve.isEnabled == true }
+            }
             if mode == "deny" || mode == "too-long" { buttons()!.deny.performClick(nil) }
             else { buttons()!.approve.performClick(nil) }
             try await wait { workspace.approvals.isEmpty }
             guard let answer = await client.answers.first else { throw DiscoboxError("Approval form sent no answer") }
             if mode == "deny" || mode == "too-long" {
-                guard answer.action == "deny", await client.granted == nil else { throw DiscoboxError("Default approval button did not deny") }
+                guard answer.action == "deny", await client.granted == nil else { throw DiscoboxError("Deny action granted access") }
             } else {
                 let expected: Double = mode == "automatic" ? 1800 : 900
                 guard answer.action == "approve", await client.granted == expected,
@@ -59,7 +62,7 @@ import DiscoboxCore
             }
         }
         print("APPROVAL_RESOLUTION_SMOKE_OK: externally resolved requests show an enabled Done action, no stale form or duplicate response")
-        print("APPROVAL_DURATION_SMOKE_OK: automatic 2-hour request capped to 30 minutes, over-limit custom duration blocks approval, shorter duration preserved, Deny remains default")
+        print("APPROVAL_DURATION_SMOKE_OK: automatic 2-hour request capped to 30 minutes, over-limit custom duration blocks approval, shorter duration preserved, one footer Approve action records consent; Deny needs no consent")
     }
     private static func wait(line: Int = #line, _ predicate: () -> Bool) async throws {
         for _ in 0..<100 { if predicate() { return }; try await Task.sleep(for: .milliseconds(50)) }

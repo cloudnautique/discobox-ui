@@ -182,7 +182,8 @@ private actor CreationFixture: DiscoboxClient {
     try #require(await client.waitingForDetails)
     await host.workspace.selectBox("demo-ui")
     await client.releaseDetails()
-    try await creation.value
+    let created = try await creation.value
+    #expect(created.id == "created-box")
     #expect(host.workspace.sandboxID == "demo-ui")
     #expect(hub.creationPins.map(\.id.box) == ["created-box"])
     #expect(await client.createCount == 1)

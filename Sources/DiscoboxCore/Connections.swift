@@ -98,10 +98,10 @@ public struct ConnectedBox: Identifiable, Sendable {
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }
     }
-    public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = []) async throws {
+    @discardableResult public func createBox(on id: String, harness: String, repository: String, prompt: String = "", poolID: String? = nil, connection: UUID? = nil, credentials: [LaunchCredential] = [], discoboxAPI: Bool = false) async throws -> Sandbox {
         guard let host = session(id), host.workspace.isConnected else { throw DiscoboxError("Connect to the selected computer first.") }
         let generation = host.workspace.connectionID
-        let box = try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection, credentials: credentials)
+        let box = try await host.workspace.createBox(harness: harness, repository: repository, prompt: prompt, poolID: poolID, connection: connection, credentials: credentials, discoboxAPI: discoboxAPI)
         guard host.workspace.connectionID == generation, host.workspace.isConnected else { throw CancellationError() }
         let location = BoxLocation(connection: host.id, box: box.id)
         creations.append(.init(connection: generation, item: .init(location: location, computer: host.profile.displayName, box: box, needsAttention: box.matchesAttention)))
@@ -109,6 +109,7 @@ public struct ConnectedBox: Identifiable, Sendable {
         activate(host.id)
         browser.requestReveal(location)
         reconcileCreations()
+        return box
     }
     @discardableResult public func connect(_ profile: ConnectionProfile, demo: Bool = false, select: Bool = true, client: () throws -> any DiscoboxClient) async throws -> ConnectionSession {
         syncProfiles([profile])

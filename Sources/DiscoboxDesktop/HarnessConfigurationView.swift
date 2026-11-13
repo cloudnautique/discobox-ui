@@ -46,6 +46,14 @@ struct HarnessFileChangeView: View {
                 if file["shadowed"] == .bool(true) {
                     Label("A personal override stays active above this saved file.", systemImage: "info.circle").font(.caption).foregroundStyle(.orange)
                 }
+                if file["previous"]["createOnly"] != file["file"]["createOnly"] || file["previous"] == .null {
+                    LabeledContent("File delivery", value: file["file"]["createOnly"] == .bool(true) ? "Create only when missing" : "May replace an existing file")
+                        .font(.caption)
+                    if file["previous"] != .null {
+                        Text("Previously: " + (file["previous"]["createOnly"] == .bool(true) ? "create only when missing" : "may replace an existing file"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if let diff {
                     if diff.usesFullText {
                         Text("Large file · full versions shown to keep review responsive.").font(.caption).foregroundStyle(.secondary)

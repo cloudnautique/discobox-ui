@@ -5,6 +5,7 @@ public struct Project: Codable, Identifiable, Sendable, Equatable {
     public let name: String
     public let `default`: Bool?
     public let defaultPoolId: String?
+    public let defaultHarnessConfigId: String?
 }
 
 public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
@@ -18,6 +19,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     public let platform: String?
     public let createdAt: String?
     public let harnessConfig: JSONValue?
+    public let discoboxApi: Bool?
     public var preparationStatus: String? = nil
 
     public struct Configuration: Codable, Sendable, Equatable {
@@ -140,8 +142,9 @@ public struct InputPart: Codable, Sendable, Equatable {
 }
 
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public enum Operation: String, Encodable, Sendable { case setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
     public let operation: Operation
+    public let discoboxAPI: Bool?
     public let projectID: String?
     public let sandboxID: String?
     public let execID: String?
@@ -158,7 +161,8 @@ public struct BridgeRequest: Encodable, Sendable {
     public let input: [InputPart]?
 
     public init(_ operation: Operation, projectID: String? = nil, sandboxID: String? = nil,
-                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil) {
+                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
+        self.discoboxAPI = discoboxAPI
         self.poolID = poolID
  self.remotePath = remotePath; self.localPath = localPath
  self.prompt = prompt; self.requestID = requestID; self.kind = kind; self.action = action; self.payload = payload

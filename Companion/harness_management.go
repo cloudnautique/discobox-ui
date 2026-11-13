@@ -85,7 +85,11 @@ func (b *bridge) harnessManagement(ctx context.Context, req request) (response, 
 		return current, err
 	}
 	if current.Status == 404 {
-		current.Body = []byte(`{"detail":"This server or box image does not support saving harness changes. Update Discobox and the box's harness image, then sign in inside the box and review again."}`)
+		if !mutating {
+			body, _ := json.Marshal(map[string]any{"changes": map[string]any{"state": "unsupported", "files": []any{}, "credentials": []any{}}, "fingerprint": harnessReviewFingerprint(current.Body)})
+			return response{Status: 200, Body: body}, nil
+		}
+		current.Body = []byte(`{"detail":"This server or box image does not support saving harness changes. Update the server and harness image."}`)
 	}
 	if current.Status != 200 {
 		return current, nil
@@ -96,7 +100,11 @@ func (b *bridge) harnessManagement(ctx context.Context, req request) (response, 
 		State              string `json:"state"`
 		Files, Credentials []json.RawMessage
 	}
-	if json.Unmarshal(current.Body, &preview) != nil || preview.Harness != req.HarnessID {
+	if json.Unmarshal(current.Body, &preview) != nil {
+		return response{}, errors.New("invalid harness change preview")
+	}
+	transient := preview.State == "unsupported" || preview.State == "initializing" || preview.State == "unavailable"
+	if preview.Harness != req.HarnessID && !(preview.Harness == "" && transient && preview.Candidate == "" && len(preview.Files)+len(preview.Credentials) == 0) {
 		return response{}, errors.New("invalid harness change preview")
 	}
 	fingerprint := harnessReviewFingerprint(current.Body)
