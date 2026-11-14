@@ -154,7 +154,7 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
     await waitForResourceBlock(client)
     await workspace.connect(client: DemoClient(), label: "second", demo: true)
     await client.release()
-    do { try await creating.value; Issue.record("Stale preflight created a box") } catch { }
+    do { _ = try await creating.value; Issue.record("Stale preflight created a box") } catch { }
     #expect(await client.creates.isEmpty)
     workspace.disconnect()
 }
