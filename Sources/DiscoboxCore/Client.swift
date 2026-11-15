@@ -58,7 +58,9 @@ public actor CompanionClient: DiscoboxClient {
         let timeoutMessage = writesApproval
             ? "The remote approval operation timed out. It may have been recorded. Reload the request and check stored credentials before trying again. Nothing was retried."
             : "Checking approvals timed out. The computer may be unreachable. Reload to try again; no decision was sent."
-        let job = ProcessRequest(executable: executable, endpoint: destination, timeout: isApproval ? approvalTimeout : nil, timeoutMessage: timeoutMessage,
+        let deadline: TimeInterval? = request.operation == .serverPeer ? 5 : (isApproval ? approvalTimeout : nil)
+        let job = ProcessRequest(executable: executable, endpoint: destination, timeout: deadline,
+                                 timeoutMessage: request.operation == .serverPeer ? "The computer did not report its identity in time." : timeoutMessage,
                                  interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()

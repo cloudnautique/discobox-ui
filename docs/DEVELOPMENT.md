@@ -24,7 +24,7 @@ source repository is required:
 
 ```sh
 git clone https://github.com/discobox-ai/discobox.git discobox
-git -C discobox checkout e9444637b9d7919d1cc2a45912356ac34847048c
+git -C discobox checkout 936af3323d1b65f7bee68178d82d823988d0fb52
 make ghostty
 make build
 open dist/Discobox.app
@@ -45,6 +45,25 @@ Ghostty is checked out from `ghostty-org/ghostty` on GitHub. Its pinned `zg`
 dependency is prefetched from the `pfgithub/zg` GitHub mirror at the original
 commit, with its Zig package hash checked against the upstream manifest. This
 avoids Zig 0.14's failing Codeberg Git fetch without changing dependency contents.
+
+The SDK build applies `patches/ghostty-*.patch` to recognize Discobox URLs and
+release mouse reporting after a child exits, then reverses those patches in the
+source checkout. The SDK records their combined digest, which packaging verifies
+to avoid shipping an older cached terminal. Navigation and connection state are
+handled by the app. To check links and recovery using offline terminal fixtures
+(requires an unlocked desktop):
+
+```sh
+dist/Discobox.app/Contents/MacOS/DiscoboxDesktop --box-link-smoke
+dist/Discobox.app/Contents/MacOS/DiscoboxDesktop --terminal-recovery-smoke
+```
+
+The bridge reports attachment state through a private, nonblocking FIFO, separate
+from terminal bytes. Reconnect status never depends on parsing agent output and
+adds no polling requests. Temporary metadata failures remain inconclusive; only
+confirmed terminal/box states end the resumable stream. Local text remains
+copyable during disconnection, and the last output is retained in memory across
+reattachment (up to 8 MiB per terminal, cleared when the box/session closes).
 
 After the first build, use `make build`. The app is written to
 `dist/Discobox.app`; quit and reopen it to use a new build. Dependencies and tool

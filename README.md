@@ -119,6 +119,25 @@ retries. Authorization or certificate errors need your attention before retrying
 - Use **Settings** to choose System, Light, or Dark appearance, customize
   shortcuts, configure harnesses, manage credentials, and enable notifications.
 
+### Open a box link
+
+Command-click a `discobox:///sbx_…` link in the agent or a shell to open that box
+on the same computer as the terminal. A link such as
+`discobox://<server-peer-id>/sbx_…` can open a box on another connected computer.
+You can also open these links from other apps; a link without a server uses
+the currently selected computer. On launch, it uses this computer.
+
+Links select the box without starting it or changing your list filters.
+Choose **Desktop** to open its desktop. Stopped boxes keep their **Start Box**
+action. If the computer is not connected, connect in **Settings → Connections**
+first; clicking a link never registers a new computer automatically.
+
+During an interruption, the terminal shows **Reconnecting** while it retries the
+existing session. **Copy Text** works from the locally retained output even when
+the computer is unavailable. **Previous Output…** keeps text from before a
+reattachment available to select and copy. Reconnecting does not start stopped
+boxes or create replacement agent sessions.
+
 ### Move files in and out
 
 Open a running box’s **Files** tab. It starts in the agent’s working directory;

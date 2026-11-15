@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -41,7 +42,7 @@ func (c *attachFrames) WriteFrame(t byte, p []byte) error {
 	return frame.Write(c.Conn, t, p)
 }
 
-func openAttach(ctx context.Context, endpoint string, req request) (*resume.Conn, error) {
+func openAttach(ctx context.Context, endpoint string, req request, event func(resume.Event)) (*resume.Conn, error) {
 	for _, id := range []string{req.ProjectID, req.SandboxID, req.ExecID} {
 		if err := validID(id); err != nil {
 			return nil, err
@@ -97,14 +98,60 @@ func openAttach(ctx context.Context, endpoint string, req request) (*resume.Conn
 	c, err := resume.New(ctx, initial, resume.Options{
 		Dial: dial,
 		Done: func(ctx context.Context) (bool, error) {
-			err := b.requireRunning(ctx, req)
-			return err != nil, err // Fail closed: user can explicitly reconnect after recovery.
+			return b.attachDone(ctx, req)
 		},
+		Event: event,
 	})
 	if err != nil {
 		_ = initial.Close()
 	}
 	return c, err
+}
+
+// A failed observation is unknown, not proof that the remote process ended.
+// Keep upstream's resumable connection alive across pool/network outages, but
+// never start a box or revive an ended concrete exec while reconnecting.
+func (b *bridge) attachDone(ctx context.Context, req request) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	terminal, readErr := b.call(ctx, http.MethodGet, "/api/projects/"+req.ProjectID+"/sandboxes/"+req.SandboxID+"/execs/"+req.ExecID, nil)
+	if terminal.Status == http.StatusUnauthorized || terminal.Status == http.StatusForbidden {
+		return true, errors.New("terminal access was refused; check this computer’s authorization before reconnecting")
+	}
+	var exec struct {
+		Status     string  `json:"status"`
+		ObservedAt *string `json:"observedAt"`
+	}
+	if readErr == nil && terminal.Status == http.StatusOK && json.Unmarshal(terminal.Body, &exec) == nil && exec.ObservedAt == nil {
+		switch exec.Status {
+		case "exited", "failed", "lost":
+			return true, fmt.Errorf("terminal is %s; detaching", exec.Status)
+		case "running":
+			return false, nil
+		}
+	}
+	box, err := b.call(ctx, http.MethodGet, "/projects/"+req.ProjectID+"/sandboxes/"+req.SandboxID, nil)
+	if box.Status == http.StatusUnauthorized || box.Status == http.StatusForbidden {
+		return true, errors.New("box access was refused; check this computer’s authorization before reconnecting")
+	}
+	var state struct {
+		Runtime struct {
+			State        string `json:"state"`
+			RuntimeState string `json:"runtimeState"`
+			DisplayState string `json:"displayState"`
+		} `json:"runtime"`
+	}
+	if err == nil && box.Status == http.StatusOK && json.Unmarshal(box.Body, &state) == nil && state.Runtime.DisplayState != "repairing" {
+		switch state.Runtime.RuntimeState {
+		case "stopped", "stopping", "suspended":
+			return true, fmt.Errorf("box is %s; detaching", state.Runtime.RuntimeState)
+		}
+		switch state.Runtime.State {
+		case "failed", "archived", "deleted":
+			return true, fmt.Errorf("box is %s; detaching", state.Runtime.State)
+		}
+	}
+	return false, readErr
 }
 
 // pumpAttach never sends CloseInput or Signal: closing the local surface only
@@ -196,7 +243,17 @@ func pumpAttach(ctx context.Context, c execstream.Conn, input io.Reader, output 
 	}
 }
 
-func runAttach(endpoint string, req request) error {
+func runAttach(endpoint string, req request, statusPath string) (resultErr error) {
+	status, closeStatus := attachStatusWriter(statusPath)
+	defer closeStatus()
+	status("connecting", "")
+	defer func() {
+		if resultErr != nil {
+			status("disconnected", resultErr.Error())
+		} else {
+			status("ended", "")
+		}
+	}()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, os.Interrupt)
 	defer cancel()
 	fd := int(os.Stdin.Fd())
@@ -206,10 +263,11 @@ func runAttach(endpoint string, req request) error {
 	}
 	defer term.Restore(fd, old)
 	writeTerminalAppearance(os.Stdout)
-	c, err := openAttach(ctx, endpoint, req)
+	c, err := openAttach(ctx, endpoint, req, func(event resume.Event) { status(string(event.State), "") })
 	if err != nil {
 		return err
 	}
+	status("connected", "")
 	resize := make(chan os.Signal, 1)
 	signal.Notify(resize, syscall.SIGWINCH)
 	defer signal.Stop(resize)

@@ -69,6 +69,22 @@ if [[ -n "$(git -C "$GHOSTTY_SOURCE" status --porcelain --untracked-files=no)" ]
     exit 1
 fi
 export ZIG_GLOBAL_CACHE_DIR="$GHOSTTY_BUILD_ROOT/global-cache"
+# Apply reviewed embedding patches and always restore the pinned checkout.
+applied_patches=()
+restore_ghostty_source() {
+    local result=$?
+    local index
+    for (( index=${#applied_patches[@]}-1; index>=0; index-- )); do
+        git -C "$GHOSTTY_SOURCE" apply --reverse "${applied_patches[index]}" || return 1
+    done
+    return "$result"
+}
+trap restore_ghostty_source EXIT
+for embedding_patch in "$REPO_ROOT"/patches/ghostty-*.patch; do
+    git -C "$GHOSTTY_SOURCE" apply --check "$embedding_patch"
+    git -C "$GHOSTTY_SOURCE" apply "$embedding_patch"
+    applied_patches+=("$embedding_patch")
+done
 export ZIG_LOCAL_CACHE_DIR="$GHOSTTY_BUILD_ROOT/local-cache"
 export CLANG_MODULE_CACHE_PATH="$GHOSTTY_BUILD_ROOT/clang-cache"
 bash scripts/fetch-ghostty-deps.sh
@@ -109,5 +125,6 @@ xcrun clang -I "$GHOSTTY_SLICE/Headers" Experiments/Ghostty/link-smoke.c \
     -framework IOSurface -framework Metal -framework AppKit \
     -o "$GHOSTTY_BUILD_ROOT/link-smoke"
 "$GHOSTTY_BUILD_ROOT/link-smoke"
+shasum -a 256 patches/ghostty-*.patch | shasum -a 256 | awk '{print $1}' > "$GHOSTTY_SDK/EMBEDDING_PATCHES"
 printf 'Built native-architecture Ghostty SDK at %s\n' "$GHOSTTY_SDK"
 printf 'No application was launched. Rebuild the desktop app to link this SDK.\n'

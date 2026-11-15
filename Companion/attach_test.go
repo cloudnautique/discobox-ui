@@ -32,6 +32,8 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		return nil
 	}})
 	var count atomic.Int32
+	var failNextExecRead atomic.Bool
+	var transientFailures atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			t.Errorf("unexpected mutation %s %s", r.Method, r.URL)
@@ -42,6 +44,11 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		case "/projects/p/sandboxes/b":
 			io.WriteString(w, `{"runtime":{"runtimeState":"running"}}`)
 		case "/api/projects/p/sandboxes/b/execs/e":
+			if failNextExecRead.Swap(false) {
+				transientFailures.Add(1)
+				http.Error(w, "pool recovering", http.StatusServiceUnavailable)
+				return
+			}
 			io.WriteString(w, `{"status":"running","tty":true}`)
 		case "/api/projects/p/sandboxes/b/execs/e/attach":
 			if r.URL.Query().Get("replay") != "true" {
@@ -62,7 +69,7 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := openAttach(ctx, server.URL, request{ProjectID: "p", SandboxID: "b", ExecID: "e"})
+	c, err := openAttach(ctx, server.URL, request{ProjectID: "p", SandboxID: "b", ExecID: "e"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +93,7 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		t.Fatal("initial resize missing")
 	}
 	// One physical transport loss must preserve the logical input stream.
+	failNextExecRead.Store(true)
 	first.Close()
 	select {
 	case <-accepted:
@@ -108,6 +116,9 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 	}
 	if count.Load() != 2 {
 		t.Fatalf("attach count %d", count.Load())
+	}
+	if transientFailures.Load() != 1 {
+		t.Fatal("did not exercise the temporary metadata outage")
 	}
 	// The initial resize was consumed and asserted above. A reconnect may
 	// replay it, but its arrival before detach is not required for this check.
@@ -157,7 +168,7 @@ func TestAttachRefusesStoppedCachedAndVirtualTerminals(t *testing.T) {
 			if state == "primary" {
 				id = state
 			}
-			_, err := openAttach(t.Context(), server.URL, request{ProjectID: "p", SandboxID: "b", ExecID: id})
+			_, err := openAttach(t.Context(), server.URL, request{ProjectID: "p", SandboxID: "b", ExecID: id}, nil)
 			if err == nil || upgrades.Load() != 0 {
 				t.Fatalf("refusal: err=%v upgrades=%d", err, upgrades.Load())
 			}

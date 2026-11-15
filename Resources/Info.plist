@@ -13,6 +13,15 @@
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>ai.discobox.desktop.box</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>discobox</string><string>discobox+http</string><string>discobox+https</string></array>
+        </dict>
+    </array>
     <key>NSHumanReadableCopyright</key><string>Discobox Desktop</string>
 </dict>
 </plist>

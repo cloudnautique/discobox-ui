@@ -1,0 +1,11 @@
+--- a/src/config/url.zig
++++ b/src/config/url.zig
+@@ -29,7 +29,7 @@
+     \\|[\w\-.~:/?#@!$&*+,;=%]+(?:[\(\[]\w*[\)\]])?)+(?<![,.])|(?:\.\.\/|\.\/|\/)[\w\-.~:\/?#@!$&*+,;=%]+(?:\/[\w\-.~:\/?#@!$&*+,;=%]*)*
+     ;
+ const url_schemes =
+-    \\https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:
++    \\https?://|(?i:discobox(?:\+https?)?://)|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:
+ ;
+ 
+ const ipv6_url_pattern =

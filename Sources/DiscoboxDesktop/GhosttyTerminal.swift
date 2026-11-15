@@ -29,6 +29,12 @@ import DiscoboxCore
                       let surface = target.target.surface,
                       let userdata = ghostty_surface_userdata(surface) else { return false }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+                if action.tag == GHOSTTY_ACTION_SHOW_CHILD_EXITED {
+                    // Keep the last remote screen intact; native chrome owns
+                    // disconnection instead of a "press any key to close" prompt.
+                    view.processEnded()
+                    return true
+                }
                 if action.tag == GHOSTTY_ACTION_OPEN_URL, let handler = view.openURL,
                    let pointer = action.action.open_url.url {
                     let data = Data(bytes: pointer, count: Int(action.action.open_url.len))
@@ -102,15 +108,33 @@ struct TerminalIdentity: Hashable {
     let view: GhosttyTerminalView
     var ended = false
     var error: String?
+    var connectionState = "connecting"
+    var connectionMessage: String?
+    let previousOutput: String?
+    private(set) var hasConnected = false
+    private let status: TerminalAttachStatus?
+    private var closed = false
     private var monitor: Task<Void, Never>?
-    convenience init(identity: TerminalIdentity) {
-        let args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec]
-        self.init(arguments: args)
+    convenience init(identity: TerminalIdentity, previousOutput: String? = nil) {
+        let status = identity.demo ? nil : try? TerminalAttachStatus()
+        var args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec]
+        if let status { args += ["--attach-status", status.path] }
+        self.init(arguments: args, status: status, previousOutput: previousOutput)
+        if identity.demo { connectionState = "connected"; hasConnected = true }
     }
-    init(arguments: [String]) {
+    init(arguments: [String], status: TerminalAttachStatus? = nil, previousOutput: String? = nil) {
+        self.status = status
+        self.previousOutput = previousOutput
         view = GhosttyTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
-        view.ended = { [weak self] in self?.ended = true }
+        view.ended = { [weak self] in self?.ended = true; self?.view.readOnly = true }
         view.failed = { [weak self] message in self?.error = message }
+        status?.receive = { [weak self] state, message in
+            guard let self, !self.closed else { return }
+            self.connectionState = state
+            self.connectionMessage = message
+            self.view.readOnly = self.ended || ["connecting", "reconnecting", "disconnected", "ended"].contains(state)
+            if state == "connected" || state == "reconnected" { self.hasConnected = true }
+        }
         // Ghostty executes command through a shell. Quote every argument,
         // including the bundled path; endpoint text must never become shell code.
         let command = ([CompanionLocation.executable.path] + arguments).map(Self.quote).joined(separator: " ")
@@ -119,20 +143,21 @@ struct TerminalIdentity: Hashable {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
                 guard let self, let surface = self.view.surface else { return }
-                if ghostty_surface_process_exited(surface) { self.ended = true; return }
+                if ghostty_surface_process_exited(surface) { self.view.processEnded(); return }
             }
         }
     }
     static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-    func close() { monitor?.cancel(); monitor = nil; view.close() }
+    func close() { closed = true; monitor?.cancel(); monitor = nil; status?.close(); view.close() }
 }
 
 @MainActor @Observable final class TerminalStore {
     private var sessions: [TerminalIdentity: TerminalSession] = [:]
     private var recoveryAfter: [TerminalIdentity: Date] = [:]
+    private var previousOutput: [TerminalIdentity: String] = [:]
     func session(_ identity: TerminalIdentity) -> TerminalSession {
         if let value = sessions[identity] { return value }
-        let value = TerminalSession(identity: identity); sessions[identity] = value; return value
+        let value = TerminalSession(identity: identity, previousOutput: previousOutput.removeValue(forKey: identity)); sessions[identity] = value; return value
     }
     func focus(_ identity: TerminalIdentity) {
         guard let view = sessions[identity]?.view else { return }
@@ -143,6 +168,19 @@ struct TerminalIdentity: Hashable {
     }
     func reconnect(_ identity: TerminalIdentity) {
         recoveryAfter.removeValue(forKey: identity)
+        retire(identity)
+    }
+    private func retire(_ identity: TerminalIdentity) {
+        guard let old = sessions.removeValue(forKey: identity) else { return }
+        // Failed connection attempts must not overwrite the last useful screen.
+        let current = old.view.outputText()
+        previousOutput[identity] = old.hasConnected && !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? current : old.previousOutput ?? current
+        old.close()
+    }
+    private var identities: Set<TerminalIdentity> { Set(sessions.keys).union(previousOutput.keys).union(recoveryAfter.keys) }
+    private func forget(_ identity: TerminalIdentity) {
+        recoveryAfter.removeValue(forKey: identity)
+        previousOutput.removeValue(forKey: identity)
         sessions.removeValue(forKey: identity)?.close()
     }
     /// Reattach only an ended stream whose concrete exec was just confirmed
@@ -154,31 +192,22 @@ struct TerminalIdentity: Hashable {
             guard let session = sessions[identity], session.ended, session.error == nil,
                   recoveryAfter[identity].map({ $0 <= now }) ?? true else { continue }
             recoveryAfter[identity] = now.addingTimeInterval(10)
-            sessions.removeValue(forKey: identity)?.close()
+            retire(identity)
         }
     }
     func closeBox(_ box: String, connection: UUID) {
-        for identity in Array(sessions.keys) where identity.box == box && identity.connection == connection {
-            recoveryAfter.removeValue(forKey: identity)
-            sessions.removeValue(forKey: identity)?.close()
-        }
+        for identity in identities where identity.box == box && identity.connection == connection { forget(identity) }
     }
     func retainExecs(_ inventory: Workspace.TerminalInventory, connection: UUID) {
-        for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && !inventory.execIDs.contains(identity.exec) {
-            recoveryAfter.removeValue(forKey: identity)
-            sessions.removeValue(forKey: identity)?.close()
-        }
+        for identity in identities where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && !inventory.execIDs.contains(identity.exec) { forget(identity) }
     }
     func retainRunningBoxes(_ boxes: [Sandbox], connection: UUID) {
         let running = Set(boxes.filter(\.isRunning).map(\.id))
-        for identity in Array(sessions.keys) where identity.connection == connection && !running.contains(identity.box) {
-            recoveryAfter.removeValue(forKey: identity)
-            sessions.removeValue(forKey: identity)?.close()
-        }
+        for identity in identities where identity.connection == connection && !running.contains(identity.box) { forget(identity) }
     }
     func closeAll() {
         for session in sessions.values { session.close() }
-        sessions.removeAll(); recoveryAfter.removeAll()
+        sessions.removeAll(); recoveryAfter.removeAll(); previousOutput.removeAll()
     }
 }
 
@@ -189,21 +218,47 @@ struct LiveTerminal: View {
     @Environment(TerminalStore.self) private var store
     @Environment(ServiceForwards.self) private var forwards
     @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections?
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
+    @Environment(BoxLinkNavigation.self) private var boxLinks: BoxLinkNavigation?
+    @State private var showingPreviousOutput = false
     var body: some View {
         let session = store.session(identity)
         VStack(spacing: 0) {
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }
             TerminalSurface(view: session.view, focused: focused, onFocus: onFocus).id(identity)
-            if session.ended || session.error != nil {
-                HStack {
-                    Label("Terminal disconnected", systemImage: "exclamationmark.triangle")
+            if session.ended || session.error != nil || session.connectionState == "reconnecting" || session.connectionState == "connecting" {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if session.ended || session.error != nil { Label("Terminal disconnected · output is read-only", systemImage: "exclamationmark.triangle") }
+                        else { HStack { ProgressView().controlSize(.mini); Text(session.connectionState == "connecting" ? "Connecting terminal…" : "Reconnecting terminal…") } }
+                        if let message = session.connectionMessage { Text(message).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled) }
+                    }
                     Spacer()
-                    Button("Reconnect") { store.reconnect(identity) }
+                    Button("Copy Text") { session.view.copyOutput() }
+                    if session.previousOutput != nil { Button("Previous Output…") { showingPreviousOutput = true } }
+                    if session.ended || session.error != nil { Button("Reconnect") { store.reconnect(identity) } }
                 }.font(.caption).padding(8)
+            } else if session.previousOutput != nil {
+                HStack { Spacer(); Button("Previous Output…") { showingPreviousOutput = true } }.font(.caption).padding(6)
+            }
+        }
+        .sheet(isPresented: $showingPreviousOutput) {
+            StudioConfirmation(title: "Previous terminal output", symbol: "clock", subtitle: "Saved locally before reconnecting", width: 760) {
+                TerminalTextView(text: session.previousOutput ?? "").frame(height: 440).studioCard()
+            } footer: {
+                HStack { Spacer(); Button("Done") { showingPreviousOutput = false }.keyboardShortcut(.cancelAction) }
             }
         }
         .onChange(of: ObjectIdentifier(session), initial: true) { _, _ in
             session.view.openURL = { [identity, weak workspace = workspace, weak forwards = forwards, weak view = session.view] raw in
+                if BoxLinks.claims(raw) {
+                    guard let workspace, workspace.connectionID == identity.connection,
+                          workspace.sandboxID == identity.box,
+                          let connections, let commands, let boxLinks else { return true }
+                    boxLinks.open(raw, reader: workspace, connections: connections, commands: commands)
+                    return true
+                }
                 guard let workspace, let forwards, let url = URL(string: raw),
                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
                 forwards.openTerminalURL(url, identity: identity, workspace: workspace, window: view?.window)
@@ -292,11 +347,36 @@ struct TerminalSurface: NSViewRepresentable {
     var onFocus: (() -> Void)?
     var failed: ((String) -> Void)?
     var openURL: ((String) -> Bool)?
+    var readOnly = false
     private var marked = NSAttributedString(string: "")
     private var inputText: [String]?
     private var markedSelection = NSRange(location: NSNotFound, length: 0)
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
+
+    func processEnded() { readOnly = true; ended?() }
+
+    /// Read Ghostty's retained text directly; never needs a working backend.
+    func outputText() -> String {
+        guard let surface else { return "" }
+        var selection = ghostty_selection_s()
+        selection.top_left.tag = GHOSTTY_POINT_SCREEN
+        selection.top_left.coord = GHOSTTY_POINT_COORD_TOP_LEFT
+        selection.bottom_right.tag = GHOSTTY_POINT_SCREEN
+        selection.bottom_right.coord = GHOSTTY_POINT_COORD_BOTTOM_RIGHT
+        var result = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, selection, &result) else { return "" }
+        defer { ghostty_surface_free_text(surface, &result) }
+        guard let text = result.text else { return "" }
+        let count = min(Int(result.text_len), 8 * 1024 * 1024)
+        let bytes = UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self).advanced(by: Int(result.text_len) - count)
+        return String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
+    }
+    func copyOutput(to pasteboard: NSPasteboard = .general) {
+        let text = outputText()
+        guard !text.isEmpty else { return }
+        pasteboard.clearContents(); pasteboard.setString(text, forType: .string)
+    }
 
     func start(command: String) -> String? {
         let runtime = GhosttyRuntime.shared
@@ -402,6 +482,7 @@ struct TerminalSurface: NSViewRepresentable {
         return nil
     }
     override func keyDown(with event: NSEvent) {
+        guard !readOnly else { return }
         if !hasMarkedText(), let sequence = enterChord(event) {
             binding(sequence)
             return
@@ -418,6 +499,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
     }
     override func keyUp(with event: NSEvent) {
+        guard !readOnly else { return }
         if enterChord(event) != nil { return }
         key(event, action: GHOSTTY_ACTION_RELEASE, text: nil)
     }
@@ -435,6 +517,7 @@ struct TerminalSurface: NSViewRepresentable {
         return false
     }
     func sendLiteral(_ text: String) {
+        guard !readOnly else { return }
         guard let surface else { return }
         text.withCString { ghostty_surface_text(surface, $0, UInt(text.utf8.count)) }
     }
@@ -446,10 +529,14 @@ struct TerminalSurface: NSViewRepresentable {
     override func mouseDragged(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseMoved(with event: NSEvent) {
         guard let surface else { return }; let p = convert(event.locationInWindow, from: nil)
-        ghostty_surface_mouse_pos(surface, p.x, p.y, mods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, p.x, p.y, mods(localMouseFlags(event.modifierFlags)))
+    }
+    private func localMouseFlags(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        if readOnly, let surface, ghostty_surface_mouse_captured(surface) { return flags.union(.shift) }
+        return flags
     }
     private func mouse(_ event: NSEvent, button: ghostty_input_mouse_button_e, state: ghostty_input_mouse_state_e) {
-        mouseMoved(with: event); if let surface { _ = ghostty_surface_mouse_button(surface, state, button, mods(event.modifierFlags)) }
+        mouseMoved(with: event); if let surface { _ = ghostty_surface_mouse_button(surface, state, button, mods(localMouseFlags(event.modifierFlags))) }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -460,6 +547,7 @@ struct TerminalSurface: NSViewRepresentable {
         if let surface { ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, event.hasPreciseScrollingDeltas ? 1 : 0) }
     }
     func insertText(_ string: Any, replacementRange: NSRange) {
+        guard !readOnly else { return }
         let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
         unmarkText()
         if inputText != nil { inputText!.append(text) }

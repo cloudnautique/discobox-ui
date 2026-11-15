@@ -2,6 +2,12 @@
 set -euo pipefail
 # This script builds artifacts only; it never launches the app or backend.
 source "$(dirname "$0")/dev-env.sh"
+GHOSTTY_SDK="$PWD/.build/ghostty/sdk/6d2dd585a5d87fa745d48188dd096ca6e63014d0"
+if [[ ! -f "$GHOSTTY_SDK/EMBEDDING_PATCHES" ]] ||
+   [[ "$(cat "$GHOSTTY_SDK/EMBEDDING_PATCHES")" != "$(shasum -a 256 patches/ghostty-*.patch | shasum -a 256 | awk '{print $1}')" ]]; then
+    printf 'Ghostty SDK needs updated embedding patches. Run make ghostty, then rebuild.\n' >&2
+    exit 1
+fi
 python3 scripts/generate-brand.py --check
 # Keep this local artifact independent of dsymutil's external cache writes.
 # Debug builds (including tests and Xcode runs) retain their normal symbols.
@@ -22,7 +28,6 @@ install -m 755 "$IROH_MODULE/lib/iroh_go.lib" "$APP/Contents/Frameworks/libiroh_
 IROH_SOURCE=$(cd Companion && go list -m -f '{{.Dir}}' github.com/discobox-ai/iroh-go)
 install -m 644 "$IROH_SOURCE/README.md" "$APP/Contents/Resources/Iroh-Go-README.md"
 codesign --force --sign - "$APP/Contents/Frameworks/libiroh_go.dylib"
-GHOSTTY_SDK="$PWD/.build/ghostty/sdk/6d2dd585a5d87fa745d48188dd096ca6e63014d0"
 ditto "$GHOSTTY_SDK/Resources/ghostty" "$APP/Contents/Resources/ghostty"
 cp "$GHOSTTY_SDK/LICENSE" "$APP/Contents/Resources/Ghostty-LICENSE"
 bash scripts/build-icon.sh

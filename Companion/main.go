@@ -80,6 +80,7 @@ func main() {
 	forward := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
 	configure := flag.String("configure-harness", "", "Run only a harness interactive setup flow")
 	attach := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
+	attachStatus := flag.String("attach-status", "", "Private FIFO for terminal connection state")
 	project := flag.String("project", "", "Project ID")
 	box := flag.String("box", "", "Box ID")
 	execID := flag.String("exec", "", "Concrete terminal ID")
@@ -121,8 +122,10 @@ func main() {
 		return
 	}
 	if *attach {
-		if err := runAttach(*endpoint, request{ProjectID: *project, SandboxID: *box, ExecID: *execID}); err != nil {
-			fmt.Fprintf(os.Stderr, "\r\nTerminal disconnected: %s\r\n", err)
+		if err := runAttach(*endpoint, request{ProjectID: *project, SandboxID: *box, ExecID: *execID}, *attachStatus); err != nil {
+			if *attachStatus == "" {
+				fmt.Fprintf(os.Stderr, "\r\nTerminal disconnected: %s\r\n", err)
+			}
 			os.Exit(1)
 		}
 		return
@@ -296,6 +299,9 @@ func validID(id string) error {
 
 func route(req request, allowInput bool) (method, path string, body []byte, err error) {
 	method = http.MethodGet
+	if req.Operation == "serverPeer" {
+		return method, "/peer", nil, nil
+	}
 	if req.Operation == "defaultProject" {
 		return method, "/projects/default", nil, nil
 	}
@@ -372,6 +378,8 @@ func validateInput(parts []inputPart) error {
 
 func (b *bridge) execute(ctx context.Context, req request) (response, error) {
 	switch req.Operation {
+	case "boxLink":
+		return parseBoxLink(req)
 	case "setDefaultHarness":
 		return b.setDefaultHarness(ctx, req)
 	case "updateSecretLimits":

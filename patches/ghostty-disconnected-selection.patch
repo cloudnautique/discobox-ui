@@ -1,0 +1,16 @@
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -1037,6 +1037,13 @@
+ fn childExited(self: *Surface, info: apprt.surface.Message.ChildExited) void {
+     // Mark our flag that we exited immediately
+     self.child_exited = true;
++    // An exited embedded child cannot receive mouse reports. Keep its last
++    // screen locally selectable and scrollable while the host reconnects.
++    {
++        self.renderer_state.mutex.lock();
++        defer self.renderer_state.mutex.unlock();
++        self.io.terminal.flags.mouse_event = .none;
++    }
+ 
+     // If our runtime was below some threshold then we assume that this
+     // was an abnormal exit and we show an error message.

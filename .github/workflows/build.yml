@@ -23,7 +23,7 @@ jobs:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DISCOBOX_REVISION: e9444637b9d7919d1cc2a45912356ac34847048c
+      DISCOBOX_REVISION: 936af3323d1b65f7bee68178d82d823988d0fb52
       GOPRIVATE: github.com/discobox-ai/*
       GIT_TERMINAL_PROMPT: '0'
 
@@ -87,7 +87,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build/ghostty/sdk
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('scripts/build-ghostty-sdk.sh', 'scripts/find-llvm-libtool.sh', 'scripts/fetch-ghostty-deps.sh', 'scripts/prepare-ghostty-sdk-overlay.py') }}
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('scripts/build-ghostty-sdk.sh', 'scripts/find-llvm-libtool.sh', 'scripts/fetch-ghostty-deps.sh', 'scripts/prepare-ghostty-sdk-overlay.py', 'patches/ghostty-*.patch') }}
 
       - name: Cache Go dependencies and compilation
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -105,6 +105,7 @@ jobs:
             make ghostty
           fi
           test "$(cat "$sdk/REVISION")" = 6d2dd585a5d87fa745d48188dd096ca6e63014d0
+          test "$(cat "$sdk/EMBEDDING_PATCHES")" = "$(shasum -a 256 patches/ghostty-*.patch | shasum -a 256 | awk '{print $1}')"
 
       - name: Save verified Ghostty SDK
         if: steps.ghostty-cache.outputs.cache-hit != 'true'

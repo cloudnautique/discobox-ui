@@ -15,6 +15,7 @@ struct DiscoboxApp: App {
     private var forwards: ServiceForwards { runtimes.runtime(connections.activeID).forwards }
     private var desktops: DesktopWindows { runtimes.runtime(connections.activeID).desktops }
     @State private var commands = WorkspaceCommands()
+    @State private var boxLinks = BoxLinkNavigation()
     @State private var didAttemptStartup = false
 
     init() { BrandTypography.register() }
@@ -22,6 +23,13 @@ struct DiscoboxApp: App {
     var body: some Scene {
         Window("Discobox", id: "workspace") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
+                .environment(boxLinks)
+                .onOpenURL { boxLinks.receive($0.absoluteString, connections: connections, commands: commands) }
+                .sheet(isPresented: Binding(get: { boxLinks.error != nil }, set: { if !$0 { boxLinks.error = nil } })) {
+                    StudioMessageSheet(title: "Couldn’t open box link", symbol: "link", message: boxLinks.error ?? "") {
+                        boxLinks.error = nil
+                    }
+                }
                 .onChange(of: appearance, initial: true) { DiscoboxAppearance.apply(appearance) }
                 .onChange(of: savedConnections) { connections.syncProfiles(ConnectionProfiles.decode(savedConnections) ?? []) }
                 .onChange(of: computerName, initial: true) { connections.syncProfiles([localProfile]) }
@@ -40,6 +48,8 @@ struct DiscoboxApp: App {
                     }
                     guard !didAttemptStartup else { return }
                     didAttemptStartup = true
+                    if ProcessInfo.processInfo.arguments.contains("--terminal-recovery-smoke") { await TerminalRecoverySmoke.run() }
+                    if ProcessInfo.processInfo.arguments.contains("--box-link-smoke") { await BoxLinkSmoke.run() }
                     // Explicitly set the running app's Dock icon as well as the
                     // bundle icon, which Launch Services may cache across builds.
                     if let url = Bundle.main.url(forResource: "Discobox", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
@@ -77,6 +87,7 @@ struct DiscoboxApp: App {
                         await DialogSmoke.run(workspace: workspace, commands: commands, terminals: terminals)
                     }
                     ApprovalNotifications.shared.configure(connections)
+                    boxLinks.finishStartup(connections: connections, commands: commands)
                     if !workspace.isDemo { ConnectionReachability.shared.start(connections) }
                 }
         }

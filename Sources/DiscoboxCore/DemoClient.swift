@@ -17,6 +17,8 @@ public actor DemoClient: DiscoboxClient {
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
+        case .boxLink: throw DiscoboxError("No box link parser in the demo fixture")
+        case .serverPeer: return Data("{}".utf8)
         case .updateSecretLimits: return Data("{}".utf8)
         case .harnessDetails: return Data(#"{"harness":{"id":"demo-harness","name":"Demo agent","revision":2,"saveBack":{"version":1},"configuredFiles":[{"path":"~/.config/agent/settings.json","content":"{}"}]},"bindings":[{"bindingId":"login","secretId":"demo-login","secretName":"Agent subscription","envVar":"AGENT_TOKEN","use":true,"from":"harnessConfig"}],"secrets":[{"id":"demo-login","type":"oauth","name":"Agent subscription"}]}"#.utf8)
         case .harnessChanges: return Data(#"{"changes":{"candidateId":"demo-candidate","harnessConfigId":"demo-harness","state":"pending","configRevision":2,"files":[{"path":"~/.config/agent/settings.json","previous":{"content":"{}"},"file":{"content":"{\"theme\":\"dark\"}"}}],"credentials":[{"provider":"claude-code","envName":"AGENT_TOKEN","type":"oauth","account":"Demo subscription"}],"diagnostics":[]},"fingerprint":"fixture"}"#.utf8)
