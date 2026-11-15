@@ -134,7 +134,13 @@ struct CredentialSettings: View {
             await refresh()
         }
         .sheet(item: $details) { request in
-            CredentialDetailsView(request: request) { Task { await refresh() } }.environment(workspace)
+            CredentialDetailsView(request: request) { confirmed in
+                guard request.connection == workspace.connectionID else { return }
+                if let index = credentials.firstIndex(where: { $0["id"] == confirmed["id"] }) {
+                    credentials[index] = confirmed
+                }
+                Task { await refresh() }
+            }.environment(workspace)
         }
         .sheet(isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             if let item = pendingDelete, let connection = pendingDeleteConnection {

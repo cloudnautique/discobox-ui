@@ -9,7 +9,7 @@ struct CredentialDetailsRequest: Identifiable {
 
 struct CredentialDetailsView: View {
     let request: CredentialDetailsRequest
-    let saved: () -> Void
+    let saved: (JSONValue) -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +19,7 @@ struct CredentialDetailsView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var completed = false
+    @State private var verifiedSecret: JSONValue?
     private var secret: JSONValue { request.secret }
     private var valid: Bool { workspace.isConnected && workspace.connectionID == request.connection }
     private var payload: JSONValue? { try? CredentialLimits.payload(secret: secret, seconds: maximum, host: host) }
@@ -35,12 +36,17 @@ struct CredentialDetailsView: View {
                         Text("Destination routes are shown for review. Use the matching Discobox console to edit them.").font(.caption).foregroundStyle(.secondary)
                     }
                     if CredentialLimits.maximum(secret) != nil {
-                        TextField("Maximum access lifetime · seconds", text: $maximum)
+                        StudioConfirmationField(title: "Maximum access lifetime · seconds") {
+                            TextField("Seconds", text: $maximum).accessibilityIdentifier("credential.maximumLifetime")
+                        }
                         Text("Zero permits access without expiry. These are shared restrictions for this credential, not a decision on one box’s request.")
                             .font(.caption).foregroundStyle(.secondary)
                         Toggle("I reviewed this shared credential’s limits", isOn: $reviewed).toggleStyle(.checkbox)
                     } else { Text("This server does not report editable lifetime limits.").font(.callout).foregroundStyle(.secondary) }
-                    if completed { Label("Shared limits saved", systemImage: "checkmark.circle") }
+                    if completed, let verifiedSecret, let limit = CredentialLimits.maximum(verifiedSecret) {
+                        Label("Saved and verified: " + (limit == 0 ? "No expiry limit" : ApprovalDuration.label(limit)), systemImage: "checkmark.circle")
+                            .accessibilityIdentifier("credential.savedLifetime")
+                    }
                     if !valid { Text("This computer reconnected. Reopen the credential details.").foregroundStyle(.orange) }
                     if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(2)
@@ -67,9 +73,13 @@ struct CredentialDetailsView: View {
         Task {
             defer { busy = false }
             do {
-                _ = try await workspace.operation(.updateSecretLimits, requestID: secret["id"].string, payload: payload)
+                let confirmed = try await workspace.operation(.updateSecretLimits, requestID: secret["id"].string, payload: payload)
                 guard valid else { return }
-                completed = true; saved()
+                guard confirmed["id"] == secret["id"], CredentialLimits.maximum(confirmed) == Double(maximum) else {
+                    throw DiscoboxError("Discobox did not confirm the saved lifetime. Reopen the credential details before trying again.")
+                }
+                verifiedSecret = confirmed
+                completed = true; saved(confirmed)
             } catch { self.error = error.localizedDescription; reviewed = false }
         }
     }

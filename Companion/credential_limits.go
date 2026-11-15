@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Editing shared restrictions is a separate explicit Settings operation. Never
@@ -58,9 +59,40 @@ func (b *bridge) credentialLimits(ctx context.Context, req request) (response, e
 		return response{}, errors.New("missing credential lifetime")
 	}
 	body, _ := json.Marshal(input.Limits)
-	result, err := b.call(ctx, "PATCH", path, body)
+	result, err := b.call(ctx, "PUT", path, body)
 	if err != nil {
 		return response{}, fmt.Errorf("shared limits may have changed; reload before retrying: %w", err)
 	}
-	return result, nil
+	if result.Status < 200 || result.Status >= 300 {
+		return result, nil
+	}
+	// A successful HTTP response is not proof of persistence (older routes can
+	// even answer an unsupported method without updating the credential).
+	// Read back once; never replay the write when verification fails.
+	verified, err := b.call(ctx, "GET", path, nil)
+	if err != nil || verified.Status != 200 {
+		return response{}, errors.New("shared limits may have changed, but verification failed; reopen the credential details before retrying")
+	}
+	var saved map[string]json.RawMessage
+	if json.Unmarshal(verified.Body, &saved) != nil {
+		return response{}, errors.New("Discobox returned invalid credential metadata after saving; reopen the credential details before retrying")
+	}
+	var id string
+	if json.Unmarshal(saved["id"], &id) != nil || id != req.RequestID {
+		return response{}, errors.New("Discobox did not confirm the saved credential identity; reopen its details before retrying")
+	}
+	for key, expected := range input.Limits {
+		if key == "host" {
+			var want, got string
+			if json.Unmarshal(expected, &want) != nil || (len(saved[key]) > 0 && json.Unmarshal(saved[key], &got) != nil) || strings.TrimSpace(strings.ToLower(want)) != strings.TrimSpace(strings.ToLower(got)) {
+				return response{}, errors.New("Discobox did not retain the requested host restriction; reopen the credential details before retrying")
+			}
+		} else {
+			var want, got int64
+			if json.Unmarshal(expected, &want) != nil || json.Unmarshal(saved[key], &got) != nil || want != got {
+				return response{}, errors.New("Discobox did not retain the requested lifetime limit; reopen the credential details before retrying")
+			}
+		}
+	}
+	return verified, nil
 }
