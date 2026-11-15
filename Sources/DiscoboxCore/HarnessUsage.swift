@@ -26,9 +26,7 @@ public enum QuotaParser {
         }
     }
     public static func date(_ text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        ServerDate.parse(text)
     }
     public static func parse(_ text: String, provider: String) -> [QuotaWindow] {
         guard let data = text.data(using: .utf8),

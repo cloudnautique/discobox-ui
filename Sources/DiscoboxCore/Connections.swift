@@ -147,6 +147,7 @@ public struct ConnectedBox: Identifiable, Sendable {
             else { browser.filter = .all; browser.archivedSelection.removeAll() }
         }
         activate(host.id)
+        if browser.filter != .archived, !browser.selectedBoxes.contains(location) { browser.selectBoxes([location]) }
         await host.workspace.selectBox(location.box)
     }
     public func disconnect(_ id: String) {

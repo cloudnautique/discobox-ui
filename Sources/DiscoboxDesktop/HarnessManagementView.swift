@@ -202,7 +202,7 @@ struct HarnessManagementView: View {
     private func bindingLifetime(_ binding: JSONValue) -> String {
         let value = binding["expiresAt"].string
         guard !value.isEmpty else { return "No binding expiry" }
-        if let date = ISO8601DateFormatter().date(from: value) { return "Expires " + date.formatted(date: .abbreviated, time: .shortened) }
+        if let date = ServerDate.parse(value) { return "Expires " + date.formatted(date: .abbreviated, time: .shortened) }
         return "Expires " + value
     }
     private var changeReview: some View {

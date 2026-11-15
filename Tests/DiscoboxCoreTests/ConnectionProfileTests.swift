@@ -2,6 +2,27 @@ import Foundation
 import Testing
 @testable import DiscoboxCore
 
+@Test func savedEndpointsRejectUnsupportedComponentsWithoutEchoingCredentials() throws {
+    for raw in ["https://user:private-token@example.test", "https://example.test/api?query=1", "https://example.test/#fragment", "unix://?query=1", "unix://user:private-token@/tmp/server.sock", "discobox://d1-fixture/sbx_fixture", "iroh://d1-fixture?unsupported=1"] {
+        do {
+            _ = try ConnectionProfiles.validated(name: "Fixture", endpoint: raw, relayURLs: "", directOnly: false)
+            Issue.record("Accepted unsupported endpoint components")
+        } catch { #expect(!error.localizedDescription.contains("private-token")) }
+    }
+    for raw in ["unix://", "https://example.test/api", "discobox://d1-fixture?addr=127.0.0.1:1234"] {
+        #expect(try ConnectionProfiles.validated(name: "Fixture", endpoint: raw, relayURLs: "", directOnly: false).endpoint == raw)
+    }
+}
+
+@Test func timestampsShareFractionalAndWholeSecondParsing() throws {
+    let fractional = try #require(ServerDate.parse("2026-11-14T12:34:56.123Z"))
+    let whole = try #require(ServerDate.parse("2026-11-14T12:34:56Z"))
+    #expect(abs(fractional.timeIntervalSince(whole) - 0.123) < 0.001)
+    #expect(QuotaParser.date("2026-11-14T12:34:56.123Z") == fractional)
+    #expect(ResourceValue.date("2026-11-14T12:34:56.123Z") == fractional)
+    #expect(ServerDate.parse("invalid") == nil)
+}
+
 @Test func localComputerNamesAreConsistentAndKeepTheSameConnectionIdentity() {
     let local = ConnectionProfile.localComputer(name: "  Studio Mac  ")
     #expect(local.name == "Studio Mac")

@@ -56,6 +56,15 @@ import DiscoboxCore
         ghostty_surface_mouse_pos(surface, Double(size.cell_width_px) * 9.5 / scale, y, mods)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, mods)
         guard ghostty_surface_has_selection(surface) else { throw DiscoboxError("Ordinary dragging cannot select disconnected output") }
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(GhosttyTerminalView.copy(_:)), keyEquivalent: "c")
+        let pasteItem = NSMenuItem(title: "Paste", action: #selector(GhosttyTerminalView.paste(_:)), keyEquivalent: "v")
+        let selectItem = NSMenuItem(title: "Select All", action: #selector(GhosttyTerminalView.selectAll(_:)), keyEquivalent: "a")
+        guard view.responds(to: copyItem.action), view.responds(to: pasteItem.action),
+              view.validateUserInterfaceItem(copyItem), view.validateUserInterfaceItem(selectItem),
+              !view.validateUserInterfaceItem(pasteItem) else {
+            throw DiscoboxError("Disconnected terminal must expose native Copy/Select All and disable Paste")
+        }
+        view.paste(nil) // Must not consult the system clipboard or send input.
         let clipboard = NSPasteboard.withUniqueName()
         defer { clipboard.releaseGlobally() }
         view.copyOutput(to: clipboard)

@@ -12,18 +12,34 @@ struct WorkspaceView: View {
     @State private var showInbox = false
     @State private var boxAction: BoxActionRequest?
     @State private var archiveSelection: Set<String> = []
+    @State private var boxSelection: Set<String> = []
+    @State private var bulkAction: BulkBoxActionRequest?
     @State private var bulkPurge: BulkPurgeRequest?
     private var sidebarSelection: Binding<Set<String>> {
         Binding(get: {
-            currentFilter == .archived ? archiveSelection : Set(workspace.sandboxID.map { [$0] } ?? [])
+            currentFilter == .archived ? archiveSelection : boxSelection
         }, set: { ids in
             if currentFilter == .archived {
                 archiveSelection = ids
             } else {
-                let id = ids.first(where: { $0 != workspace.sandboxID }) ?? ids.first
-                Task { await workspace.selectBox(id) }
+                boxSelection = ids
+                if ids.count == 1, let id = ids.first {
+                    Task { guard boxSelection == ids else { return }; await workspace.selectBox(id) }
+                }
             }
         })
+    }
+    private var selectedLocalBoxes: [Sandbox] {
+        let ids = currentFilter == .archived ? archiveSelection : boxSelection
+        return workspace.sandboxes.filter { ids.contains($0.id) }
+    }
+    private var localBulkActions: [BoxAction] {
+        guard !selectedLocalBoxes.isEmpty else { return [] }
+        return BoxAction.bulkActions.filter { action in selectedLocalBoxes.allSatisfy { action.isAvailable(for: $0) && !workspace.pendingBoxActions.contains($0.id) } }
+    }
+    private func confirmLocalBulk(_ action: BoxAction) {
+        guard localBulkActions.contains(action) else { return }
+        bulkAction = .init(boxes: selectedLocalBoxes, action: action, connection: workspace.connectionID, computer: workspace.endpointLabel)
     }
     private var selectedArchives: [Sandbox] { workspace.sandboxes.filter { archiveSelection.contains($0.id) } }
     private var canPurgeSelection: Bool {
@@ -211,6 +227,17 @@ struct WorkspaceView: View {
                         .background(BoxPullToRefresh { await refreshBoxes() })
                         .help("Pull down at the top to refresh, or press ⌘R.")
                         .accessibilityAction(named: Text("Refresh boxes")) { Task { await refreshBoxes() } }
+                        if currentFilter != .archived && connections == nil && boxSelection.count > 1 {
+                            HStack {
+                                Text("\(boxSelection.count) selected").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Menu("Actions…") {
+                                    ForEach(localBulkActions) { action in
+                                        Button(action.title + " Selected…", systemImage: action.symbol) { confirmLocalBulk(action) }
+                                    }
+                                }.disabled(localBulkActions.isEmpty)
+                            }.padding(10)
+                        }
                         if currentFilter == .archived && connections == nil {
                             Divider()
                             VStack(alignment: .leading, spacing: 8) {
@@ -357,6 +384,12 @@ struct WorkspaceView: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
+        .sheet(item: $bulkAction) { request in
+            BulkBoxActionSheet(request: request) { accepted in boxSelection.subtract(accepted); archiveSelection.subtract(accepted) }.environment(workspace)
+        }
+        .onChange(of: workspace.sandboxID) { _, id in
+            if connections == nil, let id, !boxSelection.contains(id) { boxSelection = [id] }
+        }
         .sheet(item: $bulkPurge) { request in
             BulkPurgeSheet(request: request) { purged in archiveSelection.subtract(purged) }.environment(workspace)
         }
@@ -365,12 +398,12 @@ struct WorkspaceView: View {
             let id = ids.count == 1 ? ids.first : nil
             Task { await workspace.selectBox(id) }
         }
-        .onChange(of: visibleBoxes.map(\.id)) { _, ids in archiveSelection.formIntersection(Set(ids)) }
+        .onChange(of: visibleBoxes.map(\.id)) { _, ids in archiveSelection.formIntersection(Set(ids)); boxSelection.formIntersection(Set(ids)) }
         .onChange(of: currentFilter) { _, filter in
-            archiveSelection.removeAll()
+            archiveSelection.removeAll(); boxSelection.removeAll()
             if filter == .archived && connections == nil { Task { await workspace.selectBox(nil) } }
         }
-        .onChange(of: workspace.connectionID) { archiveSelection.removeAll() }
+        .onChange(of: workspace.connectionID) { archiveSelection.removeAll(); boxSelection.removeAll() }
         .sheet(item: $boxAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
         .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
@@ -410,9 +443,13 @@ struct WorkspaceView: View {
     private func sidebarRow(_ box: Sandbox) -> some View {
         BoxRow(box: box).tag(box.id)
             .contextMenu {
-                if currentFilter == .archived, archiveSelection.count > 1, archiveSelection.contains(box.id) {
-                    Button("Purge \(archiveSelection.count) Selected Boxes…", role: .destructive) { confirmBulkPurge() }
-                        .disabled(!canPurgeSelection)
+                if selectedLocalBoxes.count > 1, selectedLocalBoxes.contains(where: { $0.id == box.id }) {
+                    ForEach(localBulkActions) { action in
+                        Button(action.title + " Selected…", systemImage: action.symbol) { confirmLocalBulk(action) }
+                    }
+                    if currentFilter == .archived {
+                        Button("Purge \(archiveSelection.count) Selected Boxes…", role: .destructive) { confirmBulkPurge() }.disabled(!canPurgeSelection)
+                    }
                 } else {
                 Button("Open workspace") { Task { await workspace.selectBox(box.id) } }
                 Button("Open shell") { openShell(in: box) }.disabled(!box.isRunning || workspace.pendingBoxActions.contains(box.id))

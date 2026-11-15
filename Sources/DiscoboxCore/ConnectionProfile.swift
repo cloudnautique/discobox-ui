@@ -65,11 +65,24 @@ public enum ConnectionProfiles {
     }
     public static func validated(name: String, endpoint: String, relayURLs: String, directOnly: Bool) throws -> ConnectionProfile {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let endpoint = normalizedEndpoint(endpoint)
+        let rawEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let rawParts = URLComponents(string: rawEndpoint), rawParts.user == nil, rawParts.password == nil, rawParts.fragment == nil else {
+            throw DiscoboxError("Server addresses must not contain credentials or a fragment.")
+        }
+        let endpoint = normalizedEndpoint(rawEndpoint)
         guard !name.isEmpty else { throw DiscoboxError("Give this connection a name.") }
         guard let parts = URLComponents(string: endpoint), let scheme = parts.scheme?.lowercased(),
               ["unix", "discobox", "iroh", "http", "https"].contains(scheme) else {
             throw DiscoboxError("Use a Discobox address, an absolute unix:/// socket address, or an HTTP/S URL.")
+        }
+        if ["unix", "http", "https"].contains(scheme), rawParts.query != nil {
+            throw DiscoboxError("Socket and HTTP/S server addresses must not contain a query.")
+        }
+        if ["discobox", "iroh"].contains(scheme) {
+            guard parts.path.isEmpty || parts.path == "/", parts.port == nil,
+                  (parts.queryItems ?? []).allSatisfy({ $0.name == "addr" && $0.value?.isEmpty == false }) else {
+                throw DiscoboxError("Use the server’s peer address, with only optional ?addr=IP:port hints.")
+            }
         }
         if scheme == "unix" {
             guard endpoint == "unix://" || ((parts.host ?? "").isEmpty && parts.path.hasPrefix("/")) else {

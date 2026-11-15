@@ -180,6 +180,7 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
     #expect(local.workspace.sandboxes.first { $0.id == "demo-ui" }?.isRunning == true)
     #expect(connections.active === local)
     #expect(remote.workspace.clearingPools.isEmpty && remote.workspace.pendingBoxActions.isEmpty)
+    #expect(remote.workspace.poolCleanupStatus["local"]?.contains("Caches cleared") == true)
     #expect(await remoteClient.clears.count == 1)
     #expect(await remoteClient.clears.first?.poolID == "local")
     await #expect(throws: DiscoboxError.self) { _ = try await remote.workspace.clearPoolCache(poolID: "remote", connection: UUID()) }
@@ -196,6 +197,7 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
     await client.holdNext(.clearPoolCache)
     let clearing = Task { try await workspace.clearPoolCache(poolID: "local", connection: workspace.connectionID) }
     await waitForResourceBlock(client)
+    #expect(workspace.poolCleanupStatus["local"]?.contains("clearing caches") == true)
     await #expect(throws: DiscoboxError.self) { try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local") }
     await #expect(throws: DiscoboxError.self) { try await workspace.performBoxAction(.start, boxID: "demo-api", connection: workspace.connectionID) }
     #expect(await client.creates.isEmpty)
@@ -203,5 +205,7 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
     do { _ = try await clearing.value; Issue.record("Expected cleanup response failure") } catch { }
     #expect(await client.clears.count == 1)
     #expect(workspace.clearingPools.isEmpty && workspace.pendingBoxActions.isEmpty)
+    #expect(workspace.poolCleanupStatus["local"]?.contains("could not be confirmed") == true)
     workspace.disconnect()
+    #expect(workspace.poolCleanupStatus.isEmpty)
 }

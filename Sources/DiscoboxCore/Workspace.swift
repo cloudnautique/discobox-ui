@@ -7,6 +7,7 @@ public final class Workspace {
     public private(set) var usage = HarnessUsage()
     public private(set) var resources = PoolResources()
     public private(set) var clearingPools: Set<String> = []
+    public private(set) var poolCleanupStatus: [String: String] = [:]
     public private(set) var cachedHarnesses: [Harness] = []
     public private(set) var defaultHarnessID: String?
     @ObservationIgnored private var harnessesReadAt: Date?
@@ -192,7 +193,7 @@ public final class Workspace {
         terminalInventory = nil
         transportEndpoint = ""
         usage = HarnessUsage()
-        resources.cancel(); resources = PoolResources(); clearingPools = []
+        resources.cancel(); resources = PoolResources(); clearingPools = []; poolCleanupStatus = [:]
         harnessLoad?.cancel(); harnessLoad = nil
         cachedHarnesses = []; harnessesReadAt = nil
         approvals = []; approvalError = nil; approvalRequest = UUID()
@@ -649,6 +650,7 @@ public final class Workspace {
         let boxes = sandboxes.filter { $0.poolId == poolID }.map(\.id)
         guard pendingBoxActions.isDisjoint(with: boxes) else { throw DiscoboxError("A box action is in progress on this pool.") }
         clearingPools.insert(poolID); pendingBoxActions.formUnion(boxes)
+        poolCleanupStatus[poolID] = "Stopping boxes and clearing caches… You can close Resources while cleanup continues."
         for id in boxes { recentBoxes.removeValue(forKey: id) }
         if boxes.contains(sandboxID ?? "") { clearSelection() }
         beforeRequest(boxes)
@@ -660,6 +662,7 @@ public final class Workspace {
         do {
             let result = try await client.decode(.init(.clearPoolCache, projectID: projectID, poolID: poolID), as: CacheClearResult.self)
             guard connection == connectionID else { throw CancellationError() }
+            poolCleanupStatus[poolID] = "Caches cleared. \(result.stoppedSandboxIds.count) boxes stopped. Start them when you are ready."
             resources.invalidate(poolID, at: now())
             await refresh()
             guard connection == connectionID else { throw CancellationError() }
@@ -667,7 +670,10 @@ public final class Workspace {
             guard connection == connectionID else { throw CancellationError() }
             return result
         } catch {
-            if connection == connectionID { resources.invalidate(poolID, at: now()); await refresh() }
+            if connection == connectionID {
+                poolCleanupStatus[poolID] = "Cleanup could not be confirmed: \(error.localizedDescription) It may still be running. Refresh before trying again; nothing was retried."
+                resources.invalidate(poolID, at: now()); await refresh()
+            }
             throw error
         }
     }

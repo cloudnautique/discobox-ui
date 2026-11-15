@@ -300,17 +300,14 @@ private struct HarnessUsageContent: View {
     private func age(_ date: Date, now: Date) -> String {
         let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
         if minutes == 0 { return "Updated just now" }
-        if minutes < 60 { return "\(minutes > 15 ? "Observed" : "Updated") \(minutes)m ago" }
-        if minutes < 1440 { return "Observed \(minutes / 60)h ago" }
-        return "Observed \(minutes / 1440)d ago"
+        return (minutes > 15 ? "Observed " : "Updated ") + ServerDate.relative(date, to: now)
     }
     private func reset(_ date: Date?, now: Date) -> String {
         guard let date else { return "Reset unknown" }
         let seconds = date.timeIntervalSince(now)
         guard seconds > 0 else { return "Awaiting update" }
         if seconds < 86400 {
-            let minutes = max(1, Int(ceil(seconds / 60)))
-            return minutes < 60 ? "Resets in \(minutes)m" : "Resets in \(minutes / 60)h \(minutes % 60)m"
+            return "Resets " + ServerDate.relative(now.addingTimeInterval(max(60, ceil(seconds / 60) * 60)), to: now)
         }
         if Calendar.current.isDateInTomorrow(date) { return "Tomorrow " + date.formatted(.dateTime.hour().minute()) }
         return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())

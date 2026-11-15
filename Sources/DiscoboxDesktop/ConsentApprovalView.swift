@@ -71,11 +71,13 @@ struct ConsentApprovalView: View {
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
                 if receipt == nil && !resolved && item.supported {
-                    Button(approveTitle) { submit(approve: true) }.buttonStyle(.bordered)
+                    Button(isRefresh ? "Dismiss request" : "Deny", role: .destructive) { submit(approve: false) }
+                        .disabled(busy)
+                    Button(approveTitle) { submit(approve: true) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                         .disabled(busy || !reviewed || isRefresh && value.isEmpty)
                         .accessibilityIdentifier("approval.confirmConsent")
-                    Button(isRefresh ? "Dismiss request" : "Deny", role: .destructive) { submit(approve: false) }
-                        .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(busy)
+                } else if receipt != nil || resolved {
+                    Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }
             }
         }.onAppear { connection = workspace.connectionID }

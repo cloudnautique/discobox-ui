@@ -12,6 +12,7 @@ import Observation
     public var matchAnyTag = false
     public var activityFilter: BoxActivityFilter?
     public var archivedSelection: Set<BoxLocation> = []
+    public var selectedBoxes: Set<BoxLocation> = []
     public private(set) var revealLocation: BoxLocation?
     public private(set) var revealRevision = UUID()
     public func requestReveal(_ location: BoxLocation) {
@@ -19,7 +20,13 @@ import Observation
         revealRevision = UUID()
     }
     public init() {}
-    public func toggleComputer(_ id: String) { computerID = computerID == id ? nil : id; archivedSelection.removeAll() }
+    public func toggleComputer(_ id: String) { computerID = computerID == id ? nil : id; archivedSelection.removeAll(); selectedBoxes.removeAll() }
+
+    public func selectBoxes(_ ids: Set<BoxLocation>) {
+        let added = ids.subtracting(selectedBoxes)
+        let target = added.sorted { $0.connection == $1.connection ? $0.box < $1.box : $0.connection < $1.connection }.first?.connection ?? ids.first?.connection
+        selectedBoxes = Set(ids.filter { $0.connection == target })
+    }
 
     /// Keep the existing bulk-purge contract: one captured host at a time,
     /// even when archives from several hosts are visible together.

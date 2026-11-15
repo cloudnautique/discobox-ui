@@ -10,6 +10,7 @@ struct ComputersSidebar: View {
     let tagKey: String
     @State private var resourceHost: ConnectionSession?
     @State private var purge: SidebarPurgeRequest?
+    @State private var bulkAction: SidebarBulkActionRequest?
     @AppStorage("sidebarComputersExpanded") private var computersExpanded = true
     @AppStorage("collapsedComputerRepositoryGroups") private var collapsedData = "[]"
     private var browser: BoxBrowser { connections.browser }
@@ -25,7 +26,7 @@ struct ComputersSidebar: View {
     private func collapseKey(_ group: String) -> String { [browser.computerID ?? "all", grouping, tagKey, group].joined(separator: "\n") }
     private var selection: Binding<Set<BoxLocation>> {
         Binding(get: {
-            browser.filter == .archived ? browser.archivedSelection : Set(workspace.sandboxID.map { [BoxLocation(connection: connections.activeID, box: $0)] } ?? [])
+            browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
         }, set: { ids in
             // Ignore selection callbacks from the outgoing host's native List.
             guard connections.active.workspace === workspace else { return }
@@ -36,10 +37,30 @@ struct ComputersSidebar: View {
                     Task { await connections.selectBox(location) }
                 }
             }
-            else if let location = ids.first(where: { $0.box != workspace.sandboxID || $0.connection != connections.activeID }) ?? ids.first {
-                Task { await connections.selectBox(location) }
+            else {
+                let allowed = Set(items.map(\.location) + pins.map(\.id) + [connections.browserSelectionPin?.location].compactMap { $0 })
+                browser.selectBoxes(ids.intersection(allowed))
+                let selected = browser.selectedBoxes
+                if selected.count == 1, let location = selected.first {
+                    Task {
+                        guard browser.selectedBoxes == selected else { return }
+                        await connections.selectBox(location)
+                    }
+                }
             }
         })
+    }
+    private var selectedItems: [ConnectedBox] {
+        let ids = browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
+        return items.filter { ids.contains($0.location) }
+    }
+    private var availableBulkActions: [BoxAction] {
+        guard !selectedItems.isEmpty, Set(selectedItems.map { $0.location.connection }).count == 1 else { return [] }
+        return BoxAction.bulkActions.filter { action in
+            selectedItems.allSatisfy { item in
+                action.isAvailable(for: item.box) && connections.session(item.location.connection)?.workspace.pendingBoxActions.contains(item.box.id) == false
+            }
+        }
     }
     private var selectedArchives: [ConnectedBox] { items.filter { browser.archivedSelection.contains($0.location) } }
     private var canPurge: Bool {
@@ -109,7 +130,7 @@ struct ComputersSidebar: View {
                         }
                     }
             }
-            if browser.filter == .archived { archiveActions }
+            if browser.filter == .archived || browser.selectedBoxes.count > 1 { archiveActions }
         }
         .background(DiscoboxAppearance.sidebar)
         .sheet(item: $resourceHost) { host in
@@ -118,6 +139,16 @@ struct ComputersSidebar: View {
                 .environment(runtimes.runtime(host.id).terminals)
                 .environment(runtimes.runtime(host.id).forwards)
                 .environment(runtimes.runtime(host.id).desktops)
+        }
+        .sheet(item: $bulkAction) { target in
+            BulkBoxActionSheet(request: target.request) { accepted in
+                browser.selectedBoxes = Set(browser.selectedBoxes.filter { $0.connection != target.host.id || !accepted.contains($0.box) })
+                browser.archivedSelection = Set(browser.archivedSelection.filter { $0.connection != target.host.id || !accepted.contains($0.box) })
+            }
+            .environment(target.host.workspace)
+            .environment(runtimes.runtime(target.host.id).terminals)
+            .environment(runtimes.runtime(target.host.id).forwards)
+            .environment(runtimes.runtime(target.host.id).desktops)
         }
         .sheet(item: $purge) { target in
             BulkPurgeSheet(request: target.request) { purged in
@@ -133,8 +164,11 @@ struct ComputersSidebar: View {
                 await connections.selectBox(location)
             }
         }
-        .onChange(of: items.map(\.location)) { _, visible in browser.archivedSelection.formIntersection(Set(visible)) }
-        .onChange(of: browser.filter) { browser.archivedSelection.removeAll() }
+        .onChange(of: items.map(\.location)) { _, visible in
+            browser.archivedSelection.formIntersection(Set(visible))
+            browser.selectedBoxes.formIntersection(Set(visible + pins.map(\.id) + [connections.browserSelectionPin?.location].compactMap { $0 }))
+        }
+        .onChange(of: browser.filter) { browser.archivedSelection.removeAll(); browser.selectedBoxes.removeAll() }
     }
     private var computerSection: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -150,7 +184,7 @@ struct ComputersSidebar: View {
                 }.foregroundStyle(.secondary).contentShape(Rectangle())
             }.buttonStyle(.plain).padding(.horizontal, 8).padding(.vertical, 6)
             if computersExpanded {
-                Button { browser.computerID = nil; browser.archivedSelection.removeAll() } label: {
+                Button { browser.computerID = nil; browser.archivedSelection.removeAll(); browser.selectedBoxes.removeAll() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.stack.3d.up").frame(width: 16).foregroundStyle(.secondary)
                         Text("All computers").fontWeight(browser.computerID == nil ? .semibold : .regular)
@@ -209,19 +243,35 @@ struct ComputersSidebar: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             HStack {
-                Text("\(browser.archivedSelection.count) selected").font(.caption).foregroundStyle(.secondary)
+                Text("\(selectedItems.count) selected").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Select All") { selectAllArchives() }.buttonStyle(.borderless).font(.caption).disabled(items.isEmpty)
-                    .help("Select archived boxes on one computer at a time.")
+                    .help("Select visible boxes on one computer at a time.")
             }
-            Button("Purge Selected…", systemImage: "trash", role: .destructive) { confirmPurge() }.disabled(!canPurge)
-            Text("Bulk purge applies to one computer at a time.").font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Menu("Actions…") {
+                    ForEach(availableBulkActions) { action in
+                        Button(action.title + " Selected…", systemImage: action.symbol) { confirmBulkAction(action) }
+                    }
+                }.disabled(availableBulkActions.isEmpty)
+                if browser.filter == .archived {
+                    Button("Purge Selected…", systemImage: "trash", role: .destructive) { confirmPurge() }.disabled(!canPurge)
+                }
+            }
+            Text("⌘-click or ⇧-click to select boxes. Bulk actions apply to one computer at a time.").font(.caption2).foregroundStyle(.secondary)
         }.padding(10)
     }
     private func selectAllArchives() {
-        let preferred = browser.computerID ?? browser.archivedSelection.first?.connection ?? connections.activeID
+        let preferred = browser.computerID ?? selectedItems.first?.location.connection ?? connections.activeID
         let target = items.contains { $0.location.connection == preferred } ? preferred : items.first?.location.connection
-        browser.selectArchives(Set(items.filter { $0.location.connection == target }.map(\.location)))
+        let ids = Set(items.filter { $0.location.connection == target }.map(\.location))
+        if browser.filter == .archived { browser.selectArchives(ids) } else { browser.selectBoxes(ids) }
+    }
+    private func confirmBulkAction(_ action: BoxAction) {
+        guard availableBulkActions.contains(action), let first = selectedItems.first,
+              let host = connections.session(first.location.connection) else { return }
+        bulkAction = .init(host: host, request: .init(boxes: selectedItems.map(\.box), action: action,
+            connection: host.workspace.connectionID, computer: host.profile.displayName))
     }
     private func confirmPurge() {
         guard canPurge, let first = selectedArchives.first, let host = connections.session(first.location.connection) else { return }
@@ -231,7 +281,7 @@ struct ComputersSidebar: View {
         Group {
             if let host = connections.session(item.location.connection) {
                 ComputerBoxRow(box: item.box, host: host, showComputer: browser.computerID == nil,
-                    canPurgeSelection: canPurge, purgeSelection: confirmPurge)
+                    canPurgeSelection: canPurge, purgeSelection: confirmPurge, bulkActions: availableBulkActions, chooseBulkAction: confirmBulkAction)
                     .environment(host.workspace)
                     .environment(runtimes.runtime(host.id).terminals)
                     .environment(runtimes.runtime(host.id).forwards)
@@ -279,6 +329,12 @@ private struct CreatedBoxRow: View {
     }
 }
 
+private struct SidebarBulkActionRequest: Identifiable {
+    let id = UUID()
+    let host: ConnectionSession
+    let request: BulkBoxActionRequest
+}
+
 private struct SidebarPurgeRequest: Identifiable {
     let id = UUID()
     let host: ConnectionSession
@@ -311,18 +367,26 @@ private struct ComputerBoxRow: View {
     let showComputer: Bool
     let canPurgeSelection: Bool
     let purgeSelection: () -> Void
+    let bulkActions: [BoxAction]
+    let chooseBulkAction: (BoxAction) -> Void
     @Environment(Connections.self) private var connections
     @State private var action: BoxActionRequest?
     private var bulkSelection: Bool {
-        connections.browser.filter == .archived && connections.browser.archivedSelection.count > 1 &&
-            connections.browser.archivedSelection.contains(.init(connection: host.id, box: box.id))
+        selectedIDs.count > 1 && selectedIDs.contains(.init(connection: host.id, box: box.id))
+    }
+    private var selectedIDs: Set<BoxLocation> {
+        connections.browser.filter == .archived ? connections.browser.archivedSelection : connections.browser.selectedBoxes
     }
     var body: some View {
         BoxRow(box: box, computer: showComputer ? host.profile.displayName : nil)
             .contextMenu {
                 if bulkSelection {
-                    Button("Purge \(connections.browser.archivedSelection.count) Selected Boxes…", role: .destructive, action: purgeSelection)
-                        .disabled(!canPurgeSelection)
+                    ForEach(bulkActions) { action in
+                        Button("\(action.title) \(selectedIDs.count) Selected Boxes…", systemImage: action.symbol) { chooseBulkAction(action) }
+                    }
+                    if connections.browser.filter == .archived {
+                        Button("Purge \(selectedIDs.count) Selected Boxes…", role: .destructive, action: purgeSelection).disabled(!canPurgeSelection)
+                    }
                 } else {
                 Button("Open Workspace") { Task { await connections.selectBox(.init(connection: host.id, box: box.id)) } }
                 Button("Open Shell") {

@@ -343,7 +343,7 @@ struct KeybindingSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Text("Tools (o), additional agents (c), and remote lifecycle commands are not implemented in this GUI yet. Their CLI bindings are not forwarded into your remote shell.")
+                Text("Use Open tools for box tools, advanced review, and additional agent sessions. Use the box’s action menu for start, stop, archive, repair, and upgrade. Command keys are handled by this app and are not forwarded to the remote shell.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden)

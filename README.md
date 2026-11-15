@@ -92,6 +92,13 @@ retries. Authorization or certificate errors need your attention before retrying
   progress or errors; **Reveal** shows a running box hidden by your filters.
 - Use the boxes menu to group and filter the list. **All computers** shows boxes
   from every connected server.
+- Select boxes with **⌘-click** or **⇧-click**, then use **Actions…** or the
+  selection’s context menu to start, stop, archive, restore, upgrade, or repair
+  them. Bulk actions apply to one computer at a time and show a confirmation
+  listing the boxes and pools. Only actions available for every selected box
+  are offered. Archived boxes also support **Purge Selected…**.
+- **Resources → Stop Selected…** asks for confirmation. Cache cleanup can keep
+  running after you close its dialog; reopen Resources for its status and result.
 - Use **Desktop** in the title bar to open the box’s desktop, or **Services**
   for its ports. The inspector also holds box details and tags.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.

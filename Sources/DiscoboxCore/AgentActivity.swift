@@ -69,9 +69,7 @@ public struct AgentActivity: Equatable, Sendable {
         default: state = .unavailable; label = "Activity unavailable"
         }
     }
-    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-    private static let whole = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
-    static func date(_ value: String) -> Date? { (try? fractional.parse(value)) ?? (try? whole.parse(value)) }
+    static func date(_ value: String) -> Date? { ServerDate.parse(value) }
     static func primarySession(_ status: JSONValue) -> JSONValue {
         var latest: JSONValue = .null, started = Date.distantPast
         for session in status["sessions"].array where session["primary"] == .bool(true) {

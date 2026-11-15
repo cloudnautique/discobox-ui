@@ -67,7 +67,7 @@ public enum ResourceValue {
     }
     public static func date(_ text: String) -> Date? {
         guard !text.isEmpty else { return nil }
-        return (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text)) ?? (try? Date.ISO8601FormatStyle().parse(text))
+        return ServerDate.parse(text)
     }
     public static func bytes(_ value: Double?) -> String {
         guard let value = nonnegative(value), value < Double(Int64.max) else { return "—" }

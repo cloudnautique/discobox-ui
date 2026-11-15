@@ -54,7 +54,7 @@ import DiscoboxCore
             MainActor.assumeIsolated {
                 guard let userdata else { return }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
-                guard let surface = view.surface else { return }
+                guard !view.readOnly, let surface = view.surface else { return }
                 let text = NSPasteboard.general.string(forType: .string) ?? ""
                 text.withCString { ghostty_surface_complete_clipboard_request(surface, $0, state, false) }
             }
@@ -63,10 +63,10 @@ import DiscoboxCore
             MainActor.assumeIsolated {
                 guard let userdata, let text else { return }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
-                guard let surface = view.surface else { return }
+                guard !view.readOnly, let surface = view.surface else { return }
                 if StudioAppKitDialog.confirm(title: kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE ? "Paste into terminal?" : "Allow terminal clipboard access?",
                     symbol: "doc.on.clipboard", message: "The terminal requested clipboard content. Pasting multiple lines can execute commands.", confirmTitle: "Allow") {
-                    ghostty_surface_complete_clipboard_request(surface, text, state, true)
+                    if !view.readOnly { ghostty_surface_complete_clipboard_request(surface, text, state, true) }
                 }
             }
         }
@@ -340,7 +340,7 @@ struct TerminalSurface: NSViewRepresentable {
     }
 }
 
-@MainActor final class GhosttyTerminalView: NSView, @preconcurrency NSTextInputClient {
+@MainActor final class GhosttyTerminalView: NSView, @preconcurrency NSTextInputClient, NSUserInterfaceValidations {
     fileprivate weak var presentationContainer: TerminalContainerView?
     private(set) var surface: ghostty_surface_t?
     var ended: (() -> Void)?
@@ -507,14 +507,25 @@ struct TerminalSurface: NSViewRepresentable {
         guard window?.firstResponder === self else { return false }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
             switch event.charactersIgnoringModifiers {
-            case "c": binding("copy_to_clipboard"); return true
-            case "v": binding("paste_from_clipboard"); return true
-            case "a": binding("select_all"); return true
+            case "c": copy(nil); return true
+            case "v": paste(nil); return true
+            case "a": selectAll(nil); return true
             default: return false
             }
         }
         if event.modifierFlags.contains(.control) { keyDown(with: event); return true }
         return false
+    }
+    @objc func copy(_ sender: Any?) { binding("copy_to_clipboard") }
+    @objc func paste(_ sender: Any?) { if !readOnly { binding("paste_from_clipboard") } }
+    override func selectAll(_ sender: Any?) { binding("select_all") }
+    @objc func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(copy(_:)): return surface.map(ghostty_surface_has_selection) == true
+        case #selector(paste(_:)): return !readOnly && surface != nil && NSPasteboard.general.string(forType: .string) != nil
+        case #selector(selectAll(_:)): return surface != nil
+        default: return false
+        }
     }
     func sendLiteral(_ text: String) {
         guard !readOnly else { return }

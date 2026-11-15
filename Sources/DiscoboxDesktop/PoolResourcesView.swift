@@ -14,7 +14,7 @@ struct PoolResourcesView: View {
     @State private var selection: Set<String> = []
     @State private var sort = "disk"
     @State private var clearRequest: PoolCacheClearRequest?
-    @State private var stopping = false
+    @State private var stopRequest: BulkBoxActionRequest?
     @State private var actionError: String?
     private var pool: ResourcePool? { workspace.resources.pools.first { $0.id == poolID } }
     private var boxes: [Sandbox] { workspace.sandboxes.filter { $0.poolId == poolID } }
@@ -26,7 +26,7 @@ struct PoolResourcesView: View {
             return order == .orderedSame ? lhs.id < rhs.id : order == .orderedAscending
         }
     }
-    private var busy: Bool { workspace.clearingPools.contains(poolID) || stopping }
+    private var busy: Bool { workspace.clearingPools.contains(poolID) }
     private var selectedRunning: [Sandbox] { boxes.filter { selection.contains($0.id) && BoxAction.stop.isAvailable(for: $0) } }
     var body: some View {
         StudioConfirmation(title: "Resources", symbol: "gauge.with.dots.needle.33percent", subtitle: computer, width: 860) {
@@ -44,6 +44,9 @@ struct PoolResourcesView: View {
                     if workspace.resources.isRefreshing { ProgressView().controlSize(.small) }
                     Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.resources.isRefreshing || busy)
                 }.disabled(busy)
+                if let status = workspace.poolCleanupStatus[poolID] {
+                    Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 if let error = workspace.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                 if let pool {
                     TimelineView(.periodic(from: .now, by: 15)) { context in
@@ -79,16 +82,17 @@ struct PoolResourcesView: View {
         } footer: {
             HStack {
                 if let pool {
-                    Button(stopping ? "Stopping…" : "Stop Selected") { stopSelected() }.disabled(selectedRunning.isEmpty || busy)
+                    Button("Stop Selected…") {
+                        stopRequest = .init(boxes: selectedRunning, action: .stop, connection: workspace.connectionID, computer: computer)
+                    }.disabled(selectedRunning.isEmpty || busy)
                     Button("Network & Trust…") { networkPool = .init(pool: pool, connection: workspace.connectionID) }.disabled(busy || !workspace.isConnected)
                     Button("Clear Caches…", role: .destructive) { clearRequest = .init(pool: pool, connection: workspace.connectionID) }
                         .disabled(busy || !workspace.isConnected).accessibilityIdentifier("resources.clearCaches")
                 }
                 Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction).disabled(busy)
+                Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction)
             }
         }.frame(height: 690)
-            .interactiveDismissDisabled(busy)
             .onChange(of: poolID) { selection = []; actionError = nil }
             .task(id: workspace.connectionID) {
                 let generation = workspace.connectionID
@@ -98,6 +102,9 @@ struct PoolResourcesView: View {
             }
             .sheet(item: $networkPool) { request in
                 PoolNetworkView(poolID: request.pool.id, computer: computer, connection: request.connection).environment(workspace)
+            }
+            .sheet(item: $stopRequest) { request in
+                BulkBoxActionSheet(request: request).environment(workspace)
             }
             .sheet(item: $clearRequest) { request in
                 PoolCacheClearSheet(request: request, computer: computer)
@@ -165,25 +172,7 @@ struct PoolResourcesView: View {
             }.frame(maxHeight: 110)
         }
     }
-    private func stopSelected() {
-        let targets = selectedRunning, generation = workspace.connectionID
-        stopping = true; actionError = nil
-        Task {
-            var failures: [String] = []
-            for box in targets {
-                do {
-                    try await workspace.performBoxAction(.stop, boxID: box.id, connection: generation, refreshAfter: false) {
-                        terminals?.closeBox(box.id, connection: generation)
-                        forwards?.close(box: box.id); desktops?.close(box: box.id)
-                    }
-                }
-                catch { failures.append(box.displayName + ": " + error.localizedDescription) }
-            }
-            if generation == workspace.connectionID { await workspace.refresh() }
-            actionError = failures.isEmpty ? nil : failures.joined(separator: "\n")
-            stopping = false
-        }
-    }
+
 }
 
 struct ResourceHealthNotice: View {
@@ -243,7 +232,10 @@ struct PoolCacheClearSheet: View {
                     Text("Removes shared package and tool caches, Docker build caches, proxy downloads, and images pushed to the pool registry. Pushed images must be pushed again.")
                     Text("Workspaces, source files, configuration, and secrets are kept. Boxes are not restarted automatically.").fontWeight(.medium)
                     if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
-                    if working { ProgressView("Stopping boxes and clearing caches…") }
+                    if working {
+                        ProgressView("Stopping boxes and clearing caches…")
+                        Text("Close this window to keep working. Progress and the result remain in Resources.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }.font(.callout)
         } footer: {
@@ -251,7 +243,7 @@ struct PoolCacheClearSheet: View {
                 HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
             } else {
                 HStack {
-                    Button(failure == nil ? "Cancel" : "Close") { dismiss() }.keyboardShortcut(.cancelAction).disabled(working)
+                    Button(working || failure != nil ? "Close" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                     Spacer()
                     Button("Stop Boxes & Clear Caches", role: .destructive) { clear() }
                         .buttonStyle(.borderedProminent).tint(.red)
@@ -259,7 +251,7 @@ struct PoolCacheClearSheet: View {
                         .accessibilityIdentifier("resources.confirmClear")
                 }
             }
-        }.interactiveDismissDisabled(working)
+        }
     }
     private func clear() {
         working = true
