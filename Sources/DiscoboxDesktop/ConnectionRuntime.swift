@@ -77,12 +77,15 @@ struct ConnectedWorkspace: View {
     let runtimes: ConnectionRuntimes
     let commands: WorkspaceCommands
     @State private var notifications = ApprovalNotifications.shared
+    @State private var boxActions = BoxActionPresentation()
     private var workspace: Workspace { connections.active.workspace }
     var body: some View {
         let runtime = runtimes.runtime(connections.activeID)
         WorkspaceView()
-            .id(connections.activeID)
+            // Keep the shared List and its native swipe controls alive when
+            // selection activates another computer. Detail panes own their IDs.
             .environment(connections)
+            .environment(boxActions)
             .environment(runtimes)
             .environment(workspace)
             .environment(runtime.terminals)
@@ -93,12 +96,26 @@ struct ConnectedWorkspace: View {
             .background {
                 ZStack { ForEach(connections.sessions) { host in ConnectionLifecycle(connections: connections, session: host, runtime: runtimes.runtime(host.id)) } }
             }
-            .onChange(of: connections.activeID, initial: true) {
+            .onChange(of: connections.activeID, initial: true) { old, new in
+                if old != new {
+                    commands.showTools = false
+                    commands.showApprovals = false
+                }
                 commands.restoreAgentLayout(); commands.cancelPrefix()
                 commands.install(workspace: workspace, connections: connections)
             }
             .onChange(of: workspace.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in commands.cancelPrefix() }
+            .sheet(item: $boxActions.request) { target in
+                let runtime = runtimes.runtime(target.host.id)
+                BoxActionSheet(request: .init(box: target.box, action: target.action, connection: target.connection))
+                    .environment(target.host.workspace)
+                    .environment(connections)
+                    .environment(runtime.terminals)
+                    .environment(runtime.forwards)
+                    .environment(runtime.desktops)
+                    .id(target.id)
+            }
             .sheet(item: $notifications.presentation) { target in
                 ApprovalSheet(item: target.item).environment(target.workspace).environment(connections)
             }

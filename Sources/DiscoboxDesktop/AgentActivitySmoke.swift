@@ -98,6 +98,7 @@ import DiscoboxCore
 private struct ActivitySmokeHost: View {
     let hub: Connections
     @State private var runtimes = ConnectionRuntimes()
+    @State private var boxActions = BoxActionPresentation()
     @State private var commands: WorkspaceCommands
     init(hub: Connections, defaults: UserDefaults) {
         self.hub = hub
@@ -111,7 +112,7 @@ private struct ActivitySmokeHost: View {
             Divider()
             ComputersSidebar(grouping: "repository", tagKey: "")
         }.background(DiscoboxAppearance.sidebar)
-            .environment(hub).environment(hub.active.workspace).environment(runtimes).environment(commands)
+            .environment(hub).environment(hub.active.workspace).environment(runtimes).environment(commands).environment(boxActions)
     }
 }
 

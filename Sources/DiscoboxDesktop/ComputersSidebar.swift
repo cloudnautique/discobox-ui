@@ -6,6 +6,7 @@ struct ComputersSidebar: View {
     @Environment(ConnectionRuntimes.self) private var runtimes
     @Environment(Workspace.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
+    @Environment(BoxActionPresentation.self) private var boxActions
     let grouping: String
     let tagKey: String
     @State private var resourceHost: ConnectionSession?
@@ -28,7 +29,7 @@ struct ComputersSidebar: View {
         Binding(get: {
             browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
         }, set: { ids in
-            // Ignore selection callbacks from the outgoing host's native List.
+            // Ignore callbacks carrying an obsolete workspace environment.
             guard connections.active.workspace === workspace else { return }
             if browser.filter == .archived {
                 let archives = Set(items.filter { $0.box.isArchived }.map(\.location))
@@ -281,7 +282,10 @@ struct ComputersSidebar: View {
         Group {
             if let host = connections.session(item.location.connection) {
                 ComputerBoxRow(box: item.box, host: host, showComputer: browser.computerID == nil,
-                    canPurgeSelection: canPurge, purgeSelection: confirmPurge, bulkActions: availableBulkActions, chooseBulkAction: confirmBulkAction)
+                    canPurgeSelection: canPurge, purgeSelection: confirmPurge, bulkActions: availableBulkActions, chooseBulkAction: confirmBulkAction,
+                    chooseAction: { action, connection in
+                        boxActions.present(action, box: item.box, on: host, connection: connection)
+                    })
                     .environment(host.workspace)
                     .environment(runtimes.runtime(host.id).terminals)
                     .environment(runtimes.runtime(host.id).forwards)
@@ -369,8 +373,8 @@ private struct ComputerBoxRow: View {
     let purgeSelection: () -> Void
     let bulkActions: [BoxAction]
     let chooseBulkAction: (BoxAction) -> Void
+    let chooseAction: (BoxAction, UUID) -> Void
     @Environment(Connections.self) private var connections
-    @State private var action: BoxActionRequest?
     private var bulkSelection: Bool {
         selectedIDs.count > 1 && selectedIDs.contains(.init(connection: host.id, box: box.id))
     }
@@ -378,6 +382,8 @@ private struct ComputerBoxRow: View {
         connections.browser.filter == .archived ? connections.browser.archivedSelection : connections.browser.selectedBoxes
     }
     var body: some View {
+        let connection = host.workspace.connectionID
+        let pending = host.workspace.pendingBoxActions.contains(box.id)
         BoxRow(box: box, computer: showComputer ? host.profile.displayName : nil)
             .contextMenu {
                 if bulkSelection {
@@ -397,16 +403,21 @@ private struct ComputerBoxRow: View {
                     }
                 }.disabled(!box.isRunning)
                 Divider()
-                BoxActionMenu(box: box) { action = .init(box: box, action: $0, connection: host.workspace.connectionID) }
+                BoxActionMenu(box: box) { chooseAction($0, connection) }
                 }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if BoxAction.archive.isAvailable(for: box) { Button { action = .init(box: box, action: .archive, connection: host.workspace.connectionID) } label: { Label("Archive", systemImage: "archivebox") }.tint(.orange) }
+                if BoxAction.archive.isAvailable(for: box) {
+                    Button { chooseAction(.archive, connection) } label: { Label("Archive", systemImage: "archivebox") }
+                        .tint(.orange).disabled(pending)
+                }
             }
             .swipeActions(edge: .leading, allowsFullSwipe: false) {
                 let power: BoxAction = box.isRunning ? .stop : .start
-                if power.isAvailable(for: box) { Button { action = .init(box: box, action: power, connection: host.workspace.connectionID) } label: { Label(power.title, systemImage: power.symbol) }.tint(box.isRunning ? .orange : .green) }
+                if power.isAvailable(for: box) {
+                    Button { chooseAction(power, connection) } label: { Label(power.title, systemImage: power.symbol) }
+                        .tint(box.isRunning ? .orange : .green).disabled(pending)
+                }
             }
-            .sheet(item: $action) { BoxActionSheet(request: $0).environment(host.workspace).id($0.id) }
     }
 }

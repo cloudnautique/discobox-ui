@@ -27,6 +27,8 @@ import GhosttyKit
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             try await wait { commands.window === window }
+            try await wait { descendants(window.contentView!).contains { $0 is NSTableView } }
+            let sidebarTable = descendants(window.contentView!).compactMap { $0 as? NSTableView }.first!
             func identity(_ host: ConnectionSession) -> TerminalIdentity {
                 TerminalIdentity(connection: host.workspace.connectionID, endpoint: host.workspace.transportEndpoint, project: host.workspace.projectID!, box: "demo-ui", exec: host.workspace.execID!, demo: true)
             }
@@ -60,6 +62,9 @@ import GhosttyKit
             let remoteTerminal = resources.runtime(studio.id).terminals.session(remoteID)
             try await wait { remoteTerminal.view.window === window }
             try await fillsPane(remoteTerminal.view)
+            guard descendants(window.contentView!).contains(where: { $0 === sidebarTable }) else {
+                throw DiscoboxError("Switching computers recreated the sidebar and its native row controls")
+            }
             guard localTerminal !== remoteTerminal, localTerminal.view.surface != nil else { throw DiscoboxError("Host switch replaced the retained local terminal") }
             commands.perform(.newShell)
             try await wait { studio.workspace.execs.contains(where: \.isShell) }
@@ -74,6 +79,9 @@ import GhosttyKit
             }
             guard resources.runtime(local.id).terminals.session(localID) === localTerminal else { throw DiscoboxError("Local terminal was recreated on return") }
             try await fillsPane(localTerminal.view)
+            guard descendants(window.contentView!).contains(where: { $0 === sidebarTable }) else {
+                throw DiscoboxError("Returning to a computer recreated the sidebar")
+            }
             // Start in local Archived, then choose the remote destination in
             // the actual New Box sheet. Success must reveal the remote box.
             hub.browser.filter = .archived

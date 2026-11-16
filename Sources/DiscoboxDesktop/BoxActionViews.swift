@@ -36,6 +36,17 @@ struct BoxActionSheet: View {
     @State private var startedAt: Date?
     @FocusState private var fieldFocused: Bool
     private var computer: String? { connections?.sessions.first { $0.workspace === workspace }?.profile.displayName }
+    private var availabilityIssue: String? {
+        guard workspace.isConnected, request.connection == workspace.connectionID else {
+            return "This computer disconnected or reconnected. Cancel and choose the box again."
+        }
+        guard let box = workspace.sandboxes.first(where: { $0.id == request.box.id }), request.action.isAvailable(for: box) else {
+            return "The box’s state changed. This action is no longer available."
+        }
+        if workspace.pendingBoxActions.contains(box.id) { return "An action is already in progress for this box." }
+        if workspace.clearingPools.contains(box.poolId ?? "") { return "This pool is clearing its caches. Wait for cleanup to finish." }
+        return nil
+    }
     var body: some View {
         StudioConfirmation(title: "\(request.action.title) box", symbol: request.action.symbol,
                            subtitle: computer, destructive: request.action == .purge) {
@@ -54,6 +65,7 @@ struct BoxActionSheet: View {
                     }
                 }
                 if let failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
+                if !working, let availabilityIssue { Text(availabilityIssue).foregroundStyle(.secondary) }
                 if working, let startedAt {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         VStack(alignment: .leading, spacing: 8) {
@@ -97,7 +109,7 @@ struct BoxActionSheet: View {
                 }.buttonStyle(.borderedProminent).tint(request.action == .purge ? .red : DiscoboxAppearance.accent)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("boxAction.confirm")
-                    .disabled(working || request.connection != workspace.connectionID || (request.action == .purge && confirmation != "DELETE") || (request.action == .rename && (name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.utf8.count > 128)))
+                    .disabled(working || availabilityIssue != nil || (request.action == .purge && confirmation != "DELETE") || (request.action == .rename && (name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.utf8.count > 128)))
             }
         }
             .onAppear { name = request.box.displayName; fieldFocused = request.action == .rename || request.action == .purge }

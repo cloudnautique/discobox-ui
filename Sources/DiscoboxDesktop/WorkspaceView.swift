@@ -5,6 +5,7 @@ struct WorkspaceView: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(Workspace.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
+    @Environment(BoxActionPresentation.self) private var boxActions: BoxActionPresentation?
     @State private var refreshingBoxes = false
     @State private var contentWidth: CGFloat = 0
     @State private var sidebarWidth: CGFloat = 282
@@ -287,7 +288,7 @@ struct WorkspaceView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
 
-                    }
+                    }.id(workspace.connectionID)
                 }
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in contentWidth = width; fitInspector() }
@@ -405,10 +406,13 @@ struct WorkspaceView: View {
         }
         .onChange(of: workspace.connectionID) { archiveSelection.removeAll(); boxSelection.removeAll() }
         .sheet(item: $boxAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
-        .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
-        .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
-        .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
         .sheet(isPresented: $commands.showCommands) { CommandsSheet().environment(commands) }
+        .background {
+            // These dialogs belong to one computer. Only their presentation
+            // anchor resets on a host change, not the shared sidebar.
+            WorkspaceHostDialogs(showInbox: $showInbox).id(workspace.connectionID)
+        }
+        .onChange(of: connections?.activeID) { showInbox = false }
         .background { WorkspaceDialogs() }
         .sheet(isPresented: $showTagFilters) {
             TagFilterSheet(choices: tagChoices, selected: tagBinding, matchAny: matchAnyBinding)
@@ -438,7 +442,13 @@ struct WorkspaceView: View {
         }
     }
     private func choose(_ action: BoxAction, box: Sandbox) {
-        boxAction = BoxActionRequest(box: box, action: action, connection: workspace.connectionID)
+        if let connections, let boxActions,
+           let host = connections.sessions.first(where: { $0.workspace === workspace }) {
+            boxActions.present(action, box: box, on: host, connection: workspace.connectionID)
+        } else {
+            guard !workspace.pendingBoxActions.contains(box.id) else { return }
+            boxAction = BoxActionRequest(box: box, action: action, connection: workspace.connectionID)
+        }
     }
     private func sidebarRow(_ box: Sandbox) -> some View {
         BoxRow(box: box).tag(box.id)
@@ -460,8 +470,10 @@ struct WorkspaceView: View {
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if currentFilter == .archived && BoxAction.purge.isAvailable(for: box) {
                     Button(role: .destructive) { choose(.purge, box: box) } label: { Label("Purge", systemImage: "trash") }
+                        .disabled(workspace.pendingBoxActions.contains(box.id))
                 } else if BoxAction.archive.isAvailable(for: box) {
                     Button { choose(.archive, box: box) } label: { Label("Archive", systemImage: "archivebox") }.tint(.orange)
+                        .disabled(workspace.pendingBoxActions.contains(box.id))
                 }
                 if BoxAction.rename.isAvailable(for: box) {
                     Button { choose(.rename, box: box) } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
@@ -471,6 +483,7 @@ struct WorkspaceView: View {
             .swipeActions(edge: .leading, allowsFullSwipe: false) {
                 if BoxAction.unarchive.isAvailable(for: box) {
                     Button { choose(.unarchive, box: box) } label: { Label("Restore", systemImage: "arrow.uturn.backward") }.tint(.blue)
+                        .disabled(workspace.pendingBoxActions.contains(box.id))
                 } else {
                     let power: BoxAction = box.isRunning ? .stop : .start
                     if power.isAvailable(for: box) {
@@ -495,6 +508,19 @@ struct WorkspaceView: View {
             }
         } else { await workspace.refresh() }
         refreshingBoxes = false
+    }
+}
+
+private struct WorkspaceHostDialogs: View {
+    @Environment(Workspace.self) private var workspace
+    @Environment(WorkspaceCommands.self) private var commands
+    @Binding var showInbox: Bool
+    var body: some View {
+        @Bindable var commands = commands
+        Color.clear.frame(width: 0, height: 0)
+            .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
+            .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
+            .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
     }
 }
 
