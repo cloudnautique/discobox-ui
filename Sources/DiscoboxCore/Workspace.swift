@@ -35,6 +35,7 @@ public final class Workspace {
     public private(set) var endpointLabel = ""
     public private(set) var transportEndpoint = ""
     public private(set) var lastRefresh: Date?
+    public private(set) var boxesObservedAt: Date?
     public private(set) var inventoryObservedAt: String?
     public private(set) var servicesObservedAt: String?
     public private(set) var connectionError: String?
@@ -139,7 +140,7 @@ public final class Workspace {
             let included: Bool
             switch filter {
             case .all: included = !box.isArchived
-            case .running: included = box.isRunning
+            case .running: included = powerStatus(for: box).isRunning
             case .attention: included = !box.isArchived && (box.matchesAttention || activity(for: box).needsYou)
             case .archived: included = box.isArchived
             }
@@ -205,6 +206,7 @@ public final class Workspace {
         isConnecting = false
         isDemo = false
         lastRefresh = nil
+        boxesObservedAt = nil
         connectionError = nil
         recovery.reset(); recoveryInFlight = false; recoveryCount = 0
         clearSelection()
@@ -257,6 +259,7 @@ public final class Workspace {
             let result = try await client.decode(.init(.sandboxes, projectID: projectID), as: SandboxesResponse.self)
             guard current == revision, request == listRequest, !Task.isCancelled else { return }
             let updatedBoxes = (result.sandboxes ?? []).filter { !$0.isDeleted && !confirmedPurges.contains($0.id) }
+            boxesObservedAt = now()
             if sandboxes != updatedBoxes { sandboxes = updatedBoxes }
             let running = Set(updatedBoxes.filter(\.isRunning).map(\.id))
             recentBoxes = recentBoxes.filter { running.contains($0.key) && now().timeIntervalSince($0.value.loadedAt) < 30 }
@@ -384,6 +387,13 @@ public final class Workspace {
     public var hasLiveTerminal: Bool {
         isConnected && selectedBox?.isRunning == true && selectedExec?.acceptsInput == true &&
         inventoryObservedAt == nil && execID != "primary"
+    }
+
+    /// A retained view can briefly carry the previous host's terminal while
+    /// SwiftUI updates its environment. Never combine that exec with this box.
+    public func canAttachTerminal(_ terminal: Exec) -> Bool {
+        isConnected && !pendingBoxActions.contains(sandboxID ?? "") && selectedBox?.isRunning == true &&
+        terminal.acceptsInput && execs.contains(where: { $0.id == terminal.id && $0.acceptsInput }) && inventoryObservedAt == nil
     }
 
     /// Read a pane's saved state without changing keyboard/terminal selection.

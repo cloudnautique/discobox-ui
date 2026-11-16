@@ -201,11 +201,13 @@ struct ComputersSidebar: View {
                                 Text(host.profile.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if !host.workspace.approvals.isEmpty { Text("\(host.workspace.approvals.count)").font(.caption2).foregroundStyle(.orange) }
-                                ConnectionStatusBadge(workspace: host.workspace, compact: true)
                             }.font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Filter boxes on " + host.profile.displayName + ". Click again to show all computers.")
                             .accessibilityIdentifier("computers.filter." + host.id)
                             .accessibilityAddTraits(browser.computerID == host.id ? .isSelected : [])
+                        ComputerConnectionStatus(workspace: host.workspace, computer: host.profile.displayName) {
+                            connections.disconnect(host.id)
+                        }
                         ComputerResourceButton(workspace: host.workspace) { resourceHost = host }
                             .disabled(!host.workspace.isConnected).padding(.trailing, 6)
                     }.background(browser.computerID == host.id ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 6))

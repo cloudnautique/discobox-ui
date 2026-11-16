@@ -179,12 +179,13 @@ struct HarnessManagementView: View {
     private func credentialRow(_ binding: JSONValue) -> some View {
         let secret = manager.details["secrets"].array.first { $0["id"] == binding["secretId"] } ?? .null
         let oauth = secret["type"].string == "oauth"
+        let refreshable = oauth && secret["oauth"]["refreshable"] == .bool(true)
         let name = binding["secretName"].string.isEmpty ? "Saved credential" : binding["secretName"].string
         return DisclosureGroup {
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent("Environment variable", value: binding["envVar"].string)
                 LabeledContent("Shared access", value: bindingLifetime(binding))
-                Text(oauth ? "Refresh credentials are stored on the server. The provider may still require you to sign in again." : "This credential follows its issuer’s expiry policy.")
+                Text(refreshable ? "Refresh credentials are stored on the server. The provider may still require you to sign in again." : oauth ? "The server does not report a refreshable login. Sign in inside a box, then review and save the login to share it with new boxes." : "This credential follows its issuer’s expiry policy.")
                     .foregroundStyle(.secondary)
             }.font(.caption).padding(.top, 10).textSelection(.enabled)
         } label: {
@@ -192,7 +193,7 @@ struct HarnessManagementView: View {
                 Image(systemName: "key").foregroundStyle(DiscoboxAppearance.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name).font(.system(size: 13, weight: .medium))
-                    Text(oauth ? "Login saved · Refreshable OAuth" : "Credential saved")
+                    Text(refreshable ? "Login saved · Refreshable OAuth" : oauth ? "Login saved · Renewal not confirmed" : "Credential saved")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -387,13 +388,16 @@ struct HarnessManagementView: View {
         for controller in Array(windows.values) { controller.window.close() }
         windows.removeAll(); HarnessConsoleWindows.shared.closeAll()
     }
-    func open(_ harness: Harness, workspace: Workspace, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil) {
-        guard workspace.isConnected, !workspace.isDemo else { return }
+    @discardableResult
+    func open(_ harness: Harness, workspace: Workspace, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil, automatically: Bool = false) -> Bool {
+        guard workspace.isConnected, !workspace.isDemo else { return false }
+        // Never interrupt another sheet, management review, or inactive app.
+        if automatically, !NSApp.isActive || NSApp.keyWindow?.attachedSheet != nil || !windows.isEmpty { return false }
         let generation = workspace.connectionID
         let key = generation.uuidString + ":" + harness.id
         if let existing = windows[key] {
             if let sourceBoxID { existing.selectSource(sourceBoxID) }
-            existing.window.makeKeyAndOrderFront(nil); return
+            existing.window.makeKeyAndOrderFront(nil); return true
         }
         let host = connections?.sessions.first { $0.workspace === workspace }
         let manager = HarnessManagement(workspace: workspace, harnessID: harness.id)
@@ -409,6 +413,7 @@ struct HarnessManagementView: View {
                 }
             }, console: { HarnessConsoleWindows.shared.open(harness, workspace: workspace) }, onClose: { [weak self] in self?.windows.removeValue(forKey: key) })
         windows[key] = controller; controller.window.makeKeyAndOrderFront(nil)
+        return true
     }
 }
 

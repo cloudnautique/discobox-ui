@@ -1,16 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/discobox-ai/discobox/pkg/execstream/resume"
 	"golang.org/x/term"
 )
+
+var attachGeneration atomic.Int64
 
 type attachFrames struct {
 	net.Conn
@@ -58,16 +61,28 @@ func openAttach(ctx context.Context, endpoint string, req request, event func(re
 	// Each physical attach is preceded by observational checks. Never call any
 	// lifecycle route, and never retry an ended/cached terminal.
 	dial := func(ctx context.Context) (execstream.Conn, error) {
+		attempt := attachGeneration.Add(1)
+		diagnose(diagnosticEvent{Event: "attach_dial", Generation: attempt})
 		checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		if err := b.requireRunning(checkCtx, req); err != nil {
 			return nil, err
 		}
 		address := b.base + "/api/projects/" + req.ProjectID + "/sandboxes/" + req.SandboxID + "/execs/" + req.ExecID + "/attach?replay=true"
-		ws, _, err := websocket.Dial(checkCtx, address, &websocket.DialOptions{HTTPClient: b.client})
+		headers := make(http.Header)
+		if transportDiagnostics != nil {
+			headers.Set("X-Discobox-UI-Attachment", transportDiagnostics.base.Session)
+		}
+		ws, response, err := websocket.Dial(checkCtx, address, &websocket.DialOptions{HTTPClient: b.client, HTTPHeader: headers})
 		if err != nil {
+			status := 0
+			if response != nil {
+				status = response.StatusCode
+			}
+			diagnose(diagnosticEvent{Event: "attach_dial_failed", Generation: attempt, Reason: diagnosticReason(err), HTTPStatus: status})
 			return nil, err
 		}
+		diagnose(diagnosticEvent{Event: "attach_connected", Generation: attempt})
 		ws.SetReadLimit(20 << 20)
 		connectionCtx, cancelConnection := context.WithCancel(ctx)
 		conn := &attachFrames{Conn: websocket.NetConn(connectionCtx, ws, websocket.MessageBinary), cancel: cancelConnection}
@@ -80,7 +95,9 @@ func openAttach(ctx context.Context, endpoint string, req request, event func(re
 					return
 				case <-ticker.C:
 					pingCtx, cancelPing := context.WithTimeout(connectionCtx, 5*time.Second)
+					started := time.Now()
 					err := ws.Ping(pingCtx)
+					diagnose(diagnosticEvent{Event: "attach_ping", Generation: attempt, Reason: diagnosticReason(err), DurationMS: time.Since(started).Milliseconds()})
 					cancelPing()
 					if err != nil {
 						_ = conn.Close()
@@ -95,12 +112,18 @@ func openAttach(ctx context.Context, endpoint string, req request, event func(re
 	if err != nil {
 		return nil, err
 	}
+	ctx = observeAttachActions(ctx)
 	c, err := resume.New(ctx, initial, resume.Options{
 		Dial: dial,
 		Done: func(ctx context.Context) (bool, error) {
 			return b.attachDone(ctx, req)
 		},
-		Event: event,
+		Event: func(e resume.Event) {
+			diagnose(diagnosticEvent{Event: "attach_" + string(e.State), Reason: diagnosticReason(e.Err)})
+			if event != nil {
+				event(e)
+			}
+		},
 	})
 	if err != nil {
 		_ = initial.Close()
@@ -154,101 +177,14 @@ func (b *bridge) attachDone(ctx context.Context, req request) (bool, error) {
 	return false, readErr
 }
 
-// pumpAttach never sends CloseInput or Signal: closing the local surface only
-// detaches this client. Ctrl-C typed in the raw PTY is ordinary remote input.
-func pumpAttach(ctx context.Context, c execstream.Conn, input io.Reader, output io.Writer, sizes <-chan frame.ResizePayload) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer c.Close()
-	done := make(chan error, 3)
-	go func() { <-ctx.Done(); _ = c.Close() }()
-	go func() {
-		for {
-			f, err := c.ReadFrame()
-			if err != nil {
-				done <- err
-				return
-			}
-			switch f.Type {
-			case frame.Stdout, frame.Stderr:
-				if _, err = output.Write(f.Payload); err != nil {
-					done <- err
-					return
-				}
-			case frame.Error:
-				done <- fmt.Errorf("terminal: %s", f.Payload)
-				return
-			case frame.Exit:
-				done <- nil
-				return
-			}
-		}
-	}()
-	// runAttach queues the current PTY size before entering this pump. Apply it
-	// before Ready releases the host's screen replay, matching resume ordering.
-	select {
-	case size, ok := <-sizes:
-		if ok && size.Cols > 0 && size.Rows > 0 {
-			p, _ := json.Marshal(size)
-			if err := c.WriteFrame(frame.Resize, p); err != nil {
-				return err
-			}
-		}
-	default:
-	}
-	if err := c.WriteFrame(frame.Ready, nil); err != nil {
-		return err
-	}
-	go func() {
-		buf := make([]byte, 32<<10)
-		for {
-			n, err := input.Read(buf)
-			if n > 0 {
-				if e := c.WriteFrame(frame.Input, buf[:n]); e != nil {
-					done <- e
-					return
-				}
-			}
-			if err != nil {
-				done <- err
-				return
-			}
-		}
-	}()
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case size, ok := <-sizes:
-				if !ok {
-					return
-				}
-				if size.Cols == 0 || size.Rows == 0 {
-					continue
-				}
-				p, _ := json.Marshal(size)
-				if err := c.WriteFrame(frame.Resize, p); err != nil {
-					done <- err
-					return
-				}
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-done:
-		return err
-	}
-}
-
 func runAttach(endpoint string, req request, statusPath string) (resultErr error) {
 	status, closeStatus := attachStatusWriter(statusPath)
 	defer closeStatus()
 	status("connecting", "")
 	defer func() {
-		if resultErr != nil {
+		if errors.Is(resultErr, errTerminalStalled) {
+			status("output-stalled", "Terminal output is still stalled. Previous output is read-only; reconnect when ready.")
+		} else if resultErr != nil {
 			status("disconnected", resultErr.Error())
 		} else {
 			status("ended", "")
@@ -262,12 +198,17 @@ func runAttach(endpoint string, req request, statusPath string) (resultErr error
 		return fmt.Errorf("terminal PTY required: %w", err)
 	}
 	defer term.Restore(fd, old)
-	writeTerminalAppearance(os.Stdout)
-	c, err := openAttach(ctx, endpoint, req, func(event resume.Event) { status(string(event.State), "") })
+	tty, err := openLocalTerminal()
 	if err != nil {
 		return err
 	}
-	status("connected", "")
+	defer tty.close()
+	// Appearance setup is small but uses the same bounded writer as remote data.
+	var appearance bytes.Buffer
+	writeTerminalAppearance(&appearance)
+	if err := tty.write(ctx, appearance.Bytes(), func(int) {}); err != nil {
+		return err
+	}
 	resize := make(chan os.Signal, 1)
 	signal.Notify(resize, syscall.SIGWINCH)
 	defer signal.Stop(resize)
@@ -290,7 +231,7 @@ func runAttach(endpoint string, req request, statusPath string) (resultErr error
 			}
 		}
 	}()
-	return pumpAttach(ctx, c, os.Stdin, os.Stdout, sizes)
+	return runTerminalRecovery(ctx, endpoint, req, tty, sizes, status)
 }
 
 // One watcher owns the previous size and the latest-only queue. Polling reads

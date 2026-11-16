@@ -8,7 +8,7 @@ struct ConnectionStatusBadge: View {
     private var title: String {
         if workspace.isConnecting { return "Connecting…" }
         if workspace.recovery.isAttempting { return "Reconnecting…" }
-        if workspace.connectionError != nil { return workspace.recovery.requiresAction ? "Needs attention" : "Retrying…" }
+        if workspace.connectionError != nil { return workspace.recovery.requiresAction ? "Connection issue" : "Retrying…" }
         return workspace.isDemo ? "Demo" : workspace.isConnected ? "Connected" : "Disconnected"
     }
     var body: some View {
@@ -18,6 +18,45 @@ struct ConnectionStatusBadge: View {
             if !compact || workspace.connectionError != nil { Text(title).lineLimit(1) }
         }.font(.caption).foregroundStyle(.secondary).help(workspace.connectionError ?? title)
             .accessibilityElement(children: .ignore).accessibilityLabel(title)
+            .accessibilityValue(workspace.connectionError ?? "")
+    }
+}
+
+/// Separate from the computer filter: inspecting a failed host must not switch
+/// workspaces or hide boxes on other hosts.
+struct ComputerConnectionStatus: View {
+    let workspace: Workspace
+    let computer: String
+    let disconnect: () -> Void
+    @State private var showingDetails = false
+
+    var body: some View {
+        Group {
+            if workspace.connectionError != nil {
+                Button { showingDetails = true } label: {
+                    ConnectionStatusBadge(workspace: workspace, compact: true)
+                        .padding(.vertical, 7).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .help("Show connection issue for \(computer): \(workspace.connectionError ?? "")")
+                    .accessibilityLabel("Connection details for \(computer)")
+                    .accessibilityIdentifier("computer.connectionDetails")
+            } else {
+                ConnectionStatusBadge(workspace: workspace, compact: true)
+            }
+        }.popover(isPresented: $showingDetails) {
+            VStack(alignment: .leading, spacing: 16) {
+                StudioDialogHeader(title: "Connection", symbol: "network", subtitle: computer)
+                if workspace.connectionError != nil {
+                    ConnectionRecoveryBanner(workspace: workspace, computer: computer) {
+                        showingDetails = false
+                        disconnect()
+                    }
+                } else {
+                    Label(workspace.isConnected ? "Connected" : "Disconnected", systemImage: workspace.isConnected ? "checkmark.circle" : "network.slash")
+                    Text("There is no current connection error.").font(.caption).foregroundStyle(.secondary)
+                }
+            }.padding(20).frame(width: 520).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
+        }
     }
 }
 
@@ -50,8 +89,10 @@ struct ConnectionRecoveryBanner: View {
                 Button("Disconnect", action: disconnect)
             }
             if let error = workspace.connectionError {
-                DisclosureGroup("Details") { Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 4) }
-                    .font(.caption)
+                ScrollView {
+                    Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxHeight: 100)
             }
         }.padding(.horizontal, 16).padding(.vertical, 12)
             .background(DiscoboxAppearance.warning.opacity(0.07))

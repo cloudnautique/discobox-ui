@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/discobox-ai/discobox/pkg/endpoint"
+	"github.com/google/uuid"
 )
 
 type irohStartup struct {
@@ -122,7 +123,21 @@ func runIroh(raw string, identityOnly bool, input io.Reader, output io.Writer) e
 	if err != nil {
 		return err
 	}
-	if err := endpoint.ConfigureIroh(endpoint.IrohConfig{SecretKey: ephemeral, Issuer: issuer, RelayURLs: cfg.RelayURLs, DisableRelay: cfg.DirectOnly, DisableDiscovery: cfg.DirectOnly}); err != nil {
+	stopCapture := captureIrohStderr()
+	defer stopCapture()
+	if transportDiagnostics != nil {
+		if err := endpoint.SetIrohLogging(endpoint.IrohLogInfo, irohDiagnosticWriter{}); err != nil {
+			diagnose(diagnosticEvent{Event: "iroh_logging", Reason: diagnosticReason(err)})
+		}
+	}
+	diagnose(diagnosticEvent{Event: "iroh_path", Path: "unknown"})
+	if err := endpoint.ConfigureIroh(endpoint.IrohConfig{SecretKey: ephemeral, Issuer: issuer, RelayURLs: cfg.RelayURLs, DisableRelay: cfg.DirectOnly, DisableDiscovery: cfg.DirectOnly,
+		Reached: func(_ endpoint.IrohID, addresses []string) {
+			if len(addresses) > 0 {
+				diagnose(diagnosticEvent{Event: "iroh_direct_path_available", Path: "selection_unknown"})
+			}
+		},
+	}); err != nil {
 		return fmt.Errorf("initialize Iroh: %w", err)
 	}
 	base := http.DefaultTransport.(*http.Transport).Clone()
@@ -150,10 +165,11 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 	}
 	defer os.RemoveAll(dir)
 	socket := filepath.Join(dir, "api.sock")
-	listener, err := net.Listen("unix", socket)
+	rawListener, err := net.Listen("unix", socket)
 	if err != nil {
 		return err
 	}
+	listener := ownListener(rawListener)
 	defer listener.Close()
 	if err := os.Chmod(socket, 0600); err != nil {
 		return err
@@ -166,6 +182,7 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.Host = target.Host
+			r.Out.Header.Del("X-Discobox-UI-Attachment")
 			r.Out.Header.Del("Forwarded")
 			r.Out.Header.Del("X-Forwarded-For")
 			r.Out.Header.Del("X-Forwarded-Host")
@@ -173,8 +190,9 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 		},
 		Transport:     transport,
 		FlushInterval: -1,
-		ErrorLog:      log.New(io.Discard, "", 0),
+		ErrorLog:      log.New(proxyDiagnosticWriter{}, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			diagnose(diagnosticEvent{Event: "proxy_request_failed", Reason: diagnosticReason(err)})
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(irohProxyErrorStatus(err))
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Remote Discobox is unreachable or refused this peer. Check its Iroh listener, network, and peer enrollment. Transport error: " + err.Error()})
@@ -187,16 +205,26 @@ func servePrivateProxy(ctx context.Context, baseURL string, transport http.Round
 			http.NotFound(w, r)
 			return
 		}
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			related := ""
+			if id, err := uuid.Parse(r.Header.Get("X-Discobox-UI-Attachment")); err == nil {
+				related = id.String()
+			}
+			diagnose(diagnosticEvent{Event: "proxy_upgrade_started", RelatedSession: related})
+			defer diagnose(diagnosticEvent{Event: "proxy_upgrade_closed", RelatedSession: related})
+		}
 		proxy.ServeHTTP(w, r)
-	}), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10}
+	}), BaseContext: func(net.Listener) context.Context { return ctx }, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10}
 	defer server.Close()
 	if err := json.NewEncoder(output).Encode(map[string]string{"endpoint": "unix://" + socket, "peerID": peerID}); err != nil {
 		return err
 	}
+	diagnose(diagnosticEvent{Event: "proxy_ready", RelatedEndpoint: endpointHash("unix://" + socket)})
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	select {
 	case <-ctx.Done():
+		diagnose(diagnosticEvent{Event: "proxy_cancelled", Reason: diagnosticReason(ctx.Err())})
 		return nil
 	case err := <-done:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -217,4 +245,12 @@ func irohProxyErrorStatus(err error) int {
 		}
 	}
 	return http.StatusBadGateway
+}
+
+// Never persist ReverseProxy error text, which can contain remote-controlled data.
+type proxyDiagnosticWriter struct{}
+
+func (proxyDiagnosticWriter) Write(p []byte) (int, error) {
+	diagnose(diagnosticEvent{Event: "proxy_stream_error"})
+	return len(p), nil
 }

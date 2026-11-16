@@ -48,7 +48,9 @@ struct DiscoboxApp: App {
                     }
                     guard !didAttemptStartup else { return }
                     didAttemptStartup = true
+                    if ProcessInfo.processInfo.arguments.contains("--sidebar-swipe-smoke") || ProcessInfo.processInfo.arguments.contains("--sidebar-manual-swipe-smoke") { await SidebarSwipeSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--terminal-recovery-smoke") { await TerminalRecoverySmoke.run() }
+                    if ProcessInfo.processInfo.arguments.contains("--terminal-input-smoke") { await TerminalInputSmoke.run() }
                     if ProcessInfo.processInfo.arguments.contains("--box-link-smoke") { await BoxLinkSmoke.run() }
                     // Explicitly set the running app's Dock icon as well as the
                     // bundle icon, which Launch Services may cache across builds.

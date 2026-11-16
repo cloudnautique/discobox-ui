@@ -31,7 +31,10 @@ struct BoxWorkspaceView: View {
             if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
             if box.isRunning, let configuration = harnessConfiguration,
                !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
-                HarnessChangesBanner(box: box, harness: configuration) { manageHarness(configuration) }
+                HarnessChangesBanner(box: box, harness: configuration, review: { manageHarness(configuration) }, prompt: {
+                    HarnessSetupWindows.shared.open(configuration, workspace: workspace, connections: connections,
+                        commands: commands, sourceBoxID: box.id, automatically: true)
+                })
             }
             if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id) }
             // The agent is always the first child of this split. Never mount it
@@ -393,7 +396,7 @@ struct ConsoleView: View {
     @Environment(Workspace.self) private var workspace
     @State private var savedScreen: TerminalScreen?
     @State private var error: String?
-    private var live: Bool { workspace.isConnected && !workspace.pendingBoxActions.contains(workspace.sandboxID ?? "") && workspace.selectedBox?.isRunning == true && terminal.acceptsInput && workspace.inventoryObservedAt == nil }
+    private var live: Bool { workspace.canAttachTerminal(terminal) }
     var body: some View {
         VStack(spacing: 0) {
             if live, let project = workspace.projectID, let box = workspace.sandboxID {
@@ -416,7 +419,7 @@ struct ConsoleView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: "\(workspace.connectionID)-\(workspace.sandboxID ?? "")-\(terminal.id)-\(live)-\(terminal.status)") {
             savedScreen = nil; error = nil
-            guard !live else { return }
+            guard !live, workspace.execs.contains(where: { $0.id == terminal.id }) else { return }
             do {
                 let screen = try await workspace.terminalSnapshot(exec: terminal.id)
                 guard !Task.isCancelled else { return }
@@ -434,7 +437,10 @@ struct BoxInspector: View {
     var body: some View {
         Form {
             Section("Box") {
-                LabeledContent("Status") { StatusLabel(status: box.status) }
+                LabeledContent("Status") { StatusLabel(status: workspace.powerStatus(for: box).label) }
+                if !workspace.powerStatus(for: box).isCurrent {
+                    Text(workspace.powerStatus(for: box).message).font(.caption).foregroundStyle(.secondary)
+                }
                 detail("ID", box.id)
                 detail("Pool", box.poolId)
                 detail("Platform", box.platform)

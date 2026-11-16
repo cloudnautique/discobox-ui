@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DiscoboxCore
 
 struct HarnessLaunchSettings: View {
@@ -30,7 +31,9 @@ struct HarnessChangesBanner: View {
     let box: Sandbox
     let harness: Harness
     let review: () -> Void
+    let prompt: () -> Bool
     @Environment(Workspace.self) private var workspace
+    @AppStorage("harnessLoginPrompts.v1") private var presented = "[]"
     @State private var model: HarnessManagement?
     @State private var retry = 0
     private var key: String {
@@ -42,10 +45,15 @@ struct HarnessChangesBanner: View {
             if let model, model.canSave {
                 HStack(spacing: 10) {
                     Image(systemName: "square.and.arrow.up").foregroundStyle(DiscoboxAppearance.accent)
-                    Text(model.changes["state"].string == "saved-handoff-pending" ? "Shared settings saved · source box update pending" : "Login/settings changed")
-                        .font(.system(size: 12, weight: .medium))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.changes["state"].string == "saved-handoff-pending" ? "Shared settings saved · source box update pending" : model.changes["credentials"].array.isEmpty ? "Settings changed in this box" : "Save this login for new boxes")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(model.changes["state"].string == "saved-handoff-pending" ? "The shared changes are saved. Finish updating this box; you do not need to sign in again." : "Changes in this box are not shared yet. Review and save them to update \(harness.name) on this computer.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     Spacer(minLength: 12)
-                    Button("Review…", action: review).buttonStyle(.borderless).accessibilityIdentifier("harness.reviewBoxChanges")
+                    Button(model.changes["state"].string == "saved-handoff-pending" ? "Finish update…" : "Review and save…", action: review)
+                        .buttonStyle(.borderless).accessibilityIdentifier("harness.reviewBoxChanges")
                 }.padding(.horizontal, 16).padding(.vertical, 10).background(DiscoboxAppearance.chrome)
             } else if model?.error != nil {
                 HStack {
@@ -58,6 +66,18 @@ struct HarnessChangesBanner: View {
             let current = HarnessManagement(workspace: workspace, harnessID: harness.id)
             model = current; current.selectBox(box.id)
             await current.refreshPreview(includeSharedDetails: false)
+            if !Task.isCancelled { offerLoginReview() }
+        }.onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            offerLoginReview()
         }.onDisappear { model?.close() }
+    }
+
+    private func offerLoginReview() {
+        guard NSApp.isActive, let model, model.canSave, workspace.connectionError == nil,
+              workspace.sandboxID == box.id,
+              let identity = HarnessLoginPrompts.key(preview: model.changes, computer: workspace.endpointLabel,
+                  project: workspace.projectID ?? "", harness: harness.id, box: box.id),
+              !HarnessLoginPrompts.contains(identity, in: presented), prompt() else { return }
+        presented = HarnessLoginPrompts.recording(identity, in: presented)
     }
 }

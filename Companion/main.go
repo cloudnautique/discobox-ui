@@ -87,10 +87,22 @@ func main() {
 	demo := flag.Bool("terminal-demo", false, "Run an offline PTY fixture")
 	allowShell := flag.Bool("allow-shell", false, "Allow one explicitly requested new shell")
 	allowManage := flag.Bool("allow-manage", false, "Allow one explicit management, approval, tool launch, or file transfer request")
+	diagnosticConnection := flag.String("diagnostic-connection", "", "Opaque UI connection generation for diagnostics")
 	flag.Parse()
+	finishDiagnostics := func() {}
+	if *attach || *irohProxy {
+		component := "terminal"
+		if *irohProxy {
+			component = "iroh_proxy"
+		}
+		finishDiagnostics = startDiagnostics(component, *endpoint, *diagnosticConnection, request{ProjectID: *project, SandboxID: *box, ExecID: *execID})
+	}
+	defer finishDiagnostics()
 	if *configure != "" {
 		if err := runHarnessSetup(*endpoint, *project, *configure); err != nil {
 			fmt.Fprintf(os.Stderr, "\r\nSetup failed: %s\r\n", err)
+			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			finishDiagnostics()
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout, "\r\nSetup completed successfully. You can close this window.")
@@ -99,6 +111,8 @@ func main() {
 	if *irohProxy || *irohIdentity {
 		if err := runIroh(*endpoint, *irohIdentity, os.Stdin, os.Stdout); err != nil {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error(), "errorKind": companionErrorKind(err)})
+			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
@@ -110,6 +124,8 @@ func main() {
 	if *desktop {
 		if err := runDesktop(*desktopURL, os.Stdin, os.Stdout); err != nil {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error()})
+			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
@@ -117,6 +133,8 @@ func main() {
 	if *forward {
 		if err := runForward(*endpoint, request{ProjectID: *project, SandboxID: *box}, os.Stdin, os.Stdout); err != nil {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ports": []any{}, "error": err.Error()})
+			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
@@ -126,6 +144,8 @@ func main() {
 			if *attachStatus == "" {
 				fmt.Fprintf(os.Stderr, "\r\nTerminal disconnected: %s\r\n", err)
 			}
+			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			finishDiagnostics()
 			os.Exit(1)
 		}
 		return

@@ -24,11 +24,11 @@ import DiscoboxCore
         status.receive = { state, _ in states.append(state) }
         let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: status.path))
         defer { try? writer.close() }
-        for state in ["connecting", "connected", "reconnecting", "reconnected"] {
+        for state in ["connecting", "connected", "output-stalled", "reconnecting", "reconnected"] {
             try writer.write(contentsOf: Data("{\"state\":\"\(state)\"}\n".utf8))
             try await wait { states.last == state }
         }
-        guard states.count == 4 else { throw DiscoboxError("State channel lost or duplicated an event") }
+        guard states.count == 5 else { throw DiscoboxError("State channel lost or duplicated an event") }
         let path = status.path
         status.close()
         guard !FileManager.default.fileExists(atPath: path) else { throw DiscoboxError("Status FIFO was not removed") }
@@ -88,6 +88,10 @@ import DiscoboxCore
         defer { window.orderOut(nil) }
         try await wait { old.view.outputText().contains("Unicode: café 日本語") }
         old.view.processEnded()
+        old.connectionState = "output-stalled"
+        store.recoverInterrupted(inventory, connection: workspace.connectionID)
+        guard store.session(identity) === old, old.view.surface != nil else { throw DiscoboxError("Inventory refresh bypassed the output-stall retry limit") }
+        old.connectionState = "connected"
         store.recoverInterrupted(inventory, connection: workspace.connectionID)
         let replacement = store.session(identity)
         guard replacement !== old, old.view.surface == nil,

@@ -170,6 +170,32 @@ The [remote connection guide](docs/REMOTE.md) walks through the server config,
 starting its listener, finding the correct peer ID, and enrolling the Mac app.
 Adding a remote server keeps your local connection open.
 
+### Terminal connection diagnostics
+
+The app records transport metadata in
+`~/Library/Logs/Discobox/diagnostics/transport.jsonl`, with three rotated files and an
+8 MiB total log limit. Logs include attachment/box/terminal identifiers,
+connection attempts, ping results, byte counts, delivery progress, and proxy
+shutdown events. They exclude terminal contents, keystrokes, credentials, and
+raw transport error text. Logging is bounded and can drop records under load;
+subsequent records report the dropped count.
+
+For a freeze report, include these logs and the incident time. The
+`proxy_ready` event links a remote host's endpoint hash to its private socket;
+`proxy_upgrade_started` links it to the terminal helper's session. Packaged
+builds record both UI and upstream source revisions. A direct-path discovery
+is recorded separately from path selection: the current upstream API does not
+expose continuous direct/relay selection, so selection is reported as unknown.
+
+If local terminal delivery stops progressing for five seconds, or its bounded
+queue fills, the app closes that attachment and keeps the displayed output
+read-only with **Copy Text** and **Reconnect** available. It waits up to 30
+seconds for local delivery, then attempts screen replay with bounded retries.
+Three repeated stalls require an explicit reconnect. Verify the last command
+before re-entering it: input queued during the stall is not sent on recovery.
+Replay restores screen state, not a complete history of output while detached.
+This does not stop or restart the box.
+
 ## Building from source
 
 You do not need Xcode or the app’s source code to use a downloaded preview.

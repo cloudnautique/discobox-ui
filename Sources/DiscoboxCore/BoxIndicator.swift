@@ -7,8 +7,9 @@ public struct BoxIndicator: Sendable, Equatable {
     public let state: State
     public let isWorking: Bool
 
-    public init(box: Sandbox, activity: AgentActivity, reachable: Bool = true) {
-        if !reachable { state = .unavailable }
+    public init(box: Sandbox, activity: AgentActivity, reachable: Bool = true, power: BoxPowerStatus? = nil) {
+        let power = power ?? BoxPowerStatus(box: box, reachable: reachable)
+        if !reachable || !power.isCurrent { state = .unavailable }
         else if box.isArchived || box.isDeleted { state = .off }
         else if box.needsRepair || activity.state == .failed { state = .error }
         else if activity.needsYou || box.runningWarning != nil || box.isRepairing { state = .attention }

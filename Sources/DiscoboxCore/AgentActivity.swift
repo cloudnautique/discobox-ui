@@ -33,8 +33,12 @@ public struct AgentActivity: Equatable, Sendable {
         if pendingRequests > 0 {
             state = .approval; label = "Needs approval"; message = ""; return
         }
-        guard !box.isArchived, box.runtime.runtimeState == "running" || box.isRunning else {
+        guard box.isRunning else {
             state = .inactive; label = box.status; message = ""; return
+        }
+        let power = BoxPowerStatus(box: box, now: now)
+        guard power.isCurrent else {
+            state = .unavailable; label = power.label; message = power.message; return
         }
         let status = box.runtime.agentStatus ?? .null
         // The pool normally posts every 15 seconds. Expire the containing
@@ -116,6 +120,6 @@ public extension Sandbox {
 public extension Workspace {
     func activity(for box: Sandbox) -> AgentActivity {
         AgentActivity(box: box, pendingRequests: approvals.filter { $0.boxID == box.id }.count,
-                      reachable: isConnected && connectionError == nil, now: activityObservationTime)
+                      reachable: hasCurrentBoxInventory, now: activityObservationTime)
     }
 }

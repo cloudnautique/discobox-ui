@@ -49,12 +49,12 @@ public extension Connections {
                 let include: Bool
                 switch browser.filter {
                 case .all: include = !box.isArchived
-                case .running: include = box.isRunning
+                case .running: include = host.workspace.powerStatus(for: box).isRunning
                 case .attention: include = !box.isArchived && attention
                 case .archived: include = box.isArchived
                 }
                 guard include, BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) else { return nil }
-                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity)
+                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity, power: host.workspace.powerStatus(for: box))
                 return item.matches(browser.searchText) ? item : nil
             }
         }.sorted {

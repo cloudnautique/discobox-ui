@@ -48,7 +48,7 @@ import Darwin
             pending.removeSubrange(...end)
             struct Record: Decodable { let state: String; let error: String? }
             if let value = try? JSONDecoder().decode(Record.self, from: line),
-               ["connecting", "connected", "reconnecting", "reconnected", "disconnected", "ended"].contains(value.state) { receive?(value.state, value.error) }
+               ["connecting", "connected", "reconnecting", "reconnected", "disconnected", "ended", "output-stalled"].contains(value.state) { receive?(value.state, value.error) }
         }
     }
 

@@ -553,7 +553,7 @@ struct BoxChooser: View {
     private var results: [ConnectedBox] {
         let waiting = Set(workspace.approvals.map(\.boxID))
         let boxes = connections?.switcherBoxes ?? workspace.switcherBoxes.map {
-            ConnectedBox(location: .init(connection: "", box: $0.id), computer: "", box: $0, needsAttention: $0.matchesAttention || waiting.contains($0.id))
+            ConnectedBox(location: .init(connection: "", box: $0.id), computer: "", box: $0, needsAttention: $0.matchesAttention || waiting.contains($0.id), activity: workspace.activity(for: $0), power: workspace.powerStatus(for: $0))
         }
         return boxes.filter { (computerID.isEmpty || $0.location.connection == computerID) && $0.matches(query) }
             .sorted { group($0).precedes(group($1)) }
@@ -566,6 +566,7 @@ struct BoxChooser: View {
         }
     }
     private func group(_ item: ConnectedBox) -> Group {
+        if !item.power.isCurrent { return .init(title: "Status unknown", rank: 2) }
         if item.needsAttention { return .init(title: "Needs attention", rank: 0) }
         if item.box.isRunning { return .init(title: "Running", rank: 1) }
         if item.box.status == "Stopped" { return .init(title: "Stopped", rank: 3) }
@@ -704,7 +705,7 @@ private struct BoxChooserRow: View {
     }
     var body: some View {
         HStack(spacing: 10) {
-            BoxStatusLight(indicator: .init(box: item.box, activity: item.activity ?? AgentActivity(box: item.box)))
+            BoxStatusLight(indicator: .init(box: item.box, activity: item.activity ?? AgentActivity(box: item.box), power: item.power))
             VStack(alignment: .leading, spacing: 5) {
                 Text(item.box.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 if !metadata.isEmpty { Text(metadata).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
@@ -724,8 +725,8 @@ private struct BoxChooserRow: View {
         .background(selected ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(selected ? DiscoboxAppearance.accent.opacity(0.45) : .clear, lineWidth: 0.5))
         .contentShape(Rectangle())
-        .accessibilityValue(["Box: " + item.box.status, item.activity.map { "Agent: " + $0.label }].compactMap { $0 }.joined(separator: ", "))
-        .help(["Box: " + item.box.status, item.activity.map { "Agent: " + $0.label }, item.activity?.message].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
+        .accessibilityValue(["Box: " + item.power.label, item.activity.map { "Agent: " + $0.label }].compactMap { $0 }.joined(separator: ", "))
+        .help(["Box: " + item.power.label, item.power.message, item.activity.map { "Agent: " + $0.label }, item.activity?.message].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 }
 
@@ -824,7 +825,8 @@ struct BoxRow: View {
     @State private var showInbox = false
     var body: some View {
         let activity = workspace.activity(for: box)
-        let indicator = BoxIndicator(box: box, activity: activity, reachable: workspace.isConnected && workspace.connectionError == nil)
+        let power = workspace.powerStatus(for: box)
+        let indicator = BoxIndicator(box: box, activity: activity, power: power)
         let tint = indicator.state == .error ? DiscoboxAppearance.activityFailure : DiscoboxAppearance.activityAttention
         HStack(alignment: .top, spacing: 9) {
             BoxStatusLight(indicator: indicator)
@@ -859,8 +861,8 @@ struct BoxRow: View {
 
             }
         }.padding(.vertical, 8)
-        .accessibilityValue([box.status, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
-        .help([box.displayName, "Box: " + box.status, "Agent: " + activity.label, activity.message, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
+        .accessibilityValue([power.label, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
+        .help([box.displayName, "Box: " + power.label, power.message, "Agent: " + activity.label, activity.message, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
         .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
     }
     private func openAgent() {

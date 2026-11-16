@@ -35,6 +35,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         public let errorReason: String?
         public let lastActiveAt: String?
         public let displayState: String?
+        public let stateReportedAt: String?
         public let agentStatus: JSONValue?
         public let resources: JSONValue?
         public let upgrade: Upgrade?

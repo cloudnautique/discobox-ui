@@ -24,7 +24,7 @@ func attachStatusWriter(path string) (func(string, string), func()) {
 	}
 	return func(state, detail string) {
 		switch state {
-		case "connecting", "connected", "reconnecting", "reconnected", "disconnected", "ended":
+		case "connecting", "connected", "reconnecting", "reconnected", "disconnected", "ended", "output-stalled":
 			if len(detail) > 512 {
 				detail = detail[:512] + "…"
 			}

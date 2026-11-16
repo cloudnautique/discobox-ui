@@ -59,8 +59,10 @@ public struct ConnectedBox: Identifiable, Sendable {
     public let box: Sandbox
     public let needsAttention: Bool
     public let activity: AgentActivity?
-    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil) {
+    public let power: BoxPowerStatus
+    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil, power: BoxPowerStatus? = nil) {
         self.location = location; self.computer = computer; self.box = box; self.needsAttention = needsAttention; self.activity = activity
+        self.power = power ?? BoxPowerStatus(box: box)
     }
     public func matches(_ query: String) -> Bool {
         query.split(whereSeparator: { $0.isWhitespace }).allSatisfy {
@@ -169,10 +171,11 @@ public struct ConnectedBox: Identifiable, Sendable {
             let waiting = Set(host.workspace.approvals.map(\.boxID))
             return host.workspace.switcherBoxes.map { box in
                 ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box,
-                             needsAttention: box.matchesAttention || waiting.contains(box.id) || host.workspace.activity(for: box).needsYou)
+                             needsAttention: box.matchesAttention || waiting.contains(box.id) || host.workspace.activity(for: box).needsYou,
+                             activity: host.workspace.activity(for: box), power: host.workspace.powerStatus(for: box))
             }
         }.sorted {
-            func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.box.isRunning ? 1 : 2 }
+            func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.power.isRunning ? 1 : 2 }
             if rank($0) != rank($1) { return rank($0) < rank($1) }
             let names = $0.box.displayName.localizedStandardCompare($1.box.displayName)
             if names != .orderedSame { return names == .orderedAscending }

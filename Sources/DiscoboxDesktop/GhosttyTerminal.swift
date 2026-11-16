@@ -117,7 +117,7 @@ struct TerminalIdentity: Hashable {
     private var monitor: Task<Void, Never>?
     convenience init(identity: TerminalIdentity, previousOutput: String? = nil) {
         let status = identity.demo ? nil : try? TerminalAttachStatus()
-        var args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec]
+        var args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec, "--diagnostic-connection", identity.connection.uuidString]
         if let status { args += ["--attach-status", status.path] }
         self.init(arguments: args, status: status, previousOutput: previousOutput)
         if identity.demo { connectionState = "connected"; hasConnected = true }
@@ -132,7 +132,7 @@ struct TerminalIdentity: Hashable {
             guard let self, !self.closed else { return }
             self.connectionState = state
             self.connectionMessage = message
-            self.view.readOnly = self.ended || ["connecting", "reconnecting", "disconnected", "ended"].contains(state)
+            self.view.readOnly = self.ended || ["connecting", "reconnecting", "disconnected", "ended", "output-stalled"].contains(state)
             if state == "connected" || state == "reconnected" { self.hasConnected = true }
         }
         // Ghostty executes command through a shell. Quote every argument,
@@ -189,7 +189,7 @@ struct TerminalIdentity: Hashable {
         let now = Date()
         recoveryAfter = recoveryAfter.filter { $0.value > now }
         for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && inventory.execIDs.contains(identity.exec) {
-            guard let session = sessions[identity], session.ended, session.error == nil,
+            guard let session = sessions[identity], session.ended, session.error == nil, session.connectionState != "output-stalled",
                   recoveryAfter[identity].map({ $0 <= now }) ?? true else { continue }
             recoveryAfter[identity] = now.addingTimeInterval(10)
             retire(identity)
@@ -227,17 +227,18 @@ struct LiveTerminal: View {
         VStack(spacing: 0) {
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }
             TerminalSurface(view: session.view, focused: focused, onFocus: onFocus).id(identity)
-            if session.ended || session.error != nil || session.connectionState == "reconnecting" || session.connectionState == "connecting" {
+            if session.ended || session.error != nil || session.connectionState == "reconnecting" || session.connectionState == "connecting" || session.connectionState == "output-stalled" {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         if session.ended || session.error != nil { Label("Terminal disconnected · output is read-only", systemImage: "exclamationmark.triangle") }
+                        else if session.connectionState == "output-stalled" { Label("Terminal output stalled · output is read-only", systemImage: "pause.circle") }
                         else { HStack { ProgressView().controlSize(.mini); Text(session.connectionState == "connecting" ? "Connecting terminal…" : "Reconnecting terminal…") } }
                         if let message = session.connectionMessage { Text(message).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled) }
                     }
                     Spacer()
                     Button("Copy Text") { session.view.copyOutput() }
                     if session.previousOutput != nil { Button("Previous Output…") { showingPreviousOutput = true } }
-                    if session.ended || session.error != nil { Button("Reconnect") { store.reconnect(identity) } }
+                    if session.ended || session.error != nil || session.connectionState == "output-stalled" { Button("Reconnect") { store.reconnect(identity) } }
                 }.font(.caption).padding(8)
             } else if session.previousOutput != nil {
                 HStack { Spacer(); Button("Previous Output…") { showingPreviousOutput = true } }.font(.caption).padding(6)
