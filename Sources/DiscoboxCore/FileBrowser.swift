@@ -33,6 +33,9 @@ import Observation
     private var active = true
     private var navigation = UUID()
     private var transferTask: Task<Void, Never>?
+    /// Identifies the file whose progress `bytes` shows. Each update hops to the
+    /// main actor in its own task, so updates can arrive late or out of order.
+    private var progressFile = UUID()
 
     public init(connection: ConnectionStore, selection: BoxSelectionStore) throws {
         access = try selection.fileAccess()
@@ -123,12 +126,10 @@ import Observation
                 try Task.checkCancellation()
                 guard isCurrent else { throw CancellationError() }
                 transferName = "Uploading \(file.lastPathComponent) (\(copied + 1)/\(files.count))"
-                bytes = 0
+                let progress = beginFileProgress()
                 let scoped = file.startAccessingSecurityScopedResource()
                 defer { if scoped { file.stopAccessingSecurityScopedResource() } }
-                try await access.transfer(upload: true, remote: (destination as NSString).appendingPathComponent(file.lastPathComponent), local: file, replace: replace) { [weak self] count in
-                    Task { @MainActor in self?.bytes = count }
-                }
+                try await access.transfer(upload: true, remote: (destination as NSString).appendingPathComponent(file.lastPathComponent), local: file, replace: replace, progress: progress)
                 copied += 1
             }
             receipt = "Copied \(copied) \(copied == 1 ? "item" : "items") to \(destination)."
@@ -153,10 +154,9 @@ import Observation
                 for file in files {
                     try Task.checkCancellation()
                     guard isCurrent else { throw CancellationError() }
-                    transferName = "Downloading \(file.name) (\(copied + 1)/\(files.count))"; bytes = 0
-                    try await access.transfer(upload: false, remote: file.path, local: folder.appendingPathComponent(file.name)) { [weak self] count in
-                        Task { @MainActor in self?.bytes = count }
-                    }
+                    transferName = "Downloading \(file.name) (\(copied + 1)/\(files.count))"
+                    let progress = beginFileProgress()
+                    try await access.transfer(upload: false, remote: file.path, local: folder.appendingPathComponent(file.name), progress: progress)
                     copied += 1
                 }
                 receipt = "Saved \(copied) \(copied == 1 ? "item" : "items") to \(folder.lastPathComponent)."
@@ -165,6 +165,22 @@ import Observation
         }
     }
 
+    /// Resets `bytes` for the next file and returns its progress callback. Late
+    /// updates for an earlier file are dropped, and a file's count only grows.
+    private func beginFileProgress() -> @Sendable (Int64) -> Void {
+        let file = startFileProgress()
+        return { [weak self] count in
+            Task { @MainActor in self?.recordProgress(count, for: file) }
+        }
+    }
+    func startFileProgress() -> UUID {
+        progressFile = UUID(); bytes = 0
+        return progressFile
+    }
+    func recordProgress(_ count: Int64, for file: UUID) {
+        guard file == progressFile, count > bytes else { return }
+        bytes = count
+    }
     public func cancelTransfer() { transferTask?.cancel() }
     public func close() { active = false; navigation = UUID(); loading = false; conflict = nil; transferTask?.cancel() }
     private func finish() { transferring = false; transferTask = nil }

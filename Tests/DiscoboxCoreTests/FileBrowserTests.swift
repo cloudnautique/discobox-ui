@@ -133,3 +133,21 @@ private actor FilesFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+@MainActor @Test func lateProgressFromAnEarlierFileNeverOverwritesTheNextOne() async throws {
+    let client = FilesFixture(), workspace = ConnectionSession()
+    await workspace.connect(client: client, label: "Files", demo: true)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
+    let first = browser.startFileProgress()
+    browser.recordProgress(10, for: first)
+    #expect(browser.bytes == 10)
+    let second = browser.startFileProgress()
+    #expect(browser.bytes == 0)
+    browser.recordProgress(500, for: first)   // arrives after the next file started
+    #expect(browser.bytes == 0)
+    browser.recordProgress(20, for: second)
+    browser.recordProgress(5, for: second)    // an older update applied late
+    #expect(browser.bytes == 20)
+    workspace.disconnect()
+}
