@@ -208,7 +208,7 @@ func TestIrohPrivateProxyHTTPWebSocketAndRevocation(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("socket permissions: %v %v", info, err)
 	}
-	local, err := newBridge(ready.Endpoint, false)
+	local, err := newBridge(ready.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestIrohProxyPreservesTransportFailure(t *testing.T) {
 	if err := json.NewDecoder(reader).Decode(&ready); err != nil {
 		t.Fatal(err)
 	}
-	local, err := newBridge(ready.Endpoint, false)
+	local, err := newBridge(ready.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}

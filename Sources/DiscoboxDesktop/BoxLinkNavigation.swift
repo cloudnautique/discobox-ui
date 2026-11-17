@@ -13,7 +13,7 @@ import DiscoboxCore
 
     func receive(_ raw: String, connections: Connections, commands: WorkspaceCommands) {
         guard ready else { pending = raw; return }
-        open(raw, reader: connections.active.workspace, connections: connections, commands: commands)
+        open(raw, reader: connections.active, connections: connections, commands: commands)
     }
 
     func finishStartup(connections: Connections, commands: WorkspaceCommands) {
@@ -24,19 +24,19 @@ import DiscoboxCore
         }
     }
 
-    func open(_ raw: String, reader: Workspace, connections: Connections, commands: WorkspaceCommands) {
+    func open(_ raw: String, reader: ConnectionSession, connections: Connections, commands: WorkspaceCommands) {
         task?.cancel()
         error = nil
-        guard BoxLinks.claims(raw), let host = connections.sessions.first(where: { $0.workspace === reader }) else {
+        guard BoxLinks.claims(raw), let host = connections.sessions.first(where: { $0 === reader }) else {
             error = "This is not a supported Discobox box link."
             return
         }
-        let active = connections.activeID, sourceBox = reader.sandboxID, generation = reader.connectionID
+        let active = connections.activeID, sourceBox = reader.selection.sandboxID, generation = reader.connectionState.connectionID
         task = Task {
             do {
                 let target = try await connections.resolveBoxLink(raw, readerID: host.id, generation: generation)
                 try Task.checkCancellation()
-                guard connections.activeID == active, reader.sandboxID == sourceBox else { return }
+                guard connections.activeID == active, reader.selection.sandboxID == sourceBox else { return }
                 commands.restoreAgentLayout()
                 try await connections.openBoxLink(target)
                 NSApp.activate(ignoringOtherApps: true)
@@ -45,7 +45,7 @@ import DiscoboxCore
                 // A newer click, navigation or reconnect supersedes this one.
             } catch {
                 guard !Task.isCancelled, connections.activeID == active,
-                      reader.connectionID == generation, reader.sandboxID == sourceBox else { return }
+                      reader.connectionState.connectionID == generation, reader.selection.sandboxID == sourceBox else { return }
                 self.error = error.localizedDescription
             }
         }

@@ -12,7 +12,7 @@ import Testing
 @MainActor @Test func noComputerFilterIncludesEveryConnectedHostWithCompositeIdentity() async throws {
     let (hub, local, remote) = try await browsingComputers()
     #expect(hub.browser.computerID == nil)
-    #expect(hub.browserBoxes.count == local.workspace.sandboxes.count + remote.workspace.sandboxes.count)
+    #expect(hub.browserBoxes.count == local.inventory.sandboxes.count + remote.inventory.sandboxes.count)
     #expect(Set(hub.browserBoxes.map(\.location)).count == hub.browserBoxes.count)
     #expect(hub.browserBoxes.filter { $0.box.id == "demo-ui" }.count == 2)
     hub.disconnect(remote.id)
@@ -23,14 +23,14 @@ import Testing
 @MainActor @Test func togglingComputerOnlyFiltersTheListAndTogglingAgainShowsAll() async throws {
     let (hub, local, remote) = try await browsingComputers()
     await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
-    let generation = local.workspace.connectionID
+    let generation = local.connectionState.connectionID
     hub.browser.toggleComputer(remote.id)
-    #expect(hub.browserBoxes.count == remote.workspace.sandboxes.count)
+    #expect(hub.browserBoxes.count == remote.inventory.sandboxes.count)
     #expect(hub.browserBoxes.allSatisfy { $0.location.connection == remote.id })
-    #expect(hub.active === local && local.workspace.sandboxID == "demo-ui")
+    #expect(hub.active === local && local.selection.sandboxID == "demo-ui")
     hub.browser.toggleComputer(remote.id)
     #expect(hub.browser.computerID == nil && hub.browserBoxes.count == 6)
-    #expect(local.workspace.connectionID == generation)
+    #expect(local.connectionState.connectionID == generation)
     hub.disconnectAll()
 }
 
@@ -81,7 +81,7 @@ import Testing
 @MainActor @Test func combinedArchivesKeepBulkPurgeScopedToOneHost() async throws {
     let (hub, local, remote) = try await browsingComputers()
     for host in [local, remote] {
-        try await host.workspace.performBoxAction(.archive, boxID: "demo-api", connection: host.workspace.connectionID)
+        try await host.commands.performBoxAction(.archive, boxID: "demo-api", connection: host.connectionState.connectionID)
     }
     hub.browser.filter = .archived
     let a = BoxLocation(connection: local.id, box: "demo-api"), b = BoxLocation(connection: remote.id, box: "demo-api")
@@ -107,7 +107,7 @@ import Testing
     try await hub.createBox(on: remote.id, harness: "demo-harness", repository: "")
     #expect(hub.browser.computerID == nil)
     #expect(hub.browser.filter == .archived && hub.browser.searchText == "old work" && hub.browser.selectedTags == ["branch=old"])
-    #expect(!hub.browserBoxes.contains { $0.location.connection == remote.id && $0.box.id == remote.workspace.sandboxID })
-    #expect(hub.creationPins.first?.id == BoxLocation(connection: remote.id, box: remote.workspace.sandboxID!))
+    #expect(!hub.browserBoxes.contains { $0.location.connection == remote.id && $0.box.id == remote.selection.sandboxID })
+    #expect(hub.creationPins.first?.id == BoxLocation(connection: remote.id, box: remote.selection.sandboxID!))
     hub.disconnectAll()
 }

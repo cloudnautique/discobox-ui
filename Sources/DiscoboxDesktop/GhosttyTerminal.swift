@@ -198,7 +198,7 @@ struct TerminalIdentity: Hashable {
     }
     /// Reattach only an ended stream whose concrete exec was just confirmed
     /// live. No process is created in the box and no terminal input is replayed.
-    func recoverInterrupted(_ inventory: Workspace.TerminalInventory, connection: UUID) {
+    func recoverInterrupted(_ inventory: BoxSelectionStore.TerminalInventory, connection: UUID) {
         let now = Date()
         recoveryAfter = recoveryAfter.filter { $0.value > now }
         for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && inventory.execIDs.contains(identity.exec) {
@@ -211,7 +211,7 @@ struct TerminalIdentity: Hashable {
     func closeBox(_ box: String, connection: UUID) {
         for identity in identities where identity.box == box && identity.connection == connection { forget(identity) }
     }
-    func retainExecs(_ inventory: Workspace.TerminalInventory, connection: UUID) {
+    func retainExecs(_ inventory: BoxSelectionStore.TerminalInventory, connection: UUID) {
         for identity in identities where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && !inventory.execIDs.contains(identity.exec) { forget(identity) }
     }
     func retainRunningBoxes(_ boxes: [Sandbox], connection: UUID) {
@@ -230,7 +230,7 @@ struct LiveTerminal: View {
     var onFocus: (() -> Void)?
     @Environment(TerminalStore.self) private var store
     @Environment(ServiceForwards.self) private var forwards
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @Environment(BoxLinkNavigation.self) private var boxLinks: BoxLinkNavigation?
@@ -267,8 +267,8 @@ struct LiveTerminal: View {
         .onChange(of: ObjectIdentifier(session), initial: true) { _, _ in
             session.view.openURL = { [identity, weak workspace = workspace, weak forwards = forwards, weak view = session.view] raw in
                 if BoxLinks.claims(raw) {
-                    guard let workspace, workspace.connectionID == identity.connection,
-                          workspace.sandboxID == identity.box,
+                    guard let workspace, workspace.connectionState.connectionID == identity.connection,
+                          workspace.selection.sandboxID == identity.box,
                           let connections, let commands, let boxLinks else { return true }
                     boxLinks.open(raw, reader: workspace, connections: connections, commands: commands)
                     return true

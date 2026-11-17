@@ -11,9 +11,9 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
 
     /// Refresh immediately before a mutation. A reconnected host, changed policy,
     /// failed refresh, or request answered elsewhere must never reuse a banner.
-    @MainActor public func respond(_ action: Action, workspace: Workspace, onAccepted: () -> Void = {}) async throws -> Bool {
+    @MainActor public func respond(_ action: Action, approvals: ApprovalStore, onAccepted: () -> Void = {}) async throws -> Bool {
         if action == .later { return false }
-        guard workspace.isConnected, workspace.connectionID == connection else {
+        guard approvals.connectionState.isConnected, approvals.connectionState.connectionID == connection else {
             throw DiscoboxError("The computer reconnected or disconnected. Open the current request in Discobox.")
         }
         let answer: ApprovalAnswer
@@ -22,10 +22,10 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
         case .deny: answer = .deny
         case .approve where item.notificationApprovalAnswer != nil: answer = item.notificationApprovalAnswer!
         case .approve, .open:
-            try await workspace.validateApproval(item, connection: connection)
+            try await approvals.validateApproval(item, connection: connection)
             return false
         }
-        try await workspace.answer(item, answer, connection: connection, onAccepted: { _ in onAccepted() })
+        try await approvals.answer(item, answer, connection: connection, onAccepted: { _ in onAccepted() })
         return true
     }
 }

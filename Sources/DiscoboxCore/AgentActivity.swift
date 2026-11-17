@@ -117,9 +117,9 @@ public extension Sandbox {
     }
 }
 
-public extension Workspace {
+public extension ConnectionSession {
     func activity(for box: Sandbox) -> AgentActivity {
-        AgentActivity(box: box, pendingRequests: approvals.filter { $0.boxID == box.id }.count,
+        AgentActivity(box: box, pendingRequests: approvalStore.approvals.filter { $0.boxID == box.id }.count,
                       reachable: hasCurrentBoxInventory, now: activityObservationTime)
     }
 }

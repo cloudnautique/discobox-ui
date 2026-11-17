@@ -4,7 +4,7 @@ SHELL := /bin/bash
 # SwiftPM and packaging share an output directory. Keep even `make -j ci`
 # sequential to avoid competing builds or partially copied bundles.
 .NOTPARALLEL:
-.PHONY: brand-tokens help build ghostty test lint vet fmt-go verify ci
+.PHONY: brand-tokens help build smoke ghostty test lint vet fmt-go verify ci
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -14,6 +14,9 @@ brand-tokens: ## Regenerate the native palette from the pinned upstream brand to
 
 build: ## Build and ad-hoc sign dist/Discobox.app (does not launch it)
 	bash scripts/build-app.sh
+
+smoke: ## Build the isolated debug smoke executable and fixture app bundle
+	bash scripts/build-smoke.sh
 
 ghostty: ## Build the pinned Ghostty SDK (first-time setup; requires Zig/Metal)
 	bash scripts/build-ghostty-sdk.sh

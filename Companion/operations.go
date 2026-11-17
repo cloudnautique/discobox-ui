@@ -21,7 +21,6 @@ const (
 	permissionRead   permission = "read"
 	permissionManage permission = "manage"
 	permissionShell  permission = "shell"
-	permissionInput  permission = "input"
 )
 
 type operation struct {
@@ -83,7 +82,6 @@ var operations = map[string]operation{
 	"execs":          readOp((*bridge).routed),
 	"services":       readOp((*bridge).routed),
 	"screen":         readOp((*bridge).routed),
-	"input":          {permission: permissionInput, run: (*bridge).routed},
 	"newShell":       {permission: permissionShell, run: (*bridge).newShell},
 
 	"setDefaultHarness":     writeOp((*bridge).setDefaultHarness),
@@ -133,8 +131,6 @@ func (b *bridge) allows(p permission) bool {
 		return b.allowManage
 	case permissionShell:
 		return b.allowShell
-	case permissionInput:
-		return b.allowInput
 	}
 	return false
 }
@@ -142,7 +138,6 @@ func (b *bridge) allows(p permission) bool {
 var permissionRefusals = map[permission]string{
 	permissionManage: "this change requires explicit management permission",
 	permissionShell:  "opening a shell requires explicit permission",
-	permissionInput:  "terminal input requires explicit permission",
 }
 
 func lookupOperation(name string) (operation, error) {

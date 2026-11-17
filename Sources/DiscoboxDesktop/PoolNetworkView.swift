@@ -5,7 +5,7 @@ struct PoolNetworkView: View {
     let poolID: String
     let computer: String
     let connection: UUID
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var pool: JSONValue = .null
     @State private var draft = PoolProxyDraft(proxy: .null)
@@ -13,7 +13,7 @@ struct PoolNetworkView: View {
     @State private var reviewed = false
     @State private var error: String?
     @State private var message: String?
-    private var changedConnection: Bool { workspace.connectionID != connection || !workspace.isConnected }
+    private var changedConnection: Bool { workspace.connectionState.connectionID != connection || !workspace.connectionState.isConnected }
     private var supported: Bool { pool["outbound"] != .null }
     private var validation: String? { do { _ = try draft.payload(); return nil } catch { return error.localizedDescription } }
     var body: some View {
@@ -97,7 +97,7 @@ struct PoolNetworkView: View {
         guard !changedConnection else { return }; busy = true; error = nil
         defer { busy = false }
         do {
-            let result = try await workspace.poolConfiguration(poolID, connection: connection)
+            let result = try await workspace.poolSettings.read(pool: poolID)
             guard !changedConnection else { return }; pool = result; draft = .init(proxy: result["proxy"]); reviewed = false
         } catch { if !changedConnection { self.error = error.localizedDescription } }
     }
@@ -108,7 +108,7 @@ struct PoolNetworkView: View {
         Task {
             defer { busy = false; draft.httpCredentials = ""; draft.httpsCredentials = ""; reviewed = false }
             do {
-                let result = try await workspace.updatePoolProxy(poolID, payload: body, connection: connection)
+                let result = try await workspace.poolSettings.update(pool: poolID, payload: body)
                 guard !changedConnection else { return }
                 pool = result; draft = .init(proxy: result["proxy"])
                 message = "Saved. Check the applied revision above. Restart the pool yourself if required; saving does not restart it."

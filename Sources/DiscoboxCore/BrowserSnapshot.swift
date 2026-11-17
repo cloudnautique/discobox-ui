@@ -30,7 +30,7 @@ public struct ActivityClock: Equatable, Sendable {
     static func isFresh(_ date: Date, at now: Date) -> Bool { abs(now.timeIntervalSince(date)) <= BoxPowerStatus.maximumReportAge }
 }
 
-/// Plain per-row values, so a sidebar row never subscribes to its whole Workspace.
+/// Plain per-row values, so a sidebar row never subscribes to its whole session.
 public struct BoxRowPresentation: Equatable, Sendable {
     public let title: String
     public let activity: AgentActivity
@@ -42,15 +42,15 @@ public struct BoxRowPresentation: Equatable, Sendable {
     }
 }
 
-public extension Workspace {
+public extension ConnectionSession {
     func rowPresentation(for box: Sandbox) -> BoxRowPresentation {
         .init(title: box.sidebarTitle, activity: activity(for: box), power: powerStatus(for: box),
-              isPending: pendingBoxActions.contains(box.id), canAct: isConnected && connectionError == nil)
+              isPending: pending.pendingBoxActions.contains(box.id), canAct: connectionState.isConnected && connectionState.connectionError == nil)
     }
 }
 
-/// Browser results for one set of inputs. Counts are boxes before the quick
-/// filter; archived browsing ignores the quick filter.
+/// Browser results for one set of inputs, from BoxBrowser's selectors. Counts
+/// are boxes before the quick filter; archived browsing ignores it.
 public struct BrowserSnapshot: Sendable {
     public let candidates: [ConnectedBox]
     public let boxes: [ConnectedBox]
@@ -62,26 +62,10 @@ public struct BrowserSnapshot: Sendable {
         .init(title: item.title, activity: item.activity ?? AgentActivity(box: item.box), power: item.power,
               isPending: pending.contains(item.location), canAct: actionableHosts.contains(item.location.connection))
     }
-
-    init(fleet: BrowserFleet, query: BrowserQuery) {
-        // The fleet is already in sidebar order, so filtering keeps it sorted.
-        candidates = fleet.items.filter { item in
-            guard query.computerID == nil || query.computerID == item.location.connection else { return false }
-            let include: Bool
-            switch query.filter {
-            case .all: include = !item.box.isArchived
-            case .running: include = item.power.isRunning
-            case .attention: include = !item.box.isArchived && item.needsAttention
-            case .archived: include = item.box.isArchived
-            }
-            return include && BoxOrganization.matches(tags: item.box.meta?.tags ?? [:], selectors: query.selectedTags, matchAny: query.matchAnyTag) &&
-                item.matches(query.searchText)
-        }
-        boxes = query.filter == .archived || query.activityFilter == nil ? candidates : candidates.filter { item in
-            query.activityFilter?.matches(item.activity ?? AgentActivity(box: item.box), box: item.box) != false
-        }
-        needsYouCount = candidates.filter(\.needsAttention).count
-        workingCount = candidates.filter { $0.activity?.isWorking == true }.count
+    @MainActor init(browser: BoxBrowser, fleet: BrowserFleet) {
+        candidates = browser.candidates(in: fleet.items)
+        boxes = browser.results(in: candidates)
+        (needsYouCount, workingCount) = browser.activityCounts(in: candidates)
         pending = fleet.pending
         actionableHosts = Set(fleet.hosts.filter(\.canAct).map(\.id))
     }
@@ -89,15 +73,15 @@ public struct BrowserSnapshot: Sendable {
 
 struct BrowserQuery: Equatable {
     let computerID: String?
-    let filter: Workspace.BoxFilter
+    let filter: BoxFilter
     let searchText: String
     let selectedTags: Set<String>
     let matchAnyTag: Bool
     let activityFilter: BoxActivityFilter?
 }
 
-/// Every box on the connected computers with its presentation derived once,
-/// in sidebar order. Inputs compare cheaply: unchanged arrays share storage.
+/// Every box on the connected computers with its presentation derived once.
+/// Inputs compare cheaply: unchanged arrays share storage.
 struct BrowserFleet {
     struct Host: Equatable {
         let id: String
@@ -118,49 +102,13 @@ struct BrowserFleet {
         self.hosts = hosts; self.revision = revision
         items = hosts.flatMap { host -> [ConnectedBox] in
             let requests = Dictionary(host.approvals.map { ($0.boxID, 1) }, uniquingKeysWith: +)
-            return host.boxes.map { box in
+            return host.boxes.filter { !$0.isDeleted }.map { box in
                 let activity = AgentActivity(box: box, pendingRequests: requests[box.id] ?? 0, reachable: host.reachable, now: host.clock.now)
                 return ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.computer, box: box,
                                     needsAttention: box.matchesAttention || activity.needsYou, activity: activity,
                                     power: BoxPowerStatus(box: box, reachable: host.reachable, now: host.clock.now))
             }
-        }.sorted {
-            let names = $0.title.localizedStandardCompare($1.title)
-            if names != .orderedSame { return names == .orderedAscending }
-            if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-            if $0.location.box != $1.location.box { return $0.location.box < $1.location.box }
-            return $0.location.connection < $1.location.connection
         }
         pending = Set(hosts.flatMap { host in host.pending.map { BoxLocation(connection: host.id, box: $0) } })
-    }
-
-    /// Attention first, then running; the keys are derived once per box.
-    var switcherOrder: [ConnectedBox] {
-        let waiting = Set(hosts.flatMap { host in host.approvals.map { BoxLocation(connection: host.id, box: $0.boxID) } })
-        return items.filter { !$0.box.isArchived }.map { item -> (item: ConnectedBox, rank: Int, priority: Int) in
-            let attention = item.needsAttention || waiting.contains(item.location)
-            let rank = attention ? 0 : item.power.isRunning ? 1 : 2
-            let priority: Int
-            if attention { priority = 0 }
-            else if item.box.isRunning { priority = 1 }
-            else {
-                switch item.box.status.lowercased() {
-                case "starting", "pending", "awaiting source", "stopping": priority = 2
-                case "stopped": priority = 3
-                default: priority = 4
-                }
-            }
-            return (ConnectedBox(location: item.location, computer: item.computer, box: item.box, needsAttention: attention,
-                                 activity: item.activity, power: item.power, title: item.title), rank, priority)
-        }.sorted { lhs, rhs in
-            if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
-            let names = lhs.item.box.displayName.localizedStandardCompare(rhs.item.box.displayName)
-            if names != .orderedSame { return names == .orderedAscending }
-            if lhs.item.computer != rhs.item.computer { return lhs.item.computer.localizedStandardCompare(rhs.item.computer) == .orderedAscending }
-            if lhs.item.location.connection != rhs.item.location.connection { return lhs.item.location.connection < rhs.item.location.connection }
-            // Same computer: the order Workspace.switcherBoxes gives it.
-            if lhs.priority != rhs.priority { return lhs.priority < rhs.priority }
-            return lhs.item.box.id < rhs.item.box.id
-        }.map(\.item)
     }
 }

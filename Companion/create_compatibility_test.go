@@ -35,7 +35,7 @@ func TestCreateAcceptsLegacyHarnessSnapshotAndPreservesReceiptWithoutRetry(t *te
 	if err := json.Unmarshal([]byte(legacyCreatedBox), &generated); err == nil || !strings.Contains(err.Error(), "configCommand") {
 		t.Fatalf("fixture does not reproduce strict SDK rejection: %v", err)
 	}
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	creates := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -61,7 +61,7 @@ func TestCreateAcceptsLegacyHarnessSnapshotAndPreservesReceiptWithoutRetry(t *te
 }
 
 func TestSourceDeliveryReadsIgnoreUnrelatedSnapshotFieldsAndKeepIdentity(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	reads := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		reads++
@@ -90,7 +90,7 @@ func TestSourceDeliveryReadsIgnoreUnrelatedSnapshotFieldsAndKeepIdentity(t *test
 }
 
 func TestCreateTransportFailureStillReportsAmbiguityAndNeverRetries(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	creates := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

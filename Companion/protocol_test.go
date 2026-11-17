@@ -60,7 +60,7 @@ func TestEveryOperationIsDispatchedAndPermissionChecked(t *testing.T) {
 		switch op.permission {
 		case permissionRead:
 			continue
-		case permissionManage, permissionShell, permissionInput:
+		case permissionManage, permissionShell:
 		default:
 			t.Fatalf("%s has unknown permission %q", name, op.permission)
 		}

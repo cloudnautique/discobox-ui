@@ -20,7 +20,7 @@ func TestArchiveAcknowledgementHasAShortDeadline(t *testing.T) {
 
 func TestStalledArchiveIsCancelledWithoutResubmission(t *testing.T) {
 	attempts := 0
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		attempts++

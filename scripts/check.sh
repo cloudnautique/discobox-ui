@@ -26,7 +26,7 @@ from pathlib import Path
 for path in Path("scripts").glob("*.py"):
     ast.parse(path.read_text(), filename=str(path))
 PY
-        plutil -lint Resources/Info.plist
+        plutil -lint Resources/Info.plist Resources/Smoke-Info.plist
         git diff --check
         git diff --cached --check
         ;;
@@ -41,6 +41,7 @@ PY
             printf 'No app bundle found. Run make build first.\n' >&2
             exit 1
         fi
+        python3 scripts/check-release-content.py
         codesign --verify --deep --strict dist/Discobox.app
         plutil -lint dist/Discobox.app/Contents/Info.plist
         ;;

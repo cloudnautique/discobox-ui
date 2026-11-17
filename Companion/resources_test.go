@@ -14,7 +14,7 @@ import (
 )
 
 func TestPoolResourcesOnlyReadsStoredReportsAndPlacement(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	var paths []string
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "GET" {
@@ -41,7 +41,7 @@ func TestPoolResourcesOnlyReadsStoredReportsAndPlacement(t *testing.T) {
 
 func TestPoolCacheClearIsExplicitScopedAndNotRetried(t *testing.T) {
 	for _, authorized := range []bool{false, true} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = authorized
 		calls := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -102,7 +102,7 @@ func TestCreationUsesCheckedPoolAndRejectsFreshFullDataDisk(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, full := range []bool{false, true} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		creates := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

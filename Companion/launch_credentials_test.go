@@ -11,7 +11,7 @@ import (
 func TestLaunchCredentialsAreAtomicAndNeverChangeTheSharedHarness(t *testing.T) {
 	const token = "fixture-token@with-quotes\"and\\slashes"
 	payload, _ := json.Marshal(map[string]any{"secrets": []map[string]string{{"env": "OBOT_MCP_TOKEN", "host": " Demo.On-Obot.AI ", "value": token}}})
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	creates := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -62,7 +62,7 @@ func TestLaunchCredentialValidationRunsBeforeAnyRequestsAndNeverEchoesTokens(t *
 		`{"secrets":[{"env":"TOKEN","host":"example.test","value":"fixture-sensitive","raw":true}]}`,
 		`{"secrets":[]} {}`,
 	} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 			t.Fatal("invalid launch credentials triggered a network request")

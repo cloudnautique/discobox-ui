@@ -24,91 +24,67 @@ import Testing
     #expect(!exec.acceptsInput)
 }
 
-@Test func inputEncodingMatchesBackendContract() throws {
-    let request = BridgeRequest(.input, projectID: "p", sandboxID: "s", execID: "e", input: [.text("hello\nworld"), .key("Enter")])
-    let data = try JSONEncoder().encode(request)
-    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    let parts = try #require(json["input"] as? [[String: String]])
-    #expect(parts == [["text":"hello\nworld"], ["key":"Enter"]])
-    #expect(json["operation"] as? String == "input")
-}
 
-@MainActor @Test func viewingNeverSendsInputAndInputNeedsOptIn() async throws {
+
+@MainActor @Test func viewingAndRefreshingNeverRequestInputOrScreens() async throws {
     let client = RecordingClient()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    #expect(workspace.canSendInput)
-    #expect(!workspace.inputEnabled)
-    workspace.draft = "hello"
-    await workspace.sendDraft(enter: true)
-    #expect(await client.inputCount == 0)
-    workspace.inputEnabled = true
-    await workspace.sendDraft(enter: true)
-    #expect(await client.inputCount == 1)
-    #expect(workspace.draft.isEmpty)
-    await workspace.selectBox("demo-api")
-    #expect(!workspace.canSendInput)
-    #expect(!workspace.inputEnabled)
+    for box in ["demo-ui", "demo-api"] {
+        await workspace.selection.selectBox(box)
+        await workspace.refresh()
+        await workspace.refresh()
+    }
+    #expect(await client.screenCount == 0)
+    #expect(await client.operations.allSatisfy { $0 != "input" })
 }
 
 @MainActor @Test func lateConnectionCannotReconnectAfterDisconnect() async {
     let client = GateClient(operation: .defaultProject)
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     let pending = Task { await workspace.connect(client: client, label: "fixture") }
     await client.waitUntilBlocked()
     workspace.disconnect()
     await client.release()
     await pending.value
-    #expect(!workspace.isConnected)
-    #expect(workspace.projectID == nil)
+    #expect(!workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.projectID == nil)
 }
 
-@MainActor @Test func lateScreenCannotReplaceNewSelection() async {
+@MainActor @Test func lateSnapshotCannotReplaceNewSelection() async throws {
     let client = GateClient(operation: .screen)
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    let pending = Task { await workspace.selectBox("demo-ui") }
+    await workspace.selection.selectBox("demo-api")
+    let exec = try #require(workspace.selection.execID)
+    let pending = Task { try await workspace.selection.terminalSnapshot(exec: exec) }
     await client.waitUntilBlocked()
-    await workspace.selectBox("demo-api")
-    #expect(workspace.screen?.exited == true)
+    await workspace.selection.selectBox("demo-ui")
     await client.release()
-    await pending.value
-    #expect(workspace.sandboxID == "demo-api")
-    #expect(workspace.screen?.exited == true)
+    do { _ = try await pending.value; Issue.record("Accepted output from the prior selection") }
+    catch is CancellationError { } catch { Issue.record("Unexpected error: \(error)") }
+    #expect(workspace.selection.sandboxID == "demo-ui")
 }
 
-@MainActor @Test func ambiguousInputFailureIsNotRetried() async {
-    let client = RecordingClient(failInput: true)
-    let workspace = Workspace()
-    await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    workspace.inputEnabled = true
-    workspace.draft = "do something"
-    await workspace.sendDraft(enter: true)
-    #expect(await client.inputCount == 1)
-    #expect(!workspace.inputEnabled)
-    #expect(workspace.draft == "do something")
-    #expect(workspace.inputError?.contains("may already have arrived") == true)
-}
+
 
 @MainActor @Test func resolvesDefaultAliasAndUsesReturnedID() async {
     let client = DefaultProjectClient()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    #expect(workspace.isConnected)
-    #expect(workspace.projectID == "resolved-default")
+    #expect(workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.projectID == "resolved-default")
     #expect(await client.operations.filter { $0 != "harnesses" } == ["defaultProject", "sandboxes"])
     #expect(await client.listedProject == "resolved-default")
 }
 
 @MainActor @Test func missingDefaultDoesNotFallBackToAnotherProject() async {
     let client = DefaultProjectClient(missing: true)
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    #expect(!workspace.isConnected)
-    #expect(workspace.projectID == nil)
-    #expect(workspace.connectionError == "No default project")
+    #expect(!workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.projectID == nil)
+    #expect(workspace.connectionState.connectionError == "No default project")
     #expect(await client.operations == ["defaultProject"])
 }
 
@@ -135,16 +111,11 @@ private actor DefaultProjectClient: DiscoboxClient {
 
 private actor RecordingClient: DiscoboxClient {
     private let demo = DemoClient()
-    private let failInput: Bool
-    private(set) var inputCount = 0
     private(set) var screenCount = 0
-    init(failInput: Bool = false) { self.failInput = failInput }
+    private(set) var operations: [String] = []
     func perform(_ request: BridgeRequest) async throws -> Data {
+        operations.append(request.operation.rawValue)
         if request.operation == .screen { screenCount += 1 }
-        if request.operation == .input {
-            inputCount += 1
-            if failInput { throw DiscoboxError("connection lost") }
-        }
         return try await demo.perform(request)
     }
 }
@@ -168,80 +139,81 @@ private actor GateClient: DiscoboxClient {
     func release() { continuation?.resume(); continuation = nil }
 }
 
-@MainActor @Test func liveStreamingSkipsScreensButKeepsSavedScreens() async {
+@MainActor @Test func savedOutputLoadsOnlyOnDemand() async throws {
     let client = RecordingClient()
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
+    await workspace.selection.selectBox("demo-ui")
     await workspace.refresh()
-    #expect(workspace.hasLiveTerminal)
-    #expect(workspace.screen == nil)
+    #expect(workspace.selection.hasLiveTerminal)
+    await workspace.selection.selectBox("demo-api")
+    #expect(!workspace.selection.hasLiveTerminal)
     #expect(await client.screenCount == 0)
-    await workspace.selectBox("demo-api")
-    #expect(!workspace.hasLiveTerminal)
-    #expect(workspace.screen != nil)
-    #expect(await client.screenCount > 0)
-    let connection = workspace.connectionID
+    let exec = try #require(workspace.selection.execID)
+    let screen = try await workspace.selection.terminalSnapshot(exec: exec)
+    #expect(screen.exited == true)
+    #expect(await client.screenCount == 1)
+    await workspace.refresh()
+    #expect(await client.screenCount == 1)
+    let connection = workspace.connectionState.connectionID
     workspace.disconnect()
-    #expect(workspace.connectionID != connection)
+    #expect(workspace.connectionState.connectionID != connection)
 }
 
 @MainActor @Test func lateShellCreationCannotChangeNewBoxSelection() async {
     let client = GateClient(operation: .newShell)
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    let pending = Task { await workspace.openShell() }
+    await workspace.selection.selectBox("demo-ui")
+    let pending = Task { await workspace.selection.openShell() }
     await client.waitUntilBlocked()
-    await workspace.selectBox("demo-api")
-    let previous = workspace.execID
+    await workspace.selection.selectBox("demo-api")
+    let previous = workspace.selection.execID
     await client.release()
     await pending.value
-    #expect(workspace.sandboxID == "demo-api")
-    #expect(workspace.execID == previous)
-    #expect(!workspace.isOpeningShell)
+    #expect(workspace.selection.sandboxID == "demo-api")
+    #expect(workspace.selection.execID == previous)
+    #expect(!workspace.selection.isOpeningShell)
 }
 
 @MainActor @Test func demoAuditCreationAndShellCloseStayLocal() async throws {
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: DemoClient(), label: "fixture", demo: true)
-    await workspace.selectBox("demo-ui")
-    let audit = try await workspace.auditSnapshot(box: "demo-ui")
+    await workspace.selection.selectBox("demo-ui")
+    let audit = try await workspace.audit.snapshot(box: "demo-ui")
     #expect(audit.records.count == 2)
-    #expect(try await workspace.harnesses().first?.configured == true)
-    try await workspace.closeShell("shell-1")
-    #expect(!workspace.execs.contains { $0.id == "shell-1" })
-    #expect(workspace.execID == "agent-1")
-    try await workspace.createBox(harness: "demo-harness", repository: "")
-    #expect(workspace.selectedBox?.displayName == "New demo box")
-    let box = workspace.sandboxID
+    #expect(try await workspace.catalog.harnesses().first?.configured == true)
+    try await workspace.selection.closeShell("shell-1")
+    #expect(!workspace.selection.execs.contains { $0.id == "shell-1" })
+    #expect(workspace.selection.execID == "agent-1")
+    try await workspace.commands.createBox(harness: "demo-harness", repository: "")
+    #expect(workspace.selection.selectedBox?.displayName == "New demo box")
+    let box = workspace.selection.sandboxID
     await workspace.reconnect()
-    #expect(workspace.sandboxID == box)
+    #expect(workspace.selection.sandboxID == box)
 }
 
 @MainActor @Test func connectingScreenLastsUntilInitialInventoryCompletes() async {
     let client = GateClient(operation: .sandboxes)
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     let pending = Task { await workspace.connect(client: client, label: "fixture") }
     await client.waitUntilBlocked()
-    #expect(workspace.isConnecting)
+    #expect(workspace.connectionState.isConnecting)
     await client.release()
     await pending.value
-    #expect(!workspace.isConnecting)
-    #expect(workspace.isConnected)
+    #expect(!workspace.connectionState.isConnecting)
+    #expect(workspace.connectionState.isConnected)
 }
 
 @MainActor @Test func failedInitialInventoryReturnsToConnectionForm() async {
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: FailingInventoryClient(), label: "fixture")
-    #expect(!workspace.isConnecting)
-    #expect(!workspace.isConnected)
-    #expect(workspace.connectionError == "Fixture server unavailable")
+    #expect(!workspace.connectionState.isConnecting)
+    #expect(!workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.connectionError == "Fixture server unavailable")
     await workspace.connect(client: DemoClient(), label: "manual retry")
-    #expect(workspace.isConnected)
-    #expect(workspace.connectionError == nil)
+    #expect(workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.connectionError == nil)
 }
 
 private actor FailingInventoryClient: DiscoboxClient {
@@ -254,39 +226,37 @@ private actor FailingInventoryClient: DiscoboxClient {
 
 @MainActor @Test func slowServicesDoNotDelayLiveTerminalSelection() async throws {
     let client = GateClient(operation: .services)
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    let pending = Task { await workspace.selectBox("demo-ui") }
+    let pending = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
     // Services remain blocked throughout this check. Allow the independent
     // inventory request to finish and publish the live terminal.
     for _ in 0..<100 {
-        if workspace.hasLiveTerminal { break }
+        if workspace.selection.hasLiveTerminal { break }
         try await Task.sleep(for: .milliseconds(10))
     }
-    #expect(workspace.hasLiveTerminal)
-    #expect(workspace.execID == "agent-1")
+    #expect(workspace.selection.hasLiveTerminal)
+    #expect(workspace.selection.execID == "agent-1")
     await client.release()
     await pending.value
-    #expect(workspace.detailError == nil)
+    #expect(workspace.selection.detailError == nil)
 }
 
 @MainActor @Test func lateServicesCannotReplaceNewBoxInventory() async {
     let client = GateClient(operation: .services)
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    let pending = Task { await workspace.selectBox("demo-ui") }
+    let pending = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    await workspace.selectBox("demo-api")
-    let services = workspace.services
-    let observedAt = workspace.servicesObservedAt
-    let execs = workspace.execs
+    await workspace.selection.selectBox("demo-api")
+    let services = workspace.selection.services
+    let observedAt = workspace.selection.servicesObservedAt
+    let execs = workspace.selection.execs
     await client.release()
     await pending.value
-    #expect(workspace.sandboxID == "demo-api")
-    #expect(workspace.services == services)
-    #expect(workspace.servicesObservedAt == observedAt)
-    #expect(workspace.execs == execs)
+    #expect(workspace.selection.sandboxID == "demo-api")
+    #expect(workspace.selection.services == services)
+    #expect(workspace.selection.servicesObservedAt == observedAt)
+    #expect(workspace.selection.execs == execs)
 }

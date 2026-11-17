@@ -2,16 +2,17 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class ApprovalQueue {
-    public let workspace: Workspace
+    public let connectionState: ConnectionStore
+    public let approvalStore: ApprovalStore
     public let boxID: String?
     public let connection: UUID
     public var selection: String?
     public private(set) var reviewing: ApprovalItem?
-    public init(workspace: Workspace, boxID: String?) {
-        self.workspace = workspace; self.boxID = boxID; connection = workspace.connectionID
+    public init(connection: ConnectionStore, approvals: ApprovalStore, boxID: String?) {
+        self.connectionState = connection; self.approvalStore = approvals; self.boxID = boxID; self.connection = connection.connectionID
     }
-    public var valid: Bool { workspace.connectionID == connection && workspace.isConnected }
-    public var requests: [ApprovalItem] { valid ? workspace.approvals.filter { boxID == nil || $0.boxID == boxID } : [] }
+    public var valid: Bool { connectionState.connectionID == connection && connectionState.isConnected }
+    public var requests: [ApprovalItem] { valid ? approvalStore.approvals.filter { boxID == nil || $0.boxID == boxID } : [] }
     public var selected: ApprovalItem? { requests.first { $0.id == selection } }
     public func synchronize() {
         if selected == nil { selection = requests.first?.id }

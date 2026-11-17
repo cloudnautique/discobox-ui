@@ -7,21 +7,20 @@ import Testing
     let host = try await hub.connect(.thisComputer, demo: true) { client }
     defer { hub.disconnectAll() }
     hub.browser.filter = .running
-    host.workspace.filter = .running
     try await hub.createBox(on: host.id, harness: "demo-harness", repository: "")
     let location = BoxLocation(connection: host.id, box: "created-box")
-    #expect(hub.browser.filter == .running && host.workspace.filter == .running)
-    #expect(host.workspace.sandboxID == location.box)
+    #expect(hub.browser.filter == .running)
+    #expect(host.selection.sandboxID == location.box)
     #expect(hub.creationPins.map(\.id) == [location])
     #expect(hub.creationPins.first?.phase == .starting)
     #expect(hub.browser.revealLocation == location)
     let startingReveal = hub.browser.revealRevision
     #expect(!hub.browserBoxes.contains { $0.location == location })
     await client.setPhase(.running)
-    await host.workspace.refresh()
+    await host.refresh()
     hub.reconcileCreations()
     #expect(hub.browser.filter == .running)
-    #expect(host.workspace.sandboxID == location.box)
+    #expect(host.selection.sandboxID == location.box)
     #expect(hub.creationPins.isEmpty)
     #expect(hub.browserBoxes.filter { $0.location == location }.count == 1)
     #expect(hub.browser.revealLocation == location)
@@ -42,7 +41,7 @@ import Testing
     hub.browser.matchAnyTag = true
     try await hub.createBox(on: remote.id, harness: "demo-harness", repository: "")
     let location = BoxLocation(connection: remote.id, box: "created-box")
-    #expect(hub.activeID == remote.id && remote.workspace.sandboxID == location.box)
+    #expect(hub.activeID == remote.id && remote.selection.sandboxID == location.box)
     #expect(hub.browser.filter == .archived && hub.browser.computerID == local.id)
     #expect(hub.browser.searchText == "fixture" && hub.browser.selectedTags == ["repository"] && hub.browser.matchAnyTag)
     #expect(hub.browserBoxes.isEmpty)
@@ -66,16 +65,16 @@ import Testing
     hub.browser.filter = .running
     try await hub.createBox(on: host.id, harness: "demo-harness", repository: "")
     await client.setPhase(.failed)
-    for _ in 0..<3 { await host.workspace.refresh(); hub.reconcileCreations() }
+    for _ in 0..<3 { await host.refresh(); hub.reconcileCreations() }
     let pin = try #require(hub.creationPins.first)
     #expect(pin.phase == .failed)
     #expect(pin.message == "Fixture: insufficient disk space")
-    #expect(host.workspace.selectedBox?.id == pin.id.box)
+    #expect(host.selection.selectedBox?.id == pin.id.box)
     #expect(hub.browser.filter == .running && !hub.browserBoxes.contains { $0.location == pin.id })
     #expect(await client.createCount == 1)
     hub.dismissCreation(pin.id)
     #expect(hub.creationPins.isEmpty)
-    #expect(host.workspace.sandboxes.contains { $0.id == pin.id.box })
+    #expect(host.inventory.sandboxes.contains { $0.id == pin.id.box })
 }
 
 @MainActor @Test func completionDoesNotStealSelectionAndFiltersDoNotResurrectOldReminders() async throws {
@@ -87,8 +86,8 @@ import Testing
     await hub.selectBox(.init(connection: host.id, box: "demo-ui"))
     let originalReveal = hub.browser.revealRevision
     await client.setPhase(.running)
-    await host.workspace.refresh(); hub.reconcileCreations()
-    #expect(hub.creationPins.isEmpty && host.workspace.sandboxID == "demo-ui")
+    await host.refresh(); hub.reconcileCreations()
+    #expect(hub.creationPins.isEmpty && host.selection.sandboxID == "demo-ui")
     #expect(hub.browser.revealRevision == originalReveal)
     hub.browser.filter = .archived
     #expect(hub.creationPins.isEmpty)
@@ -104,10 +103,10 @@ import Testing
     try await hub.createBox(on: b.id, harness: "demo-harness", repository: "")
     #expect(Set(hub.creationPins.map(\.id)).count == 2)
     await aClient.removeCreatedBox()
-    await a.workspace.refresh(); hub.reconcileCreations()
+    await a.refresh(); hub.reconcileCreations()
     #expect(hub.creationPins.map(\.id.connection) == [b.id])
     let oldLocation = try #require(hub.creationPins.first?.id)
-    await b.workspace.reconnect()
+    await b.reconnect()
     hub.reconcileCreations()
     #expect(hub.creationPins.isEmpty)
     await hub.revealCreatedBox(oldLocation)
@@ -180,11 +179,11 @@ private actor CreationFixture: DiscoboxClient {
         try await Task.sleep(for: .milliseconds(2))
     }
     try #require(await client.waitingForDetails)
-    await host.workspace.selectBox("demo-ui")
+    await host.selection.selectBox("demo-ui")
     await client.releaseDetails()
     let created = try await creation.value
     #expect(created.id == "created-box")
-    #expect(host.workspace.sandboxID == "demo-ui")
+    #expect(host.selection.sandboxID == "demo-ui")
     #expect(hub.creationPins.map(\.id.box) == ["created-box"])
     #expect(await client.createCount == 1)
 }

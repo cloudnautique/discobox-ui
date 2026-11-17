@@ -22,7 +22,7 @@ extension DiscoboxClient {
 }
 
 /// A separate process for each bounded request keeps cancellation independent
-/// from the backend. Only an explicit input request opts into the write route.
+/// from the backend. Each operation passes only its own permission flag.
 public actor CompanionClient: DiscoboxClient {
     public nonisolated static func cancelAllRequests() { ProcessRequest.cancelAll() }
     private let executable: URL
@@ -128,7 +128,6 @@ private final class ProcessRequest: @unchecked Sendable {
         case .read: []
         case .manage: ["--allow-manage"]
         case .shell: ["--allow-shell"]
-        case .input: ["--allow-input"]
         }
         process.arguments = ["--endpoint", endpoint] + flag
         self.payload = payload

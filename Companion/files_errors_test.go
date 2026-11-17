@@ -26,7 +26,7 @@ func TestUploadFailureExplainsActualResponseWithoutRetry(t *testing.T) {
 			if err := os.WriteFile(local, []byte("image"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			b.allowManage = true
 			writes := 0
 			remote := "/workspace/source/Screenshot 2026-11-02 at 1.04.14\u202fPM.png"
@@ -58,7 +58,7 @@ func TestReplacementStopsWhenStatRouteIsMissing(t *testing.T) {
 	if err := os.WriteFile(local, []byte("image"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	calls := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		calls++

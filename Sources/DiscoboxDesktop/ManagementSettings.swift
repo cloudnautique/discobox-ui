@@ -3,7 +3,7 @@ import AppKit
 import DiscoboxCore
 
 struct HarnessSettings: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var error: String?
@@ -13,31 +13,31 @@ struct HarnessSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             StudioDialogHeader(title: "Harnesses", symbol: "terminal", subtitle: "Shared logins, settings and launch defaults on the selected computer.")
-            if !workspace.isConnected {
+            if !workspace.connectionState.isConnected {
                 ContentUnavailableView("Connect to Discobox", systemImage: "network", description: Text("Choose a server in Connection settings."))
             } else {
                 Text("The default is shared with other Discobox clients on this computer and project. New boxes preselect it; existing boxes keep their harness.").font(.caption).foregroundStyle(.secondary)
-                Text(workspace.endpointLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(workspace.connectionState.endpointLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                List(workspace.cachedHarnesses) { harness in
+                List(workspace.catalog.cachedHarnesses) { harness in
                     HStack(spacing: 12) {
                         Image(systemName: "terminal").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(harness.name).fontWeight(.medium)
-                                if harness.id == workspace.defaultHarnessID { Text("Default").font(.caption).foregroundStyle(.secondary) }
+                                if harness.id == workspace.catalog.defaultHarnessID { Text("Default").font(.caption).foregroundStyle(.secondary) }
                             }
                             Text(harness.usesLegacySetup ? (harness.configured ? "Configured" : "Needs setup") : "Sign in inside a box · review changes to share")
                                 .font(.caption).foregroundStyle(harness.configured ? Color.secondary : Color.orange)
                         }
                         Spacer()
-                        if harness.id != workspace.defaultHarnessID {
+                        if harness.id != workspace.catalog.defaultHarnessID {
                             Button("Make Default") { Task { await makeDefault(harness.id) } }
-                                .disabled(loading || savingDefault || !harness.configured || workspace.isDemo)
+                                .disabled(loading || savingDefault || !harness.configured || workspace.connectionState.isDemo)
                         }
                         Button("Login & Settings…") {
                             HarnessSetupWindows.shared.open(harness, workspace: workspace, connections: connections, commands: commands)
-                        }.disabled(workspace.isDemo)
+                        }.disabled(workspace.connectionState.isDemo)
                     }.padding(.vertical, 6)
                 }.listStyle(.plain).scrollContentBackground(.hidden).studioCard()
                 HStack {
@@ -47,34 +47,34 @@ struct HarnessSettings: View {
                 }
             }
         }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
-        .task(id: workspace.connectionID) { error = nil; await refresh() }
+        .task(id: workspace.connectionState.connectionID) { error = nil; await refresh() }
     }
 
     private func makeDefault(_ harnessID: String) async {
-        let connection = workspace.connectionID
+        let connection = workspace.connectionState.connectionID
         savingDefault = true; error = nil
         defer { savingDefault = false }
-        do { try await workspace.setDefaultHarness(harnessID, connection: connection) }
-        catch { if connection == workspace.connectionID { self.error = error.localizedDescription } }
+        do { try await workspace.catalog.setDefaultHarness(harnessID, connection: connection) }
+        catch { if connection == workspace.connectionState.connectionID { self.error = error.localizedDescription } }
     }
 
     private func refresh() async {
-        guard workspace.isConnected else { return }
-        let connection = workspace.connectionID
+        guard workspace.connectionState.isConnected else { return }
+        let connection = workspace.connectionState.connectionID
         loading = true; error = nil
         defer { loading = false }
         do {
-            _ = try await workspace.harnesses(force: true)
-            try await workspace.refreshDefaultHarness()
+            _ = try await workspace.catalog.harnesses(force: true)
+            try await workspace.catalog.refreshDefaultHarness()
         } catch {
-            guard connection == workspace.connectionID else { return }
+            guard connection == workspace.connectionState.connectionID else { return }
             self.error = error.localizedDescription
         }
     }
 }
 
 struct CredentialSettings: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @State private var credentials: [JSONValue] = []
     @State private var details: CredentialDetailsRequest?
     @State private var search = ""
@@ -92,10 +92,10 @@ struct CredentialSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             StudioDialogHeader(title: "Credentials", symbol: "key", subtitle: "Stored credentials on the selected computer.")
-            if !workspace.isConnected {
+            if !workspace.connectionState.isConnected {
                 ContentUnavailableView("Connect to Discobox", systemImage: "network", description: Text("Choose a server in Connection settings."))
             } else {
-                Text(workspace.endpointLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(workspace.connectionState.endpointLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 TextField("Search credentials", text: $search).textFieldStyle(.roundedBorder)
                 if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 List(matches, id: \.["id"].string) { item in
@@ -107,13 +107,13 @@ struct CredentialSettings: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("Details…") { details = .init(secret: item, connection: workspace.connectionID) }
-                            .disabled(busy || workspace.isDemo)
+                        Button("Details…") { details = .init(secret: item, connection: workspace.connectionState.connectionID) }
+                            .disabled(busy || workspace.connectionState.isDemo)
                         Button("Delete…", role: .destructive) {
-                            pendingDeleteConnection = workspace.connectionID
+                            pendingDeleteConnection = workspace.connectionState.connectionID
                             pendingDelete = item
                         }
-                            .disabled(busy || workspace.isDemo)
+                            .disabled(busy || workspace.connectionState.isDemo)
                     }.padding(.vertical, 6)
                 }
                 .listStyle(.plain).scrollContentBackground(.hidden).studioCard()
@@ -129,13 +129,13 @@ struct CredentialSettings: View {
                 }
             }
         }.padding(24).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
-        .task(id: workspace.connectionID) {
+        .task(id: workspace.connectionState.connectionID) {
             credentials = []; pendingDelete = nil; error = nil
             await refresh()
         }
         .sheet(item: $details) { request in
             CredentialDetailsView(request: request) { confirmed in
-                guard request.connection == workspace.connectionID else { return }
+                guard request.connection == workspace.connectionState.connectionID else { return }
                 if let index = credentials.firstIndex(where: { $0["id"] == confirmed["id"] }) {
                     credentials[index] = confirmed
                 }
@@ -154,30 +154,30 @@ struct CredentialSettings: View {
     }
 
     private func refresh() async {
-        guard workspace.isConnected else { return }
-        let connection = workspace.connectionID
+        guard workspace.connectionState.isConnected else { return }
+        let connection = workspace.connectionState.connectionID
         busy = true; error = nil
         defer { busy = false }
         do {
-            let items = try await workspace.approvalSecrets()
-            guard connection == workspace.connectionID else { return }
+            let items = try await workspace.approvalStore.approvalSecrets()
+            guard connection == workspace.connectionState.connectionID else { return }
             credentials = items
         } catch {
-            guard connection == workspace.connectionID else { return }
+            guard connection == workspace.connectionState.connectionID else { return }
             self.error = error.localizedDescription
         }
     }
 
     private func delete(_ item: JSONValue, connection: UUID) async {
-        guard connection == workspace.connectionID, workspace.isConnected else { return }
+        guard connection == workspace.connectionState.connectionID, workspace.connectionState.isConnected else { return }
         busy = true; error = nil
         defer { busy = false }
         do {
-            try await workspace.deleteSecret(item["id"].string, connection: connection)
-            guard connection == workspace.connectionID else { return }
+            _ = try await workspace.credentials.delete(id: item["id"].string)
+            guard connection == workspace.connectionState.connectionID else { return }
             credentials.removeAll { $0["id"].string == item["id"].string }
         } catch {
-            guard connection == workspace.connectionID else { return }
+            guard connection == workspace.connectionState.connectionID else { return }
             self.error = error.localizedDescription
         }
     }
@@ -195,14 +195,14 @@ struct CredentialSettings: View {
         for controller in Array(windows.values) { controller.window.close() }
         windows.removeAll()
     }
-    func open(_ harness: Harness, workspace: Workspace) {
-        guard workspace.isConnected, !workspace.isDemo, let project = workspace.projectID else { return }
-        let key = "\(workspace.connectionID):harnesses"
+    func open(_ harness: Harness, workspace: ConnectionSession) {
+        guard workspace.connectionState.isConnected, !workspace.connectionState.isDemo, let project = workspace.connectionState.projectID else { return }
+        let key = "\(workspace.connectionState.connectionID):harnesses"
         if let existing = windows[key] {
             if existing.isFinished { existing.window.close() }
             else { existing.window.makeKeyAndOrderFront(nil); return }
         }
-        let session = TerminalSession(arguments: ["--configure-harness", harness.id, "--endpoint", workspace.transportEndpoint, "--project", project])
+        let session = TerminalSession(arguments: ["--configure-harness", harness.id, "--endpoint", workspace.connectionState.transportEndpoint, "--project", project])
         session.view.openURL = { raw in
             guard let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return false }
             return NSWorkspace.shared.open(url)
@@ -220,7 +220,7 @@ struct CredentialSettings: View {
     private let session: TerminalSession
     private let onClose: () -> Void
     var isFinished: Bool { session.ended || session.error != nil }
-    init(harness: Harness, session: TerminalSession, workspace: Workspace, onClose: @escaping () -> Void) {
+    init(harness: Harness, session: TerminalSession, workspace: ConnectionSession, onClose: @escaping () -> Void) {
         self.session = session; self.onClose = onClose
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -228,7 +228,7 @@ struct CredentialSettings: View {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 640, height: 400)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: HarnessSetupContent(session: session, connection: workspace.connectionID, close: { [weak self] in self?.window.close() }).environment(workspace))
+        window.contentView = NSHostingView(rootView: HarnessSetupContent(session: session, connection: workspace.connectionState.connectionID, close: { [weak self] in self?.window.close() }).environment(workspace))
         window.center()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -241,7 +241,7 @@ struct CredentialSettings: View {
 }
 
 private struct HarnessSetupContent: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     let session: TerminalSession
     let connection: UUID
     let close: () -> Void
@@ -260,13 +260,13 @@ private struct HarnessSetupContent: View {
         }
         .background(DiscoboxAppearance.canvas).tint(DiscoboxAppearance.accent)
         .onChange(of: session.ended) { _, ended in
-            if ended, connection == workspace.connectionID {
+            if ended, connection == workspace.connectionState.connectionID {
                 Task {
-                    do { _ = try await workspace.harnesses(force: true) }
+                    do { _ = try await workspace.catalog.harnesses(force: true) }
                     catch { refreshError = error.localizedDescription }
                 }
             }
         }
-        .onChange(of: workspace.connectionID) { _, _ in session.close(); close() }
+        .onChange(of: workspace.connectionState.connectionID) { _, _ in session.close(); close() }
     }
 }

@@ -13,9 +13,9 @@ struct BoxActionMenu: View {
     /// Supplied by sidebar rows so the menu does not observe the whole workspace.
     var pending: Bool? = nil
     let choose: (BoxAction) -> Void
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     var body: some View {
-        let disabled = pending ?? workspace.pendingBoxActions.contains(box.id)
+        let disabled = pending ?? workspace.pending.pendingBoxActions.contains(box.id)
         ForEach(BoxAction.allCases.filter { $0.isAvailable(for: box) }) { action in
             Button(role: action == .purge ? .destructive : nil) { choose(action) } label: {
                 Label(action.title + "…", systemImage: action.symbol)
@@ -27,7 +27,7 @@ struct BoxActionMenu: View {
 struct BoxActionSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     let request: BoxActionRequest
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(TerminalStore.self) private var terminals
     @Environment(ServiceForwards.self) private var forwards
     @Environment(\.dismiss) private var dismiss
@@ -38,16 +38,16 @@ struct BoxActionSheet: View {
     @State private var closed = false
     @State private var startedAt: Date?
     @FocusState private var fieldFocused: Bool
-    private var computer: String? { connections?.sessions.first { $0.workspace === workspace }?.profile.displayName }
+    private var computer: String? { connections?.sessions.first { $0 === workspace }?.profile.displayName }
     private var availabilityIssue: String? {
-        guard workspace.isConnected, request.connection == workspace.connectionID else {
+        guard workspace.connectionState.isConnected, request.connection == workspace.connectionState.connectionID else {
             return "This computer disconnected or reconnected. Cancel and choose the box again."
         }
-        guard let box = workspace.sandboxes.first(where: { $0.id == request.box.id }), request.action.isAvailable(for: box) else {
+        guard let box = workspace.inventory.sandboxes.first(where: { $0.id == request.box.id }), request.action.isAvailable(for: box) else {
             return "The box’s state changed. This action is no longer available."
         }
-        if workspace.pendingBoxActions.contains(box.id) { return "An action is already in progress for this box." }
-        if workspace.clearingPools.contains(box.poolId ?? "") { return "This pool is clearing its caches. Wait for cleanup to finish." }
+        if workspace.pending.pendingBoxActions.contains(box.id) { return "An action is already in progress for this box." }
+        if workspace.pending.clearingPools.contains(box.poolId ?? "") { return "This pool is clearing its caches. Wait for cleanup to finish." }
         return nil
     }
     var body: some View {
@@ -89,7 +89,7 @@ struct BoxActionSheet: View {
                     working = true; failure = nil; startedAt = Date()
                     Task {
                         do {
-                            try await workspace.performBoxAction(request.action, boxID: request.box.id, connection: request.connection, name: name, onAccepted: {
+                            try await workspace.commands.performBoxAction(request.action, boxID: request.box.id, connection: request.connection, name: name, onAccepted: {
                                 working = false
                                 if !closed { close() }
                             }) {
@@ -105,7 +105,7 @@ struct BoxActionSheet: View {
                         } catch {
                             let message = request.action.title + " “" + request.box.displayName + "”: " + error.localizedDescription + " Check the box’s current state before trying again."
                             if !closed { failure = message }
-                            else if workspace.connectionID == request.connection { workspace.commandError = message }
+                            else if workspace.connectionState.connectionID == request.connection { workspace.selection.commandError = message }
                             working = false
                         }
                     }
@@ -132,15 +132,15 @@ struct BulkPurgeSheet: View {
     @Environment(Connections.self) private var connections: Connections?
     let request: BulkPurgeRequest
     let completed: ([String]) -> Void
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var confirmation = ""
     @State private var working = false
     @State private var progress = 0
     @State private var error: String?
-    @State private var result: Workspace.PurgeResult?
+    @State private var result: BoxCommands.PurgeResult?
     @FocusState private var confirmationFocused: Bool
-    private var computer: String? { connections?.sessions.first { $0.workspace === workspace }?.profile.displayName }
+    private var computer: String? { connections?.sessions.first { $0 === workspace }?.profile.displayName }
     var body: some View {
         StudioConfirmation(title: "Purge \(request.boxes.count) archived boxes?", symbol: "trash", subtitle: computer, destructive: true) {
             VStack(alignment: .leading, spacing: 16) {
@@ -190,14 +190,14 @@ struct BulkPurgeSheet: View {
                         Task {
                             defer { working = false }
                             do {
-                                let report = try await workspace.purgeArchivedBoxes(request.boxes.map(\.id), connection: request.connection) { done, _ in progress = done }
+                                let report = try await workspace.commands.purgeArchivedBoxes(request.boxes.map(\.id), connection: request.connection) { done, _ in progress = done }
                                 completed(report.purged)
                                 if report.failures.isEmpty { dismiss() } else { result = report }
                             } catch { self.error = error.localizedDescription }
                         }
                     }.buttonStyle(.borderedProminent).tint(.red).keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("bulkPurge.confirm")
-                        .disabled(working || confirmation != "DELETE" || request.connection != workspace.connectionID)
+                        .disabled(working || confirmation != "DELETE" || request.connection != workspace.connectionState.connectionID)
                 }
             }
         }

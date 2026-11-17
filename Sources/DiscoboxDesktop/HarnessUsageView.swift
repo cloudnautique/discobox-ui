@@ -7,26 +7,22 @@ import DiscoboxCore
 @MainActor struct UsageComputer: Identifiable {
     let id: String
     let name: String
-    let workspace: Workspace
-    static func connected(_ connections: Connections?, fallback workspace: Workspace) -> [UsageComputer] {
-        if let connections {
-            return connections.sessions.filter { $0.workspace.isConnected }.map {
-                .init(id: $0.id, name: $0.profile.displayName, workspace: $0.workspace)
-            }
+    let usage: HarnessUsage
+    static func connected(_ connections: Connections) -> [UsageComputer] {
+        connections.sessions.filter { $0.connectionState.isConnected }.map {
+            .init(id: $0.id, name: $0.profile.displayName, usage: $0.usage)
         }
-        return workspace.isConnected ? [.init(id: workspace.connectionID.uuidString, name: "Connected computer", workspace: workspace)] : []
     }
 }
 
 struct HarnessUsageSection: View {
-    @Environment(Connections.self) private var connections: Connections?
-    @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections
     @AppStorage("harnessUsageExpanded") private var expanded = true
     @AppStorage("harnessUsageShelfHeight") private var height = 150.0
     @GestureState private var resize: ShelfResize?
     @State private var resizeHovered = false
     @State private var showDetails = false
-    private var computers: [UsageComputer] { UsageComputer.connected(connections, fallback: workspace) }
+    private var computers: [UsageComputer] { UsageComputer.connected(connections) }
     var body: some View {
         VStack(spacing: 0) {
             Rectangle().fill(.separator).frame(height: 1)
@@ -78,24 +74,17 @@ struct HarnessUsageSection: View {
                 }.buttonStyle(.plain)
                     .accessibilityLabel("Harness usage")
                     .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                if expanded && computers.contains(where: { $0.workspace.usage.isLoading }) { ProgressView().controlSize(.mini) }
+                if expanded && computers.contains(where: { $0.usage.isLoading }) { ProgressView().controlSize(.mini) }
                 Button("Details…") { showDetails = true }.buttonStyle(.borderless).font(.caption)
             }.padding(.horizontal, 12).frame(height: 34)
             if expanded {
                 UsageSummary(computers: computers).equatable().padding(.horizontal, 12).padding(.bottom, 10)
                     .frame(height: min(320, max(120, resize?.height ?? height)))
-                    .task(id: workspace.connectionID, priority: .utility) {
-                        guard connections == nil else { return }
-                        while !Task.isCancelled {
-                            await workspace.refreshUsage()
-                            do { try await Task.sleep(for: .seconds(60)) } catch { return }
-                        }
-                    }
             }
         }
         .background(DiscoboxAppearance.sidebar)
         .tint(DiscoboxAppearance.accent)
-        .sheet(isPresented: $showDetails) { HarnessUsageDetails().environment(workspace) }
+        .sheet(isPresented: $showDetails) { HarnessUsageDetails() }
     }
     private struct ShelfResize {
         let start: Double
@@ -125,7 +114,7 @@ private struct UsageSummary: View, @MainActor Equatable {
     let computers: [UsageComputer]
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.computers.count == rhs.computers.count && zip(lhs.computers, rhs.computers).allSatisfy {
-            $0.id == $1.id && $0.name == $1.name && $0.workspace === $1.workspace
+            $0.id == $1.id && $0.name == $1.name && $0.usage === $1.usage
         }
     }
     var body: some View {
@@ -135,7 +124,7 @@ private struct UsageSummary: View, @MainActor Equatable {
                     ForEach(computers) { computer in
                         VStack(alignment: .leading, spacing: 9) {
                             UsageComputerHeading(computer: computer)
-                            ComputerUsageSummary(now: context.date).environment(computer.workspace)
+                            ComputerUsageSummary(now: context.date).environment(computer.usage)
                                 .padding(.leading, 18)
                         }
                         if computer.id != computers.last?.id { Divider() }
@@ -160,13 +149,13 @@ private struct UsageComputerHeading: View {
 }
 
 private struct ComputerUsageSummary: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(HarnessUsage.self) private var usage
     let now: Date
-    private var available: [Harness] { workspace.usage.harnesses.filter { workspace.usage.snapshots[$0.id] != nil } }
+    private var available: [Harness] { usage.harnesses.filter { usage.snapshots[$0.id] != nil } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(available) { harness in
-                if let snapshot = workspace.usage.snapshots[harness.id] {
+                if let snapshot = usage.snapshots[harness.id] {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Text(harness.name).font(.caption.weight(.semibold)).lineLimit(1)
@@ -191,17 +180,16 @@ private struct ComputerUsageSummary: View {
                 }
             }
             if available.isEmpty {
-                Text(workspace.usage.isLoading ? "Loading usage…" : "No usage readings yet.").font(.caption).foregroundStyle(.secondary)
+                Text(usage.isLoading ? "Loading usage…" : "No usage readings yet.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 }
 
 struct HarnessUsageDetails: View {
-    @Environment(Connections.self) private var connections: Connections?
-    @Environment(Workspace.self) private var workspace
+    @Environment(Connections.self) private var connections: Connections
     @Environment(\.dismiss) private var dismiss
-    private var computers: [UsageComputer] { UsageComputer.connected(connections, fallback: workspace) }
+    private var computers: [UsageComputer] { UsageComputer.connected(connections) }
     var body: some View {
         StudioConfirmation(title: "Harness usage", symbol: "gauge.with.dots.needle.33percent") {
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -210,7 +198,7 @@ struct HarnessUsageDetails: View {
                         ForEach(computers) { computer in
                             VStack(alignment: .leading, spacing: 12) {
                                 UsageComputerHeading(computer: computer)
-                                HarnessUsageContent(now: context.date).environment(computer.workspace)
+                                HarnessUsageContent(now: context.date).environment(computer.usage)
                                     .padding(.leading, 18)
                             }
                             if computer.id != computers.last?.id { Divider() }
@@ -222,7 +210,7 @@ struct HarnessUsageDetails: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Reads recorded quota responses once a minute while connected. Does not request fresh usage from providers. Readings stay separate for each computer and harness.")
                                 ForEach(computers) { computer in
-                                    let notices = Array(Set(computer.workspace.usage.notices)).sorted()
+                                    let notices = Array(Set(computer.usage.notices)).sorted()
                                     if !notices.isEmpty {
                                         Text(computer.name).fontWeight(.medium)
                                         ForEach(notices, id: \.self) { Text($0) }
@@ -236,26 +224,19 @@ struct HarnessUsageDetails: View {
         } footer: {
             HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction) }
         }.frame(height: 600)
-        .task(id: workspace.connectionID, priority: .utility) {
-            guard connections == nil else { return }
-            while !Task.isCancelled {
-                await workspace.refreshUsage()
-                do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            }
-        }
     }
 }
 
 private struct HarnessUsageContent: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(HarnessUsage.self) private var usage
     let now: Date
     private var sorted: [Harness] {
-        workspace.usage.harnesses
+        usage.harnesses
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ForEach(sorted.filter { workspace.usage.snapshots[$0.id] != nil }) { harness in
-                if let snapshot = workspace.usage.snapshots[harness.id] {
+            ForEach(sorted.filter { usage.snapshots[$0.id] != nil }) { harness in
+                if let snapshot = usage.snapshots[harness.id] {
                     VStack(alignment: .leading, spacing: 9) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(harness.name).font(.callout.weight(.semibold)).lineLimit(1)
@@ -284,7 +265,7 @@ private struct HarnessUsageContent: View {
                     }
                 }
             }
-            let missing = sorted.filter { workspace.usage.snapshots[$0.id] == nil }
+            let missing = sorted.filter { usage.snapshots[$0.id] == nil }
             if !missing.isEmpty {
                 DisclosureGroup("No readings · \(missing.count)") {
                     VStack(alignment: .leading, spacing: 6) {
@@ -292,7 +273,7 @@ private struct HarnessUsageContent: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
                 }.font(.caption).foregroundStyle(.secondary)
             }
-            if sorted.isEmpty && !workspace.usage.isLoading {
+            if sorted.isEmpty && !usage.isLoading {
                 Text("No usage readings available").font(.caption).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)

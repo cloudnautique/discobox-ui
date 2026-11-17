@@ -3,57 +3,25 @@ import Observation
 import Testing
 @testable import DiscoboxCore
 
-/// The derivation the snapshot replaced: per-read filtering, activity and a
-/// sort comparing `sidebarTitle` directly. Kept here as the reference.
-@MainActor private func referenceCandidates(_ hub: Connections) -> [ConnectedBox] {
-    let browser = hub.browser
-    return hub.sessions.filter { $0.workspace.isConnected && (browser.computerID == nil || browser.computerID == $0.id) }.flatMap { host in
-        host.workspace.sandboxes.compactMap { box -> ConnectedBox? in
-            let activity = host.workspace.activity(for: box)
-            let attention = box.matchesAttention || activity.needsYou
-            let include: Bool
-            switch browser.filter {
-            case .all: include = !box.isArchived
-            case .running: include = host.workspace.powerStatus(for: box).isRunning
-            case .attention: include = !box.isArchived && attention
-            case .archived: include = box.isArchived
-            }
-            guard include, BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) else { return nil }
-            let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity, power: host.workspace.powerStatus(for: box))
-            return item.matches(browser.searchText) ? item : nil
+/// main's per-read derivation that the memo replaced, kept as the reference:
+/// rows built from each session, then BoxBrowser's selectors.
+@MainActor private func referenceQualified(_ hub: Connections) -> [ConnectedBox] {
+    hub.sessions.filter { $0.connectionState.isConnected }.flatMap { host in
+        host.inventory.sandboxes.filter { !$0.isDeleted }.map { box in
+            let activity = host.activity(for: box)
+            return ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName,
+                box: box, needsAttention: box.matchesAttention || activity.needsYou, activity: activity, power: host.powerStatus(for: box))
         }
-    }.sorted {
-        let names = $0.box.sidebarTitle.localizedStandardCompare($1.box.sidebarTitle)
-        if names != .orderedSame { return names == .orderedAscending }
-        if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-        if $0.location.box != $1.location.box { return $0.location.box < $1.location.box }
-        return $0.location.connection < $1.location.connection
     }
 }
-
-@MainActor private func referenceSwitcher(_ hub: Connections) -> [BoxLocation] {
-    hub.sessions.filter { $0.workspace.isConnected }.flatMap { host in
-        let waiting = Set(host.workspace.approvals.map(\.boxID))
-        return host.workspace.switcherBoxes.map { box in
-            ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box,
-                         needsAttention: box.matchesAttention || waiting.contains(box.id) || host.workspace.activity(for: box).needsYou,
-                         activity: host.workspace.activity(for: box), power: host.workspace.powerStatus(for: box))
-        }
-    }.sorted {
-        func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.power.isRunning ? 1 : 2 }
-        if rank($0) != rank($1) { return rank($0) < rank($1) }
-        let names = $0.box.displayName.localizedStandardCompare($1.box.displayName)
-        if names != .orderedSame { return names == .orderedAscending }
-        if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-        return $0.location.connection < $1.location.connection
-    }.map(\.location)
-}
+@MainActor private func referenceCandidates(_ hub: Connections) -> [ConnectedBox] { hub.browser.candidates(in: referenceQualified(hub)) }
+@MainActor private func referenceSwitcher(_ hub: Connections) -> [BoxLocation] { hub.browser.switcherBoxes(in: referenceQualified(hub)).map(\.location) }
 
 @MainActor private func snapshotHub() async throws -> (Connections, ConnectionSession, ConnectionSession, SnapshotFixture, SnapshotFixture) {
     let hub = Connections(polling: false), a = SnapshotFixture(), b = SnapshotFixture()
     let local = try await hub.connect(.thisComputer, demo: true) { a }
     let remote = try await hub.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { b }
-    await local.workspace.refreshApprovals(); await remote.workspace.refreshApprovals()
+    await local.approvalStore.refreshApprovals(); await remote.approvalStore.refreshApprovals()
     return (hub, local, remote, a, b)
 }
 
@@ -71,7 +39,7 @@ private final class Flag: @unchecked Sendable { var fired = false }
     let (hub, _, remote, _, _) = try await snapshotHub()
     defer { hub.disconnectAll() }
     for computer in [nil, remote.id] {
-        for filter in Workspace.BoxFilter.allCases {
+        for filter in BoxFilter.allCases {
             for search in ["", "api", "Studio", "zzz"] {
                 for tags in [Set<String>(), ["team=api"]] {
                     for quick in [nil, BoxActivityFilter.needsYou, .working] {
@@ -102,7 +70,7 @@ private final class Flag: @unchecked Sendable { var fired = false }
     hub.browser.activityFilter = .working
     let counts = (hub.browserSnapshot.needsYouCount, hub.browserSnapshot.workingCount)
     #expect(counts == (6, 2) && hub.browserSelectionPin == nil)
-    await a.set("work", state: "idle"); await local.workspace.refresh()
+    await a.set("work", state: "idle"); await local.refresh()
     #expect(hub.browserSelectionPin?.location == location)
     #expect(!hub.browserBoxes.contains { $0.location == location })
     #expect(hub.browserSnapshot.workingCount == 1 && hub.browserSnapshot.needsYouCount == 6)
@@ -114,11 +82,11 @@ private final class Flag: @unchecked Sendable { var fired = false }
     let (hub, local, remote, a, b) = try await snapshotHub()
     defer { hub.disconnectAll() }
     let revision = hub.browserFleet.revision
-    #expect(await !notifiesSnapshotReader(hub) { await local.workspace.refresh(); await remote.workspace.refreshApprovals() })
+    #expect(await !notifiesSnapshotReader(hub) { await local.refresh(); await remote.approvalStore.refreshApprovals() })
     #expect(hub.browserFleet.revision == revision)
-    #expect(await notifiesSnapshotReader(hub) { await b.request("idle"); await remote.workspace.refreshApprovals() })
+    #expect(await notifiesSnapshotReader(hub) { await b.request("idle"); await remote.approvalStore.refreshApprovals() })
     #expect(hub.browserBoxes.first { $0.location == .init(connection: remote.id, box: "idle") }?.activity?.approvalCount == 1)
-    #expect(await notifiesSnapshotReader(hub) { await a.set("idle", state: "working"); await local.workspace.refresh() })
+    #expect(await notifiesSnapshotReader(hub) { await a.set("idle", state: "working"); await local.refresh() })
     #expect(hub.browserSnapshot.workingCount == 3 && hub.browserFleet.revision > revision)
     #expect(await notifiesSnapshotReader(hub) { hub.browser.searchText = "Answer" })
     #expect(hub.browserBoxes.map(\.box.id) == ["question", "question"])
@@ -157,11 +125,11 @@ private final class Flag: @unchecked Sendable { var fired = false }
 @MainActor @Test func steadyRefreshesKeepTheClockAndExpiryStillMatchesTheWallClock() async throws {
     let start = Date()
     let clockNow = ClockSource(start)
-    let workspace = Workspace(now: { clockNow.date })
+    let workspace = ConnectionSession(now: { clockNow.date })
     let fixture = SnapshotFixture(observed: start)
     await workspace.connect(client: fixture, label: "fixture")
     defer { workspace.disconnect() }
-    let box = try #require(workspace.sandboxes.first { $0.id == "work" })
+    let box = try #require(workspace.inventory.sandboxes.first { $0.id == "work" })
     let first = workspace.activityClock
     #expect(workspace.activity(for: box).isWorking)
     for offset in [3.0, 30, 59] {
@@ -174,7 +142,7 @@ private final class Flag: @unchecked Sendable { var fired = false }
     for offset in [61.0, 100, 119, 121, 200] {
         clockNow.date = start + offset
         await workspace.refresh()
-        let box = try #require(workspace.sandboxes.first { $0.id == "work" })
+        let box = try #require(workspace.inventory.sandboxes.first { $0.id == "work" })
         let wall = AgentActivity(box: box, reachable: true, now: clockNow.date)
         #expect(workspace.activity(for: box) == wall)
         #expect(workspace.powerStatus(for: box) == BoxPowerStatus(box: box, now: clockNow.date))

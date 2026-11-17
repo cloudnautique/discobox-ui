@@ -13,7 +13,7 @@ import DiscoboxCore
 
 struct ConnectionSettings: View {
     @Environment(Connections.self) private var connections: Connections?
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @AppStorage("serverEndpoint") private var lastEndpoint = "unix://"
     @AppStorage("savedConnections") private var savedConnections = "[]"
     @AppStorage("computerName") private var computerName = ""
@@ -25,16 +25,16 @@ struct ConnectionSettings: View {
     private struct EditRequest: Identifiable { let id = UUID(); let profile: ConnectionProfile? }
     private var profiles: [ConnectionProfile] { [.localComputer(name: computerName)] + (ConnectionProfiles.decode(savedConnections) ?? []) }
     private var selection: ConnectionProfile? { profiles.first { $0.id == selected } }
-    private var selectedWorkspace: Workspace? {
-        if let connections { return selection.flatMap { connections.session($0.id)?.workspace } }
-        return selection?.id == ConnectionProfiles.normalizedEndpoint(workspace.endpointLabel) ? workspace : nil
+    private var selectedWorkspace: ConnectionSession? {
+        if let connections { return selection.flatMap { connections.session($0.id) } }
+        return selection?.id == ConnectionProfiles.normalizedEndpoint(workspace.connectionState.endpointLabel) ? workspace : nil
     }
     private func connected(_ profile: ConnectionProfile) -> Bool {
         if let connections {
-            guard let target = connections.session(profile.endpoint)?.workspace else { return false }
-            return target.isConnected && target.connectionError == nil
+            guard let target = connections.session(profile.endpoint) else { return false }
+            return target.connectionState.isConnected && target.connectionState.connectionError == nil
         }
-        return workspace.isConnected && workspace.connectionError == nil && !workspace.isDemo && ConnectionProfiles.normalizedEndpoint(workspace.endpointLabel) == profile.endpoint
+        return workspace.connectionState.isConnected && workspace.connectionState.connectionError == nil && !workspace.connectionState.isDemo && ConnectionProfiles.normalizedEndpoint(workspace.connectionState.endpointLabel) == profile.endpoint
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -65,7 +65,7 @@ struct ConnectionSettings: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
-                        if let target = connections?.session(profile.id)?.workspace, target.canReconnect {
+                        if let target = connections?.session(profile.id), target.connectionState.canReconnect {
                             ConnectionStatusBadge(workspace: target)
                         } else if connected(profile) {
                             Label("Connected", systemImage: "circle.fill").foregroundStyle(.green).font(.caption)
@@ -75,7 +75,7 @@ struct ConnectionSettings: View {
                     }.padding(.vertical, 9).tag(profile.id)
                     .contextMenu {
                         Button(connected(profile) ? "Show Boxes" : "Connect") { connect(profile) }.disabled(connecting(profile))
-                        if let connections, connections.session(profile.id)?.workspace.canReconnect == true { Button("Disconnect") { connections.disconnect(profile.id) } }
+                        if let connections, connections.session(profile.id)?.connectionState.canReconnect == true { Button("Disconnect") { connections.disconnect(profile.id) } }
                         if profile.endpoint != "unix://" {
                             Button("Edit…") { editor = EditRequest(profile: profile) }
                             Button("Copy Address") { copy(profile.endpoint) }
@@ -87,18 +87,18 @@ struct ConnectionSettings: View {
             }.listStyle(.inset).scrollContentBackground(.hidden).studioCard()
                 .frame(minHeight: 160)
                 .onDeleteCommand { if let selection, selection.endpoint != "unix://" { removing = selection } }
-            if let error = selectedWorkspace?.connectionError ?? error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error = selectedWorkspace?.connectionState.connectionError ?? error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
             HStack {
                 Button("Edit…") { if let selection { editor = EditRequest(profile: selection) } }
                     .disabled(selection == nil || selected == "unix://")
                 Button("Remove…") { removing = selection }
                     .disabled(selection == nil || selected == "unix://")
                 Spacer()
-                if let selection, let connections, connections.session(selection.id)?.workspace.canReconnect == true {
+                if let selection, let connections, connections.session(selection.id)?.connectionState.canReconnect == true {
                     Button("Disconnect") { connections.disconnect(selection.id) }
                 }
                 if selection.map(connecting) == true { ProgressView().controlSize(.small) }
-                Button(selection.map(connected) == true ? "Show Boxes" : selectedWorkspace?.connectionError != nil ? "Retry now" : "Connect") { if let selection { connect(selection) } }
+                Button(selection.map(connected) == true ? "Show Boxes" : selectedWorkspace?.connectionState.connectionError != nil ? "Retry now" : "Connect") { if let selection { connect(selection) } }
                     .buttonStyle(.borderedProminent)
                     .disabled(selection == nil || selection.map(connecting) == true)
             }
@@ -109,7 +109,7 @@ struct ConnectionSettings: View {
         .task {
             // Collapse only aliases of the current default socket, never custom sockets.
             if let migrated = ConnectionProfiles.decode(savedConnections), let text = ConnectionProfiles.encode(migrated), text != savedConnections { savedConnections = text }
-            let current = ConnectionProfiles.normalizedEndpoint(workspace.endpointLabel)
+            let current = ConnectionProfiles.normalizedEndpoint(workspace.connectionState.endpointLabel)
             selected = profiles.first(where: { $0.endpoint == current })?.id ?? "unix://"
         }
         .sheet(item: $editor) { request in
@@ -132,11 +132,11 @@ struct ConnectionSettings: View {
     }
     private func connecting(_ profile: ConnectionProfile) -> Bool {
         if let connections {
-            let target = connections.session(profile.id)?.workspace
-            return target?.isConnecting == true || target?.recovery.isAttempting == true
+            let target = connections.session(profile.id)
+            return target?.connectionState.isConnecting == true || target?.connectionState.recovery.isAttempting == true
         }
         let target = workspace
-        return target.isConnecting || target.recovery.isAttempting
+        return target.connectionState.isConnecting || target.connectionState.recovery.isAttempting
     }
     private func connect(_ profile: ConnectionProfile) {
         guard !connecting(profile) else { return }
@@ -144,13 +144,13 @@ struct ConnectionSettings: View {
         Task {
             do {
                 lastEndpoint = profile.endpoint
-                let target: Workspace
-                if let connections { target = try await connections.connect(profile) { try ConnectionClients.make(profile) }.workspace }
+                let target: ConnectionSession
+                if let connections { target = try await connections.connect(profile) { try ConnectionClients.make(profile) } }
                 else {
                     target = workspace
                     await target.connect(client: try ConnectionClients.make(profile), label: profile.endpoint)
                 }
-                if target.endpointLabel == profile.endpoint, let failure = target.connectionError {
+                if target.connectionState.endpointLabel == profile.endpoint, let failure = target.connectionState.connectionError {
                     error = nil // The target's live error clears when automatic recovery succeeds.
                     if failure.contains("Access refused") { needsAuthorization.insert(profile.id) }
                 } else { needsAuthorization.remove(profile.id) }

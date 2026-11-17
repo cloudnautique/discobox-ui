@@ -49,33 +49,21 @@ public struct PollingCadence: Sendable, Equatable {
     }
 }
 
-/// Injectable time for polling loops, so tests can drive them without waiting.
-public struct PollingClock: Sendable {
-    public var now: @Sendable () -> ContinuousClock.Instant
-    public var sleep: @Sendable (Duration) async throws -> Void
-    public init(now: @escaping @Sendable () -> ContinuousClock.Instant, sleep: @escaping @Sendable (Duration) async throws -> Void) {
-        self.now = now; self.sleep = sleep
-    }
-    public static let continuous = PollingClock(now: { .now }, sleep: { try await Task.sleep(for: $0) })
-}
-
 /// Loops sleep here so a cadence or recovery change takes effect at once rather
 /// than after a long background interval, without interrupting a poll in flight.
+/// Timed sleeps go through the session's injectable `pollSleep`.
 @MainActor final class PollingSchedule {
-    var cadence: PollingCadence { didSet { if cadence != oldValue { wake() } } }
-    let clock: PollingClock
     private var waiters: [UUID: (continuation: CheckedContinuation<Bool, Never>, timer: Task<Void, Never>?)] = [:]
-    init(cadence: PollingCadence = .init(), clock: PollingClock) { self.cadence = cadence; self.clock = clock }
 
     /// True when woken early so the caller recomputes its deadline; false once
     /// the delay elapses. Nil sleeps until woken. Throws only on cancellation.
-    func sleep(for delay: Duration?) async throws -> Bool {
-        let id = UUID(), sleep = clock.sleep
+    func sleep(_ loop: PollingLoop, seconds: Double?, using sleep: @escaping @Sendable (PollingLoop, Double) async throws -> Void) async throws -> Bool {
+        let id = UUID()
         let woken = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(returning: false); return }
-                let timer = delay.map { delay in Task { [weak self] in
-                    do { try await sleep(delay) } catch { return }
+                let timer = seconds.map { seconds in Task { [weak self] in
+                    do { try await sleep(loop, seconds) } catch { return }
                     self?.resume(id, woken: false)
                 } }
                 waiters[id] = (continuation, timer)

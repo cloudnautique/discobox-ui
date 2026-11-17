@@ -22,49 +22,52 @@ import Testing
 }
 
 @MainActor @Test func boxActionsTargetExplicitBoxAndArchiveRestorePurge() async throws {
-    let workspace = Workspace()
+    let hub = Connections(polling: false)
+    let workspace = hub.active
     await workspace.connect(client: DemoClient(), label: "offline", demo: true)
-    await workspace.selectBox("demo-ui")
-    let connection = workspace.connectionID
-    try await workspace.performBoxAction(.start, boxID: "demo-api", connection: connection)
-    #expect(workspace.sandboxID == "demo-ui")
-    #expect(workspace.sandboxes.first { $0.id == "demo-api" }?.isRunning == true)
-    try await workspace.performBoxAction(.archive, boxID: "demo-api", connection: connection)
-    #expect(!workspace.visibleBoxes.contains { $0.id == "demo-api" })
-    workspace.filter = .archived
-    #expect(workspace.visibleBoxes.map(\.id) == ["demo-api"])
-    try await workspace.performBoxAction(.unarchive, boxID: "demo-api", connection: connection)
-    #expect(workspace.visibleBoxes.isEmpty)
-    try await workspace.performBoxAction(.archive, boxID: "demo-api", connection: connection)
-    try await workspace.performBoxAction(.purge, boxID: "demo-api", connection: connection)
-    #expect(!workspace.sandboxes.contains { $0.id == "demo-api" })
-    #expect(workspace.pendingBoxActions.isEmpty)
+    await workspace.selection.selectBox("demo-ui")
+    let connection = workspace.connectionState.connectionID
+    try await workspace.commands.performBoxAction(.start, boxID: "demo-api", connection: connection)
+    #expect(workspace.selection.sandboxID == "demo-ui")
+    #expect(workspace.inventory.sandboxes.first { $0.id == "demo-api" }?.isRunning == true)
+    try await workspace.commands.performBoxAction(.archive, boxID: "demo-api", connection: connection)
+    #expect(!hub.browserBoxes.map(\.box).contains { $0.id == "demo-api" })
+    hub.browser.filter = .archived
+    #expect(hub.browserBoxes.map(\.box).map(\.id) == ["demo-api"])
+    try await workspace.commands.performBoxAction(.unarchive, boxID: "demo-api", connection: connection)
+    #expect(hub.browserBoxes.map(\.box).isEmpty)
+    try await workspace.commands.performBoxAction(.archive, boxID: "demo-api", connection: connection)
+    try await workspace.commands.performBoxAction(.purge, boxID: "demo-api", connection: connection)
+    #expect(!workspace.inventory.sandboxes.contains { $0.id == "demo-api" })
+    #expect(workspace.pending.pendingBoxActions.isEmpty)
 }
 
 @MainActor @Test func staleConnectionAndActivePurgeAreRejected() async throws {
-    let workspace = Workspace()
+    let hub = Connections(polling: false)
+    let workspace = hub.active
     await workspace.connect(client: DemoClient(), label: "offline", demo: true)
-    let old = workspace.connectionID
+    let old = workspace.connectionState.connectionID
     await workspace.connect(client: DemoClient(), label: "another", demo: true)
     await #expect(throws: DiscoboxError.self) {
-        try await workspace.performBoxAction(.stop, boxID: "demo-ui", connection: old)
+        try await workspace.commands.performBoxAction(.stop, boxID: "demo-ui", connection: old)
     }
     await #expect(throws: DiscoboxError.self) {
-        try await workspace.performBoxAction(.purge, boxID: "demo-ui", connection: workspace.connectionID)
+        try await workspace.commands.performBoxAction(.purge, boxID: "demo-ui", connection: workspace.connectionState.connectionID)
     }
-    #expect(workspace.sandboxes.first { $0.id == "demo-ui" }?.isRunning == true)
+    #expect(workspace.inventory.sandboxes.first { $0.id == "demo-ui" }?.isRunning == true)
 }
 
 @MainActor @Test func disruptiveActionClearsSelectionBeforeSubmission() async throws {
-    let workspace = Workspace()
+    let hub = Connections(polling: false)
+    let workspace = hub.active
     await workspace.connect(client: DemoClient(), label: "offline", demo: true)
-    await workspace.selectBox("demo-ui")
+    await workspace.selection.selectBox("demo-ui")
     var detached = false
-    try await workspace.performBoxAction(.stop, boxID: "demo-ui", connection: workspace.connectionID) {
-        #expect(workspace.sandboxID == nil)
-        #expect(workspace.pendingBoxActions.contains("demo-ui"))
+    try await workspace.commands.performBoxAction(.stop, boxID: "demo-ui", connection: workspace.connectionState.connectionID) {
+        #expect(workspace.selection.sandboxID == nil)
+        #expect(workspace.pending.pendingBoxActions.contains("demo-ui"))
         detached = true
     }
     #expect(detached)
-    #expect(workspace.sandboxes.first { $0.id == "demo-ui" }?.isRunning == false)
+    #expect(workspace.inventory.sandboxes.first { $0.id == "demo-ui" }?.isRunning == false)
 }

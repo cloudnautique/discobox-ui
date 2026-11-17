@@ -2,7 +2,7 @@ import SwiftUI
 import DiscoboxCore
 
 struct ApprovalInboxView: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     let boxID: String?
     var body: some View { ApprovalQueueContent(workspace: workspace, boxID: boxID) }
 }
@@ -13,13 +13,14 @@ private struct ApprovalQueueContent: View {
     @State private var queue: ApprovalQueue
     @State private var refreshing = false
     @FocusState private var listFocused: Bool
-    init(workspace: Workspace, boxID: String?) {
-        _queue = State(initialValue: ApprovalQueue(workspace: workspace, boxID: boxID))
+    init(workspace: ConnectionSession, boxID: String?) {
+        self.workspace = workspace
+        _queue = State(initialValue: ApprovalQueue(connection: workspace.connectionState, approvals: workspace.approvalStore, boxID: boxID))
     }
-    private var workspace: Workspace { queue.workspace }
+    private let workspace: ConnectionSession
     private var subtitle: String {
-        let computer = connections?.sessions.first { $0.workspace === workspace }?.profile.displayName
-        let box = queue.boxID.flatMap { id in workspace.sandboxes.first { $0.id == id }?.displayName }
+        let computer = connections?.sessions.first { $0 === workspace }?.profile.displayName
+        let box = queue.boxID.flatMap { id in workspace.inventory.sandboxes.first { $0.id == id }?.displayName }
         return [computer, box].compactMap { $0 }.joined(separator: " · ")
     }
     var body: some View {
@@ -41,7 +42,7 @@ private struct ApprovalQueueContent: View {
             } else {
                 StudioConfirmation(title: "Approval requests", symbol: "bell.badge", subtitle: subtitle, width: 720) {
                     VStack(alignment: .leading, spacing: 12) {
-                        if let error = workspace.approvalError { Notice(text: "Could not refresh requests: " + error, symbol: "wifi.exclamationmark") }
+                        if let error = workspace.approvalStore.approvalError { Notice(text: "Could not refresh requests: " + error, symbol: "wifi.exclamationmark") }
                         if !queue.valid {
                             ContentUnavailableView("Connection changed", systemImage: "network", description: Text("Reopen the inbox on this computer."))
                         } else if queue.requests.isEmpty {
@@ -55,7 +56,7 @@ private struct ApprovalQueueContent: View {
                                             .foregroundStyle(DiscoboxAppearance.accent).frame(width: 24)
                                         VStack(alignment: .leading, spacing: 5) {
                                             HStack { Text(item.reviewTitle).fontWeight(.semibold); Text(item.intent).font(.caption).foregroundStyle(.secondary) }
-                                            if queue.boxID == nil { Text(workspace.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID).font(.caption).foregroundStyle(.secondary) }
+                                            if queue.boxID == nil { Text(workspace.inventory.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID).font(.caption).foregroundStyle(.secondary) }
                                             if !item.destinationSummary.isEmpty { Text(item.destinationSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                                             if !item.request["justification"].string.isEmpty { Text(item.request["justification"].string).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -84,27 +85,27 @@ private struct ApprovalQueueContent: View {
         }
         .onAppear { queue.synchronize(); listFocused = true }
         .onChange(of: queue.reviewing) { listFocused = queue.reviewing == nil }
-        .onChange(of: workspace.approvals) { queue.synchronize() }
-        .onChange(of: workspace.connectionID) { queue.back() }
+        .onChange(of: workspace.approvalStore.approvals) { queue.synchronize() }
+        .onChange(of: workspace.connectionState.connectionID) { queue.back() }
     }
     private func refresh() {
         guard !refreshing else { return }
         refreshing = true
-        Task { await workspace.refreshApprovals(); refreshing = false; queue.synchronize() }
+        Task { await workspace.approvalStore.refreshApprovals(); refreshing = false; queue.synchronize() }
     }
 }
 
 /// Identity stays visible across both generations of credential approval.
 struct ApprovalRequestIdentity: View {
     let item: ApprovalItem
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let host = connections?.sessions.first(where: { $0.workspace === workspace }) {
+            if let host = connections?.sessions.first(where: { $0 === workspace }) {
                 LabeledContent("Computer", value: host.profile.displayName)
             }
-            LabeledContent("Requesting box", value: workspace.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID)
+            LabeledContent("Requesting box", value: workspace.inventory.sandboxes.first { $0.id == item.boxID }?.displayName ?? item.boxID)
             LabeledContent("Access", value: item.intent)
             if !item.destinationSummary.isEmpty { LabeledContent("Destination", value: item.destinationSummary) }
             if !item.request["envName"].string.isEmpty { LabeledContent("Variable", value: item.request["envName"].string) }
@@ -123,7 +124,7 @@ struct LegacyApprovalSheet: View {
     let item: ApprovalItem
     var initialDuration: String? = nil
     var onClose: (() -> Void)? = nil
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var connection: UUID?
     @State private var secrets: [JSONValue] = []
@@ -143,7 +144,7 @@ struct LegacyApprovalSheet: View {
     @State private var receiptAction = ""
     private var request: JSONValue { item.request }
     private var refresh: Bool { request["reason"].string == "refresh" }
-    private var resolved: Bool { connection != nil && (workspace.connectionID != connection || !workspace.approvals.contains(item)) }
+    private var resolved: Bool { connection != nil && (workspace.connectionState.connectionID != connection || !workspace.approvalStore.approvals.contains(item)) }
     private var certificates: [JSONValue] { request["observedChain"].array + (request["suppliedCA"] == .null ? [] : [request["suppliedCA"]]) }
     private var selectedSecret: JSONValue { ApprovalDuration.selectedSecret(id: secret, request: request, secrets: secrets) }
     private var maximum: Double? { item.kind == "credential" ? selectedSecret["maxGrantTTLSeconds"].number : nil }
@@ -219,7 +220,7 @@ struct LegacyApprovalSheet: View {
                 }
             }
         }.task {
-            connection = workspace.connectionID
+            connection = workspace.connectionState.connectionID
             let requested = request["grantTTLSeconds"].number ?? 3600
             let trustDuration = requested.isFinite && requested > 0 && requested < Double(Int.max) ? String(Int(requested)) : "3600"
             duration = initialDuration ?? (item.kind == "trust" ? trustDuration : ApprovalDuration.automatic)
@@ -228,8 +229,8 @@ struct LegacyApprovalSheet: View {
             defer { loading = false }
             do {
                 if item.kind == "credential" {
-                    let loaded = try await workspace.approvalSecrets()
-                    guard !closed, !Task.isCancelled, connection == workspace.connectionID else { return }
+                    let loaded = try await workspace.approvalStore.approvalSecrets()
+                    guard !closed, !Task.isCancelled, connection == workspace.connectionState.connectionID else { return }
                     secrets = loaded
                     let configured = ApprovalDuration.selectedSecret(id: secret, request: request, secrets: loaded)
                     if secret.isEmpty, !configured["id"].string.isEmpty { secret = configured["id"].string }
@@ -301,12 +302,13 @@ struct LegacyApprovalSheet: View {
         Task {
             defer { busy = false; value = "" }
             do {
-                try await workspace.validateApproval(item, connection: connection)
-                let made = try await workspace.createSecret(body, connection: connection)
-                guard !closed, workspace.connectionID == connection else { return }
-                secret = made
+                try await workspace.approvalStore.validateApproval(item, connection: connection)
+                let made = try await workspace.credentials.create(payload: body)
+                guard !closed, workspace.connectionState.connectionID == connection else { return }
+                guard !made["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
+                secret = made["id"].string
                 creating = false; value = ""
-                secrets = try await workspace.approvalSecrets()
+                secrets = try await workspace.approvalStore.approvalSecrets()
                 reviewed = false
             } catch { if !closed { self.error = error.localizedDescription } }
         }
@@ -324,13 +326,13 @@ struct LegacyApprovalSheet: View {
         Task {
             defer { busy = false; value = "" }
             do {
-                try await workspace.answer(item, answer, connection: connection, onAccepted: { result in
+                try await workspace.approvalStore.answer(item, answer, connection: connection, onAccepted: { result in
                     guard !closed else { return }
                     receipt = result; receiptAction = answer.action
                 })
             } catch {
                 if !closed { self.error = error.localizedDescription; reviewed = false }
-                else if workspace.connectionID == connection { workspace.commandError = error.localizedDescription }
+                else if workspace.connectionState.connectionID == connection { workspace.selection.commandError = error.localizedDescription }
             }
         }
     }

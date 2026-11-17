@@ -2,7 +2,7 @@ import SwiftUI
 import DiscoboxCore
 
 struct ToolsSheet: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var tools: [JSONValue] = []
     @State private var busy = false
@@ -12,13 +12,12 @@ struct ToolsSheet: View {
     @State private var loading = true
     @State private var reviewExpanded: Bool
 
-    /// The box and connection the sheet was presented for; nil falls back to
-    /// the selection at first appearance (fixtures).
+    /// The box the sheet was presented for; nil falls back to the selection
+    /// at first appearance (fixtures).
     private let box: String?
-    private let connection: UUID?
 
-    init(box: String? = nil, connection: UUID? = nil, initiallyExpanded: Bool = false) {
-        self.box = box; self.connection = connection
+    init(box: String? = nil, initiallyExpanded: Bool = false) {
+        self.box = box
         _reviewExpanded = State(initialValue: initiallyExpanded)
     }
 
@@ -29,7 +28,7 @@ struct ToolsSheet: View {
 
     var body: some View {
         StudioConfirmation(title: "Tools & review", symbol: "wrench.and.screwdriver",
-                           subtitle: workspace.selectedBox?.displayName, width: 620) {
+                           subtitle: workspace.selection.selectedBox?.displayName, width: 620) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -58,8 +57,8 @@ struct ToolsSheet: View {
         }.frame(height: 640).interactiveDismissDisabled(busy)
         .task {
             defer { loading = false }
-            guard let box = box ?? workspace.sandboxID else { error = "Select a box to see its tools."; return }
-            do { tools = try await workspace.tools(box: box, connection: connection ?? workspace.connectionID) }
+            guard let box = box ?? workspace.selection.sandboxID else { error = "Select a box to see its tools."; return }
+            do { tools = try await workspace.tools.list(box: box)["tools"].array }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -141,7 +140,7 @@ struct ToolsSheet: View {
         busy = true; error = nil
         Task {
             do {
-                try await workspace.openSession(tool: tool,
+                try await workspace.selection.openSession(tool: tool,
                     base: refs ? base.trimmingCharacters(in: .whitespacesAndNewlines) : "",
                     head: refs ? head.trimmingCharacters(in: .whitespacesAndNewlines) : "")
                 dismiss()

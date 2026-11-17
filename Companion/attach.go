@@ -54,7 +54,7 @@ func openAttach(ctx context.Context, endpoint string, req request, event func(re
 	if req.ExecID == "primary" {
 		return nil, errors.New("a concrete terminal ID is required")
 	}
-	b, err := newBridge(endpoint, false)
+	b, err := newBridge(endpoint)
 	if err != nil {
 		return nil, err
 	}

@@ -51,7 +51,7 @@ func TestPrivateProxyCancellationClosesLiveUpgrades(t *testing.T) {
 	if err := json.NewDecoder(reader).Decode(&ready); err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := newBridge(ready.Endpoint, false)
+	bridge, err := newBridge(ready.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}

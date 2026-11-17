@@ -5,14 +5,14 @@ import Testing
 @MainActor struct HarnessManagementTests {
     @Test func reviewAndSaveRemainOnTheChosenBoxAndPublishDurableReceipt() async throws {
         let client = HarnessFixture()
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         await model.load()
         model.selectBox("demo-ui")
         await model.refreshPreview()
         #expect(model.canSave)
-        await workspace.selectBox("demo-api")
+        await workspace.selection.selectBox("demo-api")
         await model.answer(save: true)
         #expect(model.result["state"].string == "saved-handoff-pending")
         #expect(!model.canSave && model.review == .null)
@@ -27,9 +27,9 @@ import Testing
     }
     @Test func ambiguousSaveRequiresFreshReviewAndReconnectionCannotRetarget() async throws {
         let client = HarnessFixture(failSave: true)
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         model.selectBox("demo-ui")
         await model.refreshPreview()
         await model.answer(save: true)
@@ -45,18 +45,18 @@ import Testing
     }
     @Test func mismatchedReceiptIsNotShownAsASuccessfulSave() async throws {
         let client = HarnessFixture(wrongReceipt: true)
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         model.selectBox("demo-ui"); await model.refreshPreview(); await model.answer(save: true)
         #expect(model.result == .null && model.error != nil && model.review == .null)
         #expect(await client.writes.count == 1)
     }
     @Test func failedBoxUpdateCheckKeepsTheDurableSaveReceiptVisible() async throws {
         let client = HarnessFixture(failPreviewAfterSave: true)
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         model.selectBox("demo-ui"); await model.refreshPreview(); await model.answer(save: true)
         #expect(model.result["state"].string == "saved-handoff-pending")
         await model.refreshPreview()
@@ -65,9 +65,9 @@ import Testing
         #expect(await client.writes.count == 1)
     }
     @Test func everyReviewRefreshesTheSharedLoginAndFailureCannotReuseOldConsent() async throws {
-        let client = HarnessFixture(), workspace = Workspace()
+        let client = HarnessFixture(), workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         await model.load()
         #expect(model.details["bindings"].array.first?["secretName"].string == "Old account")
         await client.replaceSharedLogin("New account")
@@ -82,9 +82,9 @@ import Testing
         #expect(await client.writes.isEmpty)
     }
     @Test func unsupportedHarnessIsAnExplanationWithoutASaveAction() async throws {
-        let client = HarnessFixture(unsupported: true), workspace = Workspace()
+        let client = HarnessFixture(unsupported: true), workspace = ConnectionSession()
         await workspace.connect(client: client, label: "fixture", demo: true)
-        let model = HarnessManagement(workspace: workspace, harnessID: "demo-harness")
+        let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: "demo-harness")
         model.requestReview(box: "demo-ui")
         await model.refreshPreview()
         #expect(model.reviewRevision == 1)

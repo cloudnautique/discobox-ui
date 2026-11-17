@@ -17,12 +17,12 @@ import Observation
     public init() {}
 
     public func present(_ action: BoxAction, box: Sandbox, on host: ConnectionSession, connection: UUID) {
-        let workspace = host.workspace
-        guard request == nil, workspace.isConnected, workspace.connectionID == connection,
-              let current = workspace.sandboxes.first(where: { $0.id == box.id }),
+        let workspace = host
+        guard request == nil, workspace.connectionState.isConnected, workspace.connectionState.connectionID == connection,
+              let current = workspace.inventory.sandboxes.first(where: { $0.id == box.id }),
               action.isAvailable(for: current),
-              !workspace.pendingBoxActions.contains(box.id),
-              !workspace.clearingPools.contains(current.poolId ?? "") else { return }
+              !workspace.pending.pendingBoxActions.contains(box.id),
+              !workspace.pending.clearingPools.contains(current.poolId ?? "") else { return }
         request = Request(host: host, box: current, action: action, connection: connection)
     }
 }

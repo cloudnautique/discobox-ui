@@ -28,8 +28,9 @@ import Testing
 }
 
 @MainActor @Test func presenceChangesWakeSleepingLoopsOnlyWhenAPollIsDue() async throws {
-    let time = ManualPollingClock(), client = CadenceFixture()
-    let hub = Connections(clock: time.clock)
+    let time = ManualPollingTime(), client = CadenceFixture()
+    let hub = Connections(now: time.now)
+    hub.active.pollSleep = time.sleep
     hub.presence = .hidden
     let host = try await hub.connect(.thisComputer, demo: true) { client }
     defer { hub.disconnectAll() }
@@ -39,13 +40,13 @@ import Testing
 
     // Hidden: 60s inventory, 10s approvals. Within those, raising presence to
     // visible (15s/5s) only polls what is now due.
-    time.advance(.seconds(8))
+    time.advance(8)
     hub.presence = .visible
     #expect(await settle { await client.count(.approvals) == 2 })
     #expect(await settle { await client.count(.poolResources) == 1 })
     #expect(await client.count(.sandboxes) == inventory)
 
-    time.advance(.seconds(9))
+    time.advance(9)
     hub.presence = .hidden
     await settle(rounds: 200) { false }
     #expect(await client.count(.sandboxes) == inventory)
@@ -58,7 +59,7 @@ import Testing
 }
 
 @MainActor @Test func activatingAComputerPromotesOnlyThatComputersCadence() async throws {
-    let hub = Connections(clock: ManualPollingClock().clock)
+    let hub = Connections()
     hub.syncProfiles([.init(name: "Studio", endpoint: "https://studio.example.invalid")])
     let local = hub.sessions[0], studio = hub.sessions[1]
     #expect(local.cadence.isActiveHost && !studio.cadence.isActiveHost)
@@ -69,16 +70,17 @@ import Testing
 }
 
 @MainActor @Test func hiddenInventoryWakesForARetryScheduledElsewhere() async throws {
-    let time = ManualPollingClock(), client = CadenceFixture()
-    let hub = Connections(clock: time.clock)
+    let time = ManualPollingTime(), client = CadenceFixture()
+    let hub = Connections(now: time.now)
+    hub.active.pollSleep = time.sleep
     hub.presence = .hidden
     let host = try await hub.connect(.thisComputer, demo: true) { client }
     defer { hub.disconnectAll() }
-    #expect(await settle { time.requested.contains(.seconds(60)) })
+    #expect(await settle { time.requested.contains(60) })
     await client.setOnline(false)
-    await host.workspace.refresh()
-    #expect(host.workspace.recovery.nextRetryAt != nil)
-    #expect(await settle { time.requested.contains { $0 <= .seconds(3) } })
+    await host.refresh()
+    #expect(host.connectionState.recovery.nextRetryAt != nil)
+    #expect(await settle { time.requested.contains { $0 <= 3 } })
 }
 
 @MainActor @discardableResult private func settle(rounds: Int = 10_000, _ condition: @MainActor () async -> Bool) async -> Bool {
@@ -89,19 +91,20 @@ import Testing
     return await condition()
 }
 
-/// Time only moves when a test says so; sleeps end only when a loop is woken.
-private final class ManualPollingClock: @unchecked Sendable {
+/// Time only moves when a test says so; timed sleeps end only when a loop is
+/// woken. Drives the session's injectable `now` and `pollSleep`.
+private final class ManualPollingTime: @unchecked Sendable {
     private let lock = NSLock()
-    private let origin = ContinuousClock.now
-    private var offset = Duration.zero
-    private var sleeps: [Duration] = []
-    var requested: [Duration] { lock.withLock { sleeps } }
-    func advance(_ duration: Duration) { lock.withLock { offset += duration } }
-    var clock: PollingClock {
-        PollingClock(now: { [self] in origin + lock.withLock { offset } }, sleep: { [self] duration in
-            lock.withLock { sleeps.append(duration) }
+    private var date = Date()
+    private var sleeps: [Double] = []
+    var requested: [Double] { lock.withLock { sleeps } }
+    func advance(_ seconds: Double) { lock.withLock { date += seconds } }
+    var now: @Sendable () -> Date { { [self] in lock.withLock { date } } }
+    var sleep: @Sendable (PollingLoop, Double) async throws -> Void {
+        { [self] _, seconds in
+            lock.withLock { sleeps.append(seconds) }
             try await Task.sleep(for: .seconds(86_400))
-        })
+        }
     }
 }
 

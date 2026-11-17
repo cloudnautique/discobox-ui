@@ -5,7 +5,7 @@ import DiscoboxCore
 struct BoxWorkspaceView: View {
     let box: Sandbox
     @Environment(Connections.self) private var connections: Connections?
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(TerminalStore.self) private var terminals
     @State private var showInbox = false
@@ -13,21 +13,21 @@ struct BoxWorkspaceView: View {
     @State private var renaming: PaneRenameRequest?
     @State private var creationAction: BoxActionRequest?
     @AppStorage("confirmShellClose") private var confirmShellClose = true
-    private var harness: Exec? { workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first(where: { !$0.isShell }) }
-    private var harnessConfiguration: Harness? { workspace.cachedHarnesses.first { $0.id == box.config.harnessConfigId } }
-    private var companions: [Exec] { workspace.execs.filter { $0.id != harness?.id } }
-    private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionID.uuidString + box.id) }
+    private var harness: Exec? { workspace.selection.execs.first(where: { $0.primary == true }) ?? workspace.selection.execs.first(where: { !$0.isShell }) }
+    private var harnessConfiguration: Harness? { workspace.catalog.cachedHarnesses.first { $0.id == box.config.harnessConfigId } }
+    private var companions: [Exec] { workspace.selection.execs.filter { $0.id != harness?.id } }
+    private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionState.connectionID.uuidString + box.id) }
     private var creation: BoxCreation? {
-        connections?.creationPins.first { $0.connection == workspace.connectionID && $0.id.box == box.id }
+        connections?.creationPins.first { $0.connection == workspace.connectionState.connectionID && $0.id.box == box.id }
     }
     private var persistenceKey: String {
-        let computer = connections?.sessions.first { $0.workspace === workspace }?.id ?? workspace.connectionID.uuidString
+        let computer = connections?.sessions.first { $0 === workspace }?.id ?? workspace.connectionState.connectionID.uuidString
         return "workspace." + computer + "." + box.id
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let error = workspace.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
+            if let error = workspace.selection.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
             if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
             if box.isRunning, let configuration = harnessConfiguration,
                !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
@@ -36,7 +36,7 @@ struct BoxWorkspaceView: View {
                         commands: commands, sourceBoxID: box.id, automatically: true)
                 })
             }
-            if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionID.uuidString + box.id) }
+            if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionState.connectionID.uuidString + box.id) }
             // The agent is always the first child of this split. Never mount it
             // as a tab or reparent it when opening a supporting tool.
             HSplitView {
@@ -45,20 +45,20 @@ struct BoxWorkspaceView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
-        .onChange(of: workspace.execs.map(\.id), initial: true) { _, _ in
-            if workspace.sandboxID == box.id, !workspace.execs.isEmpty { layout.reconcile(companions.map { "exec:" + $0.id }) }
+        .onChange(of: workspace.selection.execs.map(\.id), initial: true) { _, _ in
+            if workspace.selection.sandboxID == box.id, !workspace.selection.execs.isEmpty { layout.reconcile(companions.map { "exec:" + $0.id }) }
         }
-        .onChange(of: workspace.execID) { old, id in
-            guard workspace.sandboxID == box.id, old != nil, let id else { return }
+        .onChange(of: workspace.selection.execID) { old, id in
+            guard workspace.selection.sandboxID == box.id, old != nil, let id else { return }
             if companions.contains(where: { $0.id == id }) {
                 layout.reconcile(companions.map { "exec:" + $0.id })
                 layout.open("exec:" + id)
             }
         }
         .onChange(of: layout.selected) { _, id in
-            if workspace.sandboxID == box.id, id.hasPrefix("exec:") {
+            if workspace.selection.sandboxID == box.id, id.hasPrefix("exec:") {
                 let exec = String(id.dropFirst(5))
-                if workspace.execID != exec { Task { if workspace.sandboxID == box.id { await workspace.selectExec(exec) } } }
+                if workspace.selection.execID != exec { Task { if workspace.selection.sandboxID == box.id { await workspace.selection.selectExec(exec) } } }
             }
         }
         .onChange(of: commands.showInspector) { _, visible in if !visible { focusActiveTerminal() } }
@@ -76,7 +76,7 @@ struct BoxWorkspaceView: View {
             HStack(spacing: 8) {
                 Label("Agent", systemImage: "sparkles").fontWeight(.semibold)
                 Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                if workspace.approvals.contains(where: { $0.boxID == box.id }) {
+                if workspace.approvalStore.approvals.contains(where: { $0.boxID == box.id }) {
                     Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
@@ -86,7 +86,7 @@ struct BoxWorkspaceView: View {
                         Button("Manage harness login and settings…") { manageHarness(configuration) }
                         Divider()
                     }
-                    Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.isOpeningShell)
+                    Button("New Shell") { commands.perform(.newShell) }.disabled(!box.isRunning || workspace.selection.isOpeningShell)
                     supportingTools
                 } label: { Image(systemName: "ellipsis") }.menuIndicator(.hidden).help("Agent and workspace actions")
                 Button { commands.perform(.focus) } label: {
@@ -112,7 +112,7 @@ struct BoxWorkspaceView: View {
                 Label("Box needs attention", systemImage: "exclamationmark.triangle")
             } description: { Text(creation.message) } actions: {
                 Menu("Box Actions") {
-                    BoxActionMenu(box: box) { creationAction = .init(box: box, action: $0, connection: workspace.connectionID) }
+                    BoxActionMenu(box: box) { creationAction = .init(box: box, action: $0, connection: workspace.connectionState.connectionID) }
                 }
             }
         } else if let creation, creation.phase == .starting {
@@ -183,9 +183,9 @@ struct BoxWorkspaceView: View {
     }
     private var shellActions: some View {
         HStack(spacing: 9) {
-            if workspace.isOpeningShell { ProgressView().controlSize(.mini) }
+            if workspace.selection.isOpeningShell { ProgressView().controlSize(.mini) }
             Button { commands.perform(.newShell) } label: { Image(systemName: "plus") }
-                .disabled(!box.isRunning || workspace.isOpeningShell).help("New shell").accessibilityIdentifier("workspace.newShell")
+                .disabled(!box.isRunning || workspace.selection.isOpeningShell).help("New shell").accessibilityIdentifier("workspace.newShell")
             Menu {
                 if layout.shellsSplit {
                     Button("Merge into Tabs") { layout.mergeShells() }
@@ -195,7 +195,7 @@ struct BoxWorkspaceView: View {
                     ForEach(layout.terminalIDs.filter { $0 != layout.selected }, id: \.self) { id in
                         Button("Split with " + title(id)) { layout.split(with: id) }
                     }
-                    Button("New Shell and Split") { newSplitShell() }.disabled(!box.isRunning || workspace.isOpeningShell)
+                    Button("New Shell and Split") { newSplitShell() }.disabled(!box.isRunning || workspace.selection.isOpeningShell)
                 }
             } label: { Label(layout.shellsSplit ? "Merge" : "Split", systemImage: layout.shellsSplit ? "rectangle" : "rectangle.split.1x2") }
             primaryAction: {
@@ -266,35 +266,35 @@ struct BoxWorkspaceView: View {
     private func focusActiveTerminal(agent: Bool = false) {
         let exec = agent || layout.agentFocused || !layout.isSplit ? harness?.id : (layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil)
         guard let exec else { return }
-        terminals.focus(.init(connection: workspace.connectionID, endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box.id, exec: exec, demo: workspace.isDemo))
+        terminals.focus(.init(connection: workspace.connectionState.connectionID, endpoint: workspace.connectionState.transportEndpoint, project: workspace.connectionState.projectID ?? "", box: box.id, exec: exec, demo: workspace.connectionState.isDemo))
     }
     private func newSplitShell() {
-        let target = workspace, generation = workspace.connectionID, layout = layout
+        let target = workspace, generation = workspace.connectionState.connectionID, layout = layout
         let previous = layout.selected
         Task {
-            await target.openShell()
-            guard target.connectionID == generation, target.sandboxID == box.id, let exec = target.execID,
-                  exec != String(previous.dropFirst(5)), target.execs.contains(where: { $0.id == exec && $0.isShell }) else { return }
-            layout.reconcile(target.execs.filter { $0.id != harness?.id }.map { "exec:" + $0.id })
+            await target.selection.openShell()
+            guard target.connectionState.connectionID == generation, target.selection.sandboxID == box.id, let exec = target.selection.execID,
+                  exec != String(previous.dropFirst(5)), target.selection.execs.contains(where: { $0.id == exec && $0.isShell }) else { return }
+            layout.reconcile(target.selection.execs.filter { $0.id != harness?.id }.map { "exec:" + $0.id })
             layout.open(previous); layout.split(with: "exec:" + exec)
         }
     }
     private func close(_ id: String) {
         if let exec = companions.first(where: { "exec:" + $0.id == id }) {
-            let request = TerminalCloseRequest(terminal: exec, box: box.id, connection: workspace.connectionID)
+            let request = TerminalCloseRequest(terminal: exec, box: box.id, connection: workspace.connectionState.connectionID)
             if exec.isShell && !confirmShellClose { closeTerminal(request) } else { closing = request }
         } else { layout.close(id) }
     }
     private func closeTerminal(_ request: TerminalCloseRequest) {
         let target = workspace
         Task {
-            guard target.connectionID == request.connection, target.sandboxID == request.box else {
-                target.commandError = "The terminal or connection changed. Close the terminal again from its current box."
+            guard target.connectionState.connectionID == request.connection, target.selection.sandboxID == request.box else {
+                target.selection.commandError = "The terminal or connection changed. Close the terminal again from its current box."
                 return
             }
-            let identity = TerminalIdentity(connection: request.connection, endpoint: target.transportEndpoint, project: target.projectID ?? "", box: request.box, exec: request.terminal.id, demo: target.isDemo)
-            do { try await target.closeShell(request.terminal.id); terminals.reconnect(identity) }
-            catch { target.commandError = error.localizedDescription }
+            let identity = TerminalIdentity(connection: request.connection, endpoint: target.connectionState.transportEndpoint, project: target.connectionState.projectID ?? "", box: request.box, exec: request.terminal.id, demo: target.connectionState.isDemo)
+            do { try await target.selection.closeShell(request.terminal.id); terminals.reconnect(identity) }
+            catch { target.selection.commandError = error.localizedDescription }
         }
     }
 }
@@ -393,21 +393,21 @@ struct ConsoleView: View {
     let terminal: Exec
     var focused: Bool? = nil
     var onFocus: (() -> Void)? = nil
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @State private var savedScreen: TerminalScreen?
     @State private var error: String?
-    private var live: Bool { workspace.canAttachTerminal(terminal) }
+    private var live: Bool { workspace.selection.canAttachTerminal(terminal) }
     var body: some View {
         VStack(spacing: 0) {
-            if live, let project = workspace.projectID, let box = workspace.sandboxID {
-                LiveTerminal(identity: TerminalIdentity(connection: workspace.connectionID,
-                    endpoint: workspace.transportEndpoint, project: project, box: box, exec: terminal.id, demo: workspace.isDemo), focused: focused ?? (workspace.execID == terminal.id), onFocus: {
+            if live, let project = workspace.connectionState.projectID, let box = workspace.selection.sandboxID {
+                LiveTerminal(identity: TerminalIdentity(connection: workspace.connectionState.connectionID,
+                    endpoint: workspace.connectionState.transportEndpoint, project: project, box: box, exec: terminal.id, demo: workspace.connectionState.isDemo), focused: focused ?? (workspace.selection.execID == terminal.id), onFocus: {
                         if let onFocus { onFocus(); return }
-                        guard workspace.execID != terminal.id else { return }
-                        Task { await workspace.selectExec(terminal.id) }
+                        guard workspace.selection.execID != terminal.id else { return }
+                        Task { await workspace.selection.selectExec(terminal.id) }
                     })
             } else if let screen = savedScreen {
-                if workspace.selectedBox?.isRunning != false {
+                if workspace.selection.selectedBox?.isRunning != false {
                     Notice(text: "Saved terminal state · Read only", symbol: "clock", warning: false)
                 }
                 TerminalTextView(text: screen.text).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -417,11 +417,11 @@ struct ConsoleView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task(id: "\(workspace.connectionID)-\(workspace.sandboxID ?? "")-\(terminal.id)-\(live)-\(terminal.status)") {
+        .task(id: "\(workspace.connectionState.connectionID)-\(workspace.selection.sandboxID ?? "")-\(terminal.id)-\(live)-\(terminal.status)") {
             savedScreen = nil; error = nil
-            guard !live, workspace.execs.contains(where: { $0.id == terminal.id }) else { return }
+            guard !live, workspace.selection.execs.contains(where: { $0.id == terminal.id }) else { return }
             do {
-                let screen = try await workspace.terminalSnapshot(exec: terminal.id)
+                let screen = try await workspace.selection.terminalSnapshot(exec: terminal.id)
                 guard !Task.isCancelled else { return }
                 savedScreen = screen
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
@@ -431,7 +431,7 @@ struct ConsoleView: View {
 
 struct BoxInspector: View {
     let box: Sandbox
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @State private var showResources = false
     var body: some View {
@@ -448,7 +448,7 @@ struct BoxInspector: View {
             Section("Agent") {
                 detail("Model", box.config.model)
                 detail("Harness", box.config.harnessConfigId)
-                LabeledContent("Manager API access", value: box.discoboxApi == true ? "Enabled" : workspace.approvals.contains(where: { $0.kind == "apiAccess" && $0.boxID == box.id }) ? "Pending approval" : box.discoboxApi == nil ? "Not reported" : "Off")
+                LabeledContent("Manager API access", value: box.discoboxApi == true ? "Enabled" : workspace.approvalStore.approvals.contains(where: { $0.kind == "apiAccess" && $0.boxID == box.id }) ? "Pending approval" : box.discoboxApi == nil ? "Not reported" : "Off")
             }
             Section("Resources") {
                 LabeledContent("CPU cores", value: ResourceValue.cpu(box.resourceCPU))
@@ -476,7 +476,7 @@ struct BoxInspector: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden).background(DiscoboxAppearance.canvas)
         .sheet(isPresented: $showResources) {
-            PoolResourcesView(computer: connections?.sessions.first { $0.workspace === workspace }?.profile.displayName ?? workspace.endpointLabel, initialPoolID: box.poolId)
+            PoolResourcesView(computer: connections?.sessions.first { $0 === workspace }?.profile.displayName ?? workspace.connectionState.endpointLabel, initialPoolID: box.poolId)
         }
     }
 

@@ -163,7 +163,7 @@ private func protocolManifest() throws -> ProtocolManifest {
     """)
     defer { fixture.remove() }
     let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
-    let flags: [BridgeRequest.Operation.Permission: String] = [.read: "", .manage: " --allow-manage", .shell: " --allow-shell", .input: " --allow-input"]
+    let flags: [BridgeRequest.Operation.Permission: String] = [.read: "", .manage: " --allow-manage", .shell: " --allow-shell"]
     for operation in BridgeRequest.Operation.allCases {
         _ = try await client.perform(.init(operation, projectID: "p"))
         let lines = try String(contentsOf: fixture.url.appendingPathExtension("args"), encoding: .utf8).split(separator: "\n")
@@ -172,11 +172,11 @@ private func protocolManifest() throws -> ProtocolManifest {
 }
 
 @Test @MainActor func renameTravelsAsItsOwnNameField() async throws {
-    let workspace = Workspace()
-    await workspace.connect(client: DemoClient(), label: "fixture", demo: true)
-    try await workspace.performBoxAction(.rename, boxID: "demo-ui", connection: workspace.connectionID, name: "Renamed fixture")
-    #expect(workspace.sandboxes.first { $0.id == "demo-ui" }?.displayName == "Renamed fixture")
+    let session = ConnectionSession()
+    await session.connect(client: DemoClient(), label: "fixture", demo: true)
+    try await session.commands.performBoxAction(.rename, boxID: "demo-ui", connection: session.connectionState.connectionID, name: "Renamed fixture")
+    #expect(session.inventory.sandboxes.first { $0.id == "demo-ui" }?.displayName == "Renamed fixture")
     let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(BridgeRequest(.boxAction, projectID: "p", sandboxID: "s", name: "n", action: "rename"))) as? [String: Any]
     #expect(wire?["name"] as? String == "n" && wire?["prompt"] == nil)
-    workspace.disconnect()
+    session.disconnect()
 }

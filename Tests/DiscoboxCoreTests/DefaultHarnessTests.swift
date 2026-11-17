@@ -13,32 +13,32 @@ import Testing
 
 @MainActor @Test func defaultHarnessIsSharedProjectMetadataAndClearedOnDisconnect() async throws {
     let client = DefaultHarnessFixture()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    _ = try await workspace.harnesses()
-    #expect(workspace.defaultHarnessID == "demo-harness")
-    try await workspace.setDefaultHarness("other", connection: workspace.connectionID)
-    #expect(workspace.defaultHarnessID == "other")
-    try await workspace.refreshDefaultHarness()
-    #expect(workspace.defaultHarnessID == "other")
+    _ = try await workspace.catalog.harnesses()
+    #expect(workspace.catalog.defaultHarnessID == "demo-harness")
+    try await workspace.catalog.setDefaultHarness("other", connection: workspace.connectionState.connectionID)
+    #expect(workspace.catalog.defaultHarnessID == "other")
+    try await workspace.catalog.refreshDefaultHarness()
+    #expect(workspace.catalog.defaultHarnessID == "other")
     #expect(await client.writes == 1)
     workspace.disconnect()
-    #expect(workspace.defaultHarnessID == nil)
+    #expect(workspace.catalog.defaultHarnessID == nil)
 }
 
 @MainActor @Test func lateDefaultHarnessResponseCannotChangeAnotherComputer() async throws {
     let client = DefaultHarnessFixture(blockWrites: true)
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "first")
-    _ = try await workspace.harnesses()
-    let generation = workspace.connectionID
-    let save = Task { try await workspace.setDefaultHarness("other", connection: generation) }
+    _ = try await workspace.catalog.harnesses()
+    let generation = workspace.connectionState.connectionID
+    let save = Task { try await workspace.catalog.setDefaultHarness("other", connection: generation) }
     await client.waitUntilBlocked()
     await workspace.connect(client: DemoClient(), label: "second")
     await client.release()
     do { try await save.value; Issue.record("A stale write must not update the current computer") }
     catch is CancellationError { }
-    #expect(workspace.defaultHarnessID == nil)
+    #expect(workspace.catalog.defaultHarnessID == nil)
     workspace.disconnect()
 }
 

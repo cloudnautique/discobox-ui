@@ -104,53 +104,53 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
 
 @MainActor @Test func resourceReadsCoalesceCacheAndBackOffWithoutBlockingBoxSwitching() async throws {
     let client = ResourceFixture(snapshot: try resourceSnapshot(resourcePool()))
-    let workspace = Workspace(now: { resourceNow })
+    let workspace = ConnectionSession(now: { resourceNow })
     await workspace.connect(client: client, label: "fixture")
     await client.holdNext(.poolResources)
-    let first = Task { await workspace.refreshResources() }
+    let first = Task { await workspace.pools.refreshResources() }
     await waitForResourceBlock(client)
-    let second = Task { await workspace.refreshResources(force: true) }
-    await workspace.selectBox("demo-ui")
-    #expect(workspace.sandboxID == "demo-ui" && !workspace.execs.isEmpty)
+    let second = Task { await workspace.pools.refreshResources(force: true) }
+    await workspace.selection.selectBox("demo-ui")
+    #expect(workspace.selection.sandboxID == "demo-ui" && !workspace.selection.execs.isEmpty)
     await client.release()
     await first.value; await second.value
     #expect(await client.reads == 1)
-    #expect(workspace.resources.defaultPoolID == "local")
-    await workspace.refreshResources()
+    #expect(workspace.pools.resources.defaultPoolID == "local")
+    await workspace.pools.refreshResources()
     #expect(await client.reads == 1)
     await client.failures(read: true)
-    await workspace.refreshResources(force: true)
-    await workspace.refreshResources()
+    await workspace.pools.refreshResources(force: true)
+    await workspace.pools.refreshResources()
     #expect(await client.reads == 2)
-    #expect(workspace.resources.error != nil)
-    #expect(workspace.resources.health("local", now: resourceNow).level == .stale)
+    #expect(workspace.pools.resources.error != nil)
+    #expect(workspace.pools.resources.health("local", now: resourceNow).level == .stale)
     workspace.disconnect()
 }
 
 @MainActor @Test func creationChecksDestinationAndDoesNotBlockOnUnavailableTelemetry() async throws {
     let full = ResourceFixture(snapshot: try resourceSnapshot(resourcePool(free: 0)))
-    let workspace = Workspace(now: { resourceNow })
+    let workspace = ConnectionSession(now: { resourceNow })
     await workspace.connect(client: full, label: "fixture")
-    await #expect(throws: DiscoboxError.self) { try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local") }
+    await #expect(throws: DiscoboxError.self) { try await workspace.commands.createBox(harness: "demo-harness", repository: "", poolID: "local") }
     #expect(await full.creates.isEmpty)
     let available = ResourceFixture(snapshot: try resourceSnapshot(resourcePool()))
     await workspace.connect(client: available, label: "fixture")
-    try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local", connection: workspace.connectionID)
+    try await workspace.commands.createBox(harness: "demo-harness", repository: "", poolID: "local", connection: workspace.connectionState.connectionID)
     #expect(await available.creates.last?.poolID == "local")
-    #expect(workspace.selectedBox?.poolId == "local")
+    #expect(workspace.selection.selectedBox?.poolId == "local")
     await available.failures(read: true)
-    try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local")
+    try await workspace.commands.createBox(harness: "demo-harness", repository: "", poolID: "local")
     #expect(await available.creates.count == 2)
     workspace.disconnect()
 }
 
 @MainActor @Test func creationCannotCrossAReconnectWhilePreflightWaits() async throws {
     let client = ResourceFixture()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "first")
-    let original = workspace.connectionID
+    let original = workspace.connectionState.connectionID
     await client.holdNext(.poolResources)
-    let creating = Task { try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local", connection: original) }
+    let creating = Task { try await workspace.commands.createBox(harness: "demo-harness", repository: "", poolID: "local", connection: original) }
     await waitForResourceBlock(client)
     await workspace.connect(client: DemoClient(), label: "second", demo: true)
     await client.release()
@@ -164,48 +164,48 @@ private func resourceSnapshot(_ pool: ResourcePool) throws -> Data {
     let local = try await connections.connect(.thisComputer, demo: true) { ResourceFixture() }
     let remoteClient = ResourceFixture()
     let remote = try await connections.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { remoteClient }
-    await remote.workspace.refreshResources()
-    await remote.workspace.selectBox("demo-ui")
-    let generation = remote.workspace.connectionID
+    await remote.pools.refreshResources()
+    await remote.selection.selectBox("demo-ui")
+    let generation = remote.connectionState.connectionID
     connections.activate(local.id)
     var detached: [String] = []
-    let result = try await remote.workspace.clearPoolCache(poolID: "local", connection: generation) { ids in
+    let result = try await remote.pools.clearPoolCache(poolID: "local", connection: generation) { ids in
         detached = ids
-        #expect(remote.workspace.sandboxID == nil)
-        #expect(remote.workspace.pendingBoxActions.contains("demo-ui"))
+        #expect(remote.selection.sandboxID == nil)
+        #expect(remote.pending.pendingBoxActions.contains("demo-ui"))
     }
     #expect(result.stoppedSandboxIds == ["demo-ui"])
     #expect(Set(detached) == ["demo-ui", "demo-api"])
-    #expect(remote.workspace.sandboxes.first { $0.id == "demo-ui" }?.isRunning == false)
-    #expect(local.workspace.sandboxes.first { $0.id == "demo-ui" }?.isRunning == true)
+    #expect(remote.inventory.sandboxes.first { $0.id == "demo-ui" }?.isRunning == false)
+    #expect(local.inventory.sandboxes.first { $0.id == "demo-ui" }?.isRunning == true)
     #expect(connections.active === local)
-    #expect(remote.workspace.clearingPools.isEmpty && remote.workspace.pendingBoxActions.isEmpty)
-    #expect(remote.workspace.poolCleanupStatus["local"]?.contains("Caches cleared") == true)
+    #expect(remote.pending.clearingPools.isEmpty && remote.pending.pendingBoxActions.isEmpty)
+    #expect(remote.pools.poolCleanupStatus["local"]?.contains("Caches cleared") == true)
     #expect(await remoteClient.clears.count == 1)
     #expect(await remoteClient.clears.first?.poolID == "local")
-    await #expect(throws: DiscoboxError.self) { _ = try await remote.workspace.clearPoolCache(poolID: "remote", connection: UUID()) }
+    await #expect(throws: DiscoboxError.self) { _ = try await remote.pools.clearPoolCache(poolID: "remote", connection: UUID()) }
     #expect(await remoteClient.clears.count == 1)
     connections.disconnectAll()
 }
 
 @MainActor @Test func cleanupBlocksCompetingCreationAndDoesNotRetryAmbiguousFailure() async throws {
     let client = ResourceFixture()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
-    await workspace.refreshResources()
+    await workspace.pools.refreshResources()
     await client.failures(clear: true)
     await client.holdNext(.clearPoolCache)
-    let clearing = Task { try await workspace.clearPoolCache(poolID: "local", connection: workspace.connectionID) }
+    let clearing = Task { try await workspace.pools.clearPoolCache(poolID: "local", connection: workspace.connectionState.connectionID) }
     await waitForResourceBlock(client)
-    #expect(workspace.poolCleanupStatus["local"]?.contains("clearing caches") == true)
-    await #expect(throws: DiscoboxError.self) { try await workspace.createBox(harness: "demo-harness", repository: "", poolID: "local") }
-    await #expect(throws: DiscoboxError.self) { try await workspace.performBoxAction(.start, boxID: "demo-api", connection: workspace.connectionID) }
+    #expect(workspace.pools.poolCleanupStatus["local"]?.contains("clearing caches") == true)
+    await #expect(throws: DiscoboxError.self) { try await workspace.commands.createBox(harness: "demo-harness", repository: "", poolID: "local") }
+    await #expect(throws: DiscoboxError.self) { try await workspace.commands.performBoxAction(.start, boxID: "demo-api", connection: workspace.connectionState.connectionID) }
     #expect(await client.creates.isEmpty)
     await client.release()
     do { _ = try await clearing.value; Issue.record("Expected cleanup response failure") } catch { }
     #expect(await client.clears.count == 1)
-    #expect(workspace.clearingPools.isEmpty && workspace.pendingBoxActions.isEmpty)
-    #expect(workspace.poolCleanupStatus["local"]?.contains("could not be confirmed") == true)
+    #expect(workspace.pending.clearingPools.isEmpty && workspace.pending.pendingBoxActions.isEmpty)
+    #expect(workspace.pools.poolCleanupStatus["local"]?.contains("could not be confirmed") == true)
     workspace.disconnect()
-    #expect(workspace.poolCleanupStatus.isEmpty)
+    #expect(workspace.pools.poolCleanupStatus.isEmpty)
 }

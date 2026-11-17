@@ -24,11 +24,11 @@ private actor BulkPurgeFixture: DiscoboxClient {
     }
 }
 
-@MainActor private func archivedWorkspace(_ client: BulkPurgeFixture) async throws -> Workspace {
-    let workspace = Workspace()
+@MainActor private func archivedWorkspace(_ client: BulkPurgeFixture) async throws -> ConnectionSession {
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
     for id in ["demo-api", "demo-tests"] {
-        try await workspace.performBoxAction(.archive, boxID: id, connection: workspace.connectionID)
+        try await workspace.commands.performBoxAction(.archive, boxID: id, connection: workspace.connectionState.connectionID)
     }
     await client.resetCounts()
     return workspace
@@ -38,7 +38,7 @@ private actor BulkPurgeFixture: DiscoboxClient {
     let client = BulkPurgeFixture()
     let workspace = try await archivedWorkspace(client)
     var progress: [Int] = []
-    let result = try await workspace.purgeArchivedBoxes(["demo-api", "demo-tests", "demo-api"], connection: workspace.connectionID) { done, total in
+    let result = try await workspace.commands.purgeArchivedBoxes(["demo-api", "demo-tests", "demo-api"], connection: workspace.connectionState.connectionID) { done, total in
         progress.append(done)
         #expect(total == 2)
     }
@@ -47,37 +47,37 @@ private actor BulkPurgeFixture: DiscoboxClient {
     #expect(await client.purges == ["demo-api", "demo-tests"])
     #expect(await client.inventoryReads == 1)
     #expect(progress == [1, 2])
-    #expect(workspace.sandboxes.map(\.id) == ["demo-ui"])
-    #expect(workspace.sandboxes.first?.isRunning == true)
+    #expect(workspace.inventory.sandboxes.map(\.id) == ["demo-ui"])
+    #expect(workspace.inventory.sandboxes.first?.isRunning == true)
 }
 
 @MainActor @Test func bulkPurgeRejectsMixedAndStaleManifestsBeforeAnyMutation() async throws {
     let client = BulkPurgeFixture()
     let workspace = try await archivedWorkspace(client)
-    let connection = workspace.connectionID
+    let connection = workspace.connectionState.connectionID
     for ids in [["demo-api", "demo-ui"], ["missing"], []] {
-        await #expect(throws: DiscoboxError.self) { try await workspace.purgeArchivedBoxes(ids, connection: connection) }
+        await #expect(throws: DiscoboxError.self) { try await workspace.commands.purgeArchivedBoxes(ids, connection: connection) }
     }
     workspace.disconnect()
-    await #expect(throws: DiscoboxError.self) { try await workspace.purgeArchivedBoxes(["demo-api"], connection: connection) }
+    await #expect(throws: DiscoboxError.self) { try await workspace.commands.purgeArchivedBoxes(["demo-api"], connection: connection) }
     #expect(await client.purges.isEmpty)
 }
 
 @MainActor @Test func bulkPurgeReportsPartialFailuresWithoutRetrying() async throws {
     let client = BulkPurgeFixture(failingBox: "demo-api")
     let workspace = try await archivedWorkspace(client)
-    let result = try await workspace.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionID)
+    let result = try await workspace.commands.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionState.connectionID)
     #expect(result.purged == ["demo-tests"])
     #expect(result.failures.map(\.boxID) == ["demo-api"])
     #expect(await client.purges == ["demo-api", "demo-tests"])
-    #expect(workspace.sandboxes.contains { $0.id == "demo-api" })
-    #expect(workspace.pendingBoxActions.isEmpty)
+    #expect(workspace.inventory.sandboxes.contains { $0.id == "demo-api" })
+    #expect(workspace.pending.pendingBoxActions.isEmpty)
 }
 
 @MainActor @Test func bulkPurgeStopsWhenTheConnectionChanges() async throws {
     let client = BulkPurgeFixture()
     let workspace = try await archivedWorkspace(client)
-    let result = try await workspace.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionID) { done, _ in
+    let result = try await workspace.commands.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionState.connectionID) { done, _ in
         if done == 1 { workspace.disconnect() }
     }
     #expect(result.purged == ["demo-api"])
@@ -90,35 +90,35 @@ private actor BulkPurgeFixture: DiscoboxClient {
     let client = BulkPurgeFixture(), workspace = try await archivedWorkspace(client)
     try await client.holdInventory()
     let ids = ["demo-api", "demo-tests"]
-    let result = try await workspace.purgeArchivedBoxes(ids, connection: workspace.connectionID) { done, _ in
-        #expect(!workspace.sandboxes.contains { ids.prefix(done).contains($0.id) })
+    let result = try await workspace.commands.purgeArchivedBoxes(ids, connection: workspace.connectionState.connectionID) { done, _ in
+        #expect(!workspace.inventory.sandboxes.contains { ids.prefix(done).contains($0.id) })
     }
     #expect(result.purged == ids && result.failures.isEmpty)
     #expect(await client.purges == ids)
     await workspace.refresh()
-    #expect(workspace.sandboxes.map(\.id) == ["demo-ui"])
-    await workspace.selectBox("demo-api")
-    #expect(workspace.sandboxID == nil)
+    #expect(workspace.inventory.sandboxes.map(\.id) == ["demo-ui"])
+    await workspace.selection.selectBox("demo-api")
+    #expect(workspace.selection.sandboxID == nil)
     // The same IDs on a new connection are unrelated to the previous receipts.
     await workspace.connect(client: DemoClient(), label: "New computer", demo: true)
-    #expect(workspace.sandboxes.contains { $0.id == "demo-api" })
+    #expect(workspace.inventory.sandboxes.contains { $0.id == "demo-api" })
 }
 
 @MainActor @Test func failedPurgeRemainsVisibleWhenOtherConfirmedPurgesDisappear() async throws {
     let client = BulkPurgeFixture(failingBox: "demo-api"), workspace = try await archivedWorkspace(client)
     try await client.holdInventory()
-    let result = try await workspace.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionID)
+    let result = try await workspace.commands.purgeArchivedBoxes(["demo-api", "demo-tests"], connection: workspace.connectionState.connectionID)
     #expect(result.purged == ["demo-tests"])
     await workspace.refresh()
-    #expect(workspace.sandboxes.contains { $0.id == "demo-api" })
-    #expect(!workspace.sandboxes.contains { $0.id == "demo-tests" })
+    #expect(workspace.inventory.sandboxes.contains { $0.id == "demo-api" })
+    #expect(!workspace.inventory.sandboxes.contains { $0.id == "demo-tests" })
 }
 
 @MainActor @Test func openingSelectedArchiveDoesNotCollapseMultiSelection() async throws {
     let connections = Connections(polling: false)
     let host = try await connections.connect(.thisComputer, demo: true) { DemoClient() }
     for id in ["demo-api", "demo-tests"] {
-        try await host.workspace.performBoxAction(.archive, boxID: id, connection: host.workspace.connectionID)
+        try await host.commands.performBoxAction(.archive, boxID: id, connection: host.connectionState.connectionID)
     }
     connections.browser.filter = .archived
     let selection: Set<BoxLocation> = Set(["demo-api", "demo-tests"].map { .init(connection: host.id, box: $0) })

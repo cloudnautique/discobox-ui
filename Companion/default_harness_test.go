@@ -14,7 +14,7 @@ func TestDefaultHarnessRequiresExplicitManagementAndValidDestination(t *testing.
 		{Operation: "setDefaultHarness", ProjectID: "../other", HarnessID: "h"},
 		{Operation: "setDefaultHarness", ProjectID: "p", HarnessID: "../other"},
 	} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = req.ProjectID != "p" || req.HarnessID != "h"
 		b.client.Transport = fakeTransport(func(*http.Request) (*http.Response, error) { t.Fatal("unexpected network request"); return nil, nil })
 		if _, err := b.execute(context.Background(), req); err == nil {
@@ -25,7 +25,7 @@ func TestDefaultHarnessRequiresExplicitManagementAndValidDestination(t *testing.
 
 func TestDefaultHarnessUsesProjectEndpointAndNeverRetriesWrites(t *testing.T) {
 	for _, fail := range []bool{false, true} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		writes := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

@@ -4,7 +4,7 @@ import DiscoboxCore
 
 struct NewBoxSheet: View {
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
-    @Environment(Workspace.self) private var initialWorkspace
+    @Environment(ConnectionSession.self) private var initialWorkspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(ConnectionRuntimes.self) private var runtimes: ConnectionRuntimes?
     @State private var targetComputer = ""
@@ -14,15 +14,15 @@ struct NewBoxSheet: View {
         _targetComputer = State(initialValue: computer ?? "")
         _harness = State(initialValue: harnessID)
     }
-    private var currentRepository: RepositoryChoice? { workspace.selectedBox.flatMap(RepositoryChoice.init(box:)) }
-    private var recentRepositories: [RepositoryChoice] { RepositoryChoice.recent(in: workspace.sandboxes).filter { $0.id != currentRepository?.id } }
-    private var workspace: Workspace { connections?.session(targetComputer)?.workspace ?? initialWorkspace }
+    private var currentRepository: RepositoryChoice? { workspace.selection.selectedBox.flatMap(RepositoryChoice.init(box:)) }
+    private var recentRepositories: [RepositoryChoice] { RepositoryChoice.recent(in: workspace.inventory.sandboxes).filter { $0.id != currentRepository?.id } }
+    private var workspace: ConnectionSession { connections?.session(targetComputer) ?? initialWorkspace }
     @Environment(\.dismiss) private var dismiss
-    private var harnesses: [Harness] { workspace.cachedHarnesses }
+    private var harnesses: [Harness] { workspace.catalog.cachedHarnesses }
     @AppStorage("harnessLaunchDefaults.v1") private var launchDefaults = "{}"
     @State private var apiChoice = "default"
     private var selectedHarness: Harness? { harnesses.first { $0.id == harness } }
-    private var launchKey: String { HarnessLaunchDefaults.key(computer: workspace.endpointLabel, project: workspace.projectID ?? "", harness: harness) }
+    private var launchKey: String { HarnessLaunchDefaults.key(computer: workspace.connectionState.endpointLabel, project: workspace.connectionState.projectID ?? "", harness: harness) }
     private var defaultAPI: Bool { selectedHarness?.usesLegacySetup != true && HarnessLaunchDefaults.enabled(launchDefaults, key: launchKey) }
     private var enableAPI: Bool { selectedHarness?.usesLegacySetup != true && (apiChoice == "on" || apiChoice == "default" && defaultAPI) }
     var onCreated: ((Sandbox) -> Void)? = nil
@@ -57,24 +57,24 @@ struct NewBoxSheet: View {
                             if let connections {
                                 StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
                                     StudioMenuPicker(title: "Computer", selection: $targetComputer, options:
-                                        connections.sessions.filter { $0.workspace.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) }).disabled(onCreated != nil)
+                                        connections.sessions.filter { $0.connectionState.isConnected }.map { .init(id: $0.id, title: $0.profile.displayName) }).disabled(onCreated != nil)
                                 }
                                 Divider().padding(.leading, 38)
                             }
                             StudioDestinationRow(title: "Pool", symbol: "server.rack") {
                                 StudioMenuPicker(title: "Pool", selection: $poolID, options:
-                                    [.init(id: "", title: "Automatic placement")] + workspace.resources.pools.map { .init(id: $0.id, title: $0.name) })
+                                    [.init(id: "", title: "Automatic placement")] + workspace.pools.resources.pools.map { .init(id: $0.id, title: $0.name) })
                             }
                             Divider().padding(.leading, 38)
                             StudioDestinationRow(title: "Harness", symbol: "sparkles") {
                                 StudioMenuPicker(title: "Harness", selection: Binding(get: { harness }, set: { harness = $0; explicitHarness = true }), options:
-                                    [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.defaultHarnessID ? " · Default" : "") + ($0.configured ? "" : " — not configured"), enabled: $0.configured) }).disabled(onCreated != nil)
+                                    [.init(id: "", title: "Choose a harness")] + harnesses.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.catalog.defaultHarnessID ? " · Default" : "") + ($0.configured ? "" : " — not configured"), enabled: $0.configured) }).disabled(onCreated != nil)
                                 Button("Saved settings…") {
                                     if let selected = harnesses.first(where: { $0.id == harness }) {
                                         HarnessSetupWindows.shared.open(selected, workspace: workspace, connections: connections, commands: commands)
                                     }
                                 }.font(.caption).buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
-                                    .disabled(harness.isEmpty || workspace.isDemo)
+                                    .disabled(harness.isEmpty || workspace.connectionState.isDemo)
                                     .help("Manage this harness on the chosen computer")
                             }
                         }
@@ -158,36 +158,36 @@ struct NewBoxSheet: View {
                 Button(enableAPI ? "Create Manager Box" : "Create Box", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("newBox.create")
                     .disabled(credentialError != nil)
-                    .disabled(!workspace.isConnected || harness.isEmpty || loading || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.resources.health(poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).canCreate || workspace.clearingPools.contains(poolID.isEmpty ? workspace.resources.defaultPoolID ?? "" : poolID))
+                    .disabled(!workspace.connectionState.isConnected || harness.isEmpty || loading || creating || !harnesses.contains(where: { $0.id == harness && $0.configured }) || !workspace.pools.resources.health(poolID.isEmpty ? workspace.pools.resources.defaultPoolID : poolID).canCreate || workspace.pending.clearingPools.contains(poolID.isEmpty ? workspace.pools.resources.defaultPoolID ?? "" : poolID))
             }.controlSize(.large).padding(.horizontal, 24).padding(.vertical, 16).background(DiscoboxAppearance.chrome)
         }
         .frame(width: 560).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
         .interactiveDismissDisabled(creating)
-        .onChange(of: workspace.connectionID) { _, _ in credentialDrafts.removeAll(); apiChoice = "default" }
+        .onChange(of: workspace.connectionState.connectionID) { _, _ in credentialDrafts.removeAll(); apiChoice = "default" }
         .onChange(of: harness) { apiChoice = "default" }
         .onDisappear { credentialDrafts.removeAll() }
         .onAppear { focusedField = repository.isEmpty ? .repository : .prompt }
         .sheet(isPresented: $showResources) {
             if let host = connections?.session(targetComputer), let runtimes {
-                PoolResourcesView(computer: host.profile.displayName, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID)
-                    .environment(host.workspace)
+                PoolResourcesView(computer: host.profile.displayName, initialPoolID: poolID.isEmpty ? workspace.pools.resources.defaultPoolID : poolID)
+                    .environment(host)
                     .environment(runtimes.runtime(host.id).terminals)
                     .environment(runtimes.runtime(host.id).forwards)
                     .environment(runtimes.runtime(host.id).desktops)
             } else {
-                PoolResourcesView(computer: workspace.endpointLabel, initialPoolID: poolID.isEmpty ? workspace.resources.defaultPoolID : poolID).environment(workspace)
+                PoolResourcesView(computer: workspace.connectionState.endpointLabel, initialPoolID: poolID.isEmpty ? workspace.pools.resources.defaultPoolID : poolID).environment(workspace)
             }
         }
         .onAppear { if targetComputer.isEmpty { targetComputer = connections?.suggestedCreationComputerID ?? "" } }
-        .task(id: workspace.connectionID) {
-            let target = workspace, generation = workspace.connectionID
+        .task(id: workspace.connectionState.connectionID) {
+            let target = workspace, generation = workspace.connectionState.connectionID
             poolID = ""
-            await target.refreshResources()
-            guard !Task.isCancelled, workspace === target, generation == target.connectionID else { return }
-            if poolID.isEmpty { poolID = target.resources.defaultPoolID ?? "" }
+            await target.pools.refreshResources()
+            guard !Task.isCancelled, workspace === target, generation == target.connectionState.connectionID else { return }
+            if poolID.isEmpty { poolID = target.pools.resources.defaultPoolID ?? "" }
         }
-        .task(id: workspace.connectionID) {
-            let target = workspace, generation = workspace.connectionID
+        .task(id: workspace.connectionState.connectionID) {
+            let target = workspace, generation = workspace.connectionState.connectionID
             error = nil
             if let previous = harnessConnection, previous != generation {
                 harness = ""; explicitHarness = false
@@ -195,22 +195,22 @@ struct NewBoxSheet: View {
                 explicitHarness = true
             }
             harnessConnection = generation
-            if onCreated == nil { harness = HarnessSelection.preferred(in: harnesses, defaultID: target.defaultHarnessID, explicitID: explicitHarness ? harness : nil) }
+            if onCreated == nil { harness = HarnessSelection.preferred(in: harnesses, defaultID: target.catalog.defaultHarnessID, explicitID: explicitHarness ? harness : nil) }
             loading = true
             do {
-                let refreshed = try await target.harnesses()
-                try await target.refreshDefaultHarness()
-                guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
+                let refreshed = try await target.catalog.harnesses()
+                try await target.catalog.refreshDefaultHarness()
+                guard !Task.isCancelled, workspace === target, target.connectionState.connectionID == generation else { return }
                 if onCreated != nil {
                     if !refreshed.contains(where: { $0.id == harness && $0.configured }) {
                         error = "This harness is no longer available on the selected computer. Close this window and choose it again."
                     }
                 } else {
-                    harness = HarnessSelection.preferred(in: refreshed, defaultID: target.defaultHarnessID, explicitID: explicitHarness ? harness : nil)
+                    harness = HarnessSelection.preferred(in: refreshed, defaultID: target.catalog.defaultHarnessID, explicitID: explicitHarness ? harness : nil)
                 }
             }
             catch {
-                guard !Task.isCancelled, workspace === target, target.connectionID == generation else { return }
+                guard !Task.isCancelled, workspace === target, target.connectionState.connectionID == generation else { return }
                 self.error = error.localizedDescription
             }
             loading = false
@@ -226,8 +226,8 @@ struct NewBoxSheet: View {
 
     private func create() {
         creating = true; error = nil
-        let target = workspace, hostID = targetComputer, generation = workspace.connectionID
-        let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
+        let target = workspace, hostID = targetComputer, generation = workspace.connectionState.connectionID
+        let destination = poolID.isEmpty ? workspace.pools.resources.defaultPoolID : poolID
         let credentials = credentialDrafts.map(\.credential)
         let harness = harness, prompt = prompt, enableAPI = enableAPI
         let repository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -237,9 +237,9 @@ struct NewBoxSheet: View {
                 if let connections {
                     created = try await connections.createBox(on: hostID, harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials, discoboxAPI: enableAPI)
                 } else {
-                    created = try await target.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials, discoboxAPI: enableAPI)
+                    created = try await target.commands.createBox(harness: harness, repository: repository, prompt: prompt, poolID: destination, connection: generation, credentials: credentials, discoboxAPI: enableAPI)
                 }
-                if target.connectionID == generation { onCreated?(created) }
+                if target.connectionState.connectionID == generation { onCreated?(created) }
                 credentialDrafts.removeAll()
                 commands?.showCreateBox = false
                 dismiss()
@@ -253,7 +253,7 @@ struct NewBoxSheet: View {
 
 /// Summarizes cached reports without adding resource reads to the creation flow.
 private struct NewBoxResourceSummary: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     let poolID: String
     let creating: Bool
     let manage: () -> Void
@@ -261,9 +261,9 @@ private struct NewBoxResourceSummary: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
-            let destination = poolID.isEmpty ? workspace.resources.defaultPoolID : poolID
-            let pool = workspace.resources.pools.first { $0.id == destination }
-            let health = workspace.resources.health(destination, now: context.date)
+            let destination = poolID.isEmpty ? workspace.pools.resources.defaultPoolID : poolID
+            let pool = workspace.pools.resources.pools.first { $0.id == destination }
+            let health = workspace.pools.resources.health(destination, now: context.date)
             let warning = health.level == .warning || health.level == .blocked
             VStack(alignment: .leading, spacing: 12) {
                 Divider()
@@ -272,7 +272,7 @@ private struct NewBoxResourceSummary: View {
                         .foregroundStyle(warning ? Color.orange : .secondary)
                     Text(summary(health, pool: pool)).font(.system(size: 11))
                     Spacer(minLength: 8)
-                    if workspace.resources.isRefreshing { ProgressView().controlSize(.mini) }
+                    if workspace.pools.resources.isRefreshing { ProgressView().controlSize(.mini) }
                     Button { expanded.toggle() } label: {
                         HStack(spacing: 4) {
                             Text("Details")
@@ -287,12 +287,12 @@ private struct NewBoxResourceSummary: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
                 }
-                if let error = workspace.resources.error { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                if let error = workspace.pools.resources.error { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                 if expanded {
                     VStack(alignment: .leading, spacing: 10) {
                         if let pool {
                             let memory = ResourceValue.bytes(pool.memoryAvailable)
-                            let cpuUsage = ResourceValue.cpu(pool.totalCPU(boxes: workspace.sandboxes))
+                            let cpuUsage = ResourceValue.cpu(pool.totalCPU(boxes: workspace.inventory.sandboxes))
                             let cpuCapacity = ResourceValue.cpu(pool.cpuCapacity)
                             let details: String = "Memory: \(memory) available · CPU: \(cpuUsage) / \(cpuCapacity) cores"
                             Text(details)
@@ -321,7 +321,7 @@ private struct NewBoxResourceSummary: View {
 struct AuditView: View {
     let boxID: String
     var focusSearch = true
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @State private var records: [AuditRecord] = []
     @State private var filteredRecords: [AuditRecord] = []
     @State private var buffer = AuditBuffer()
@@ -428,7 +428,7 @@ struct AuditView: View {
                 if following || lastRead == nil {
                     do {
                         let cursor: JSONValue? = lastRead == nil ? nil : .object(["since": .object(since.mapValues { .string($0) }), "after": .object(after.mapValues { .string($0) })])
-                        let snapshot = try await workspace.auditSnapshot(box: boxID, cursor: cursor)
+                        let snapshot = try await workspace.audit.snapshot(box: boxID, cursor: cursor)
                         guard !Task.isCancelled else { return }
                         let update = await buffer.merge(snapshot.records)
                         guard !Task.isCancelled else { return }
@@ -458,7 +458,7 @@ struct AuditView: View {
         Task {
             defer { paging = false }
             do {
-                let snapshot = try await workspace.auditSnapshot(box: boxID, cursor: .object(["before": .object(before.mapValues { .string($0) })]))
+                let snapshot = try await workspace.audit.snapshot(box: boxID, cursor: .object(["before": .object(before.mapValues { .string($0) })]))
                 guard !Task.isCancelled, generation == historyGeneration else { return }
                 let previousVersion = recordsVersion
                 let update = await target.merge(snapshot.records)
@@ -472,7 +472,7 @@ struct AuditView: View {
     }
     private func exportBody(_ record: AuditRecord, part: String) {
         guard let reference = AuditRecordReference(record.id) else { return }
-        let box = boxID, connection = workspace.connectionID
+        let box = boxID
         let panel = NSSavePanel(); panel.nameFieldStringValue = reference.record + "-" + part + ".bin"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
@@ -480,7 +480,7 @@ struct AuditView: View {
             Task {
                 defer { recordingBusy = false }
                 do {
-                    let result = try await workspace.saveAuditBody(reference, part: part, box: box, to: url, connection: connection)
+                    let result = try await workspace.audit.save(reference, part: part, box: box, to: url)
                     recording = "Exported \(Int(result["bytes"].number ?? 0)) bytes." + (result["recordingTruncatedFrom"].string.isEmpty ? "" : " The pool retained only part of this recording (original: " + result["recordingTruncatedFrom"].string + " bytes).")
                 } catch { recording = error.localizedDescription }
             }
@@ -488,12 +488,12 @@ struct AuditView: View {
     }
     private func readBody(_ record: AuditRecord, part: String) {
         guard let reference = AuditRecordReference(record.id) else { return }
-        let box = boxID, connection = workspace.connectionID
+        let box = boxID
         recordingBusy = true; recording = nil
         Task {
             defer { recordingBusy = false }
             do {
-                let result = try await workspace.auditBody(reference, part: part, box: box, connection: connection)
+                let result = try await workspace.audit.body(reference, part: part, box: box)
                 guard selected == record.id else { return }
                 recording = result["text"].string + (result["truncated"] == .bool(true) ? "\n[Preview limited to 1 MiB]" : "") + (result["recordingTruncatedFrom"].string.isEmpty ? "" : "\n[Pool recording was truncated from " + result["recordingTruncatedFrom"].string + " bytes]")
             } catch { recording = error.localizedDescription }

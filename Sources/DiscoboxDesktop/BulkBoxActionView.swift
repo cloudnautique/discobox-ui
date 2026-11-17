@@ -14,7 +14,7 @@ struct BulkBoxActionRequest: Identifiable {
 struct BulkBoxActionSheet: View {
     let request: BulkBoxActionRequest
     var completed: ([String]) -> Void = { _ in }
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(TerminalStore.self) private var terminals: TerminalStore?
     @Environment(ServiceForwards.self) private var forwards: ServiceForwards?
     @Environment(DesktopWindows.self) private var desktops: DesktopWindows?
@@ -22,7 +22,7 @@ struct BulkBoxActionSheet: View {
     @State private var working = false
     @State private var closed = false
     @State private var progress = 0
-    @State private var result: Workspace.BulkActionResult?
+    @State private var result: BoxCommands.BulkActionResult?
     @State private var failure: String?
 
     var body: some View {
@@ -61,14 +61,14 @@ struct BulkBoxActionSheet: View {
                 if result == nil && failure == nil {
                     Button("\(request.action.title) \(request.boxes.count) Boxes", action: submit)
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                        .disabled(working || request.connection != workspace.connectionID)
+                        .disabled(working || request.connection != workspace.connectionState.connectionID)
                         .accessibilityIdentifier("bulkAction.confirm")
                 }
             }
         }.onDisappear { closed = true }
     }
     private func close() { closed = true; dismiss() }
-    private func failureText(_ result: Workspace.BulkActionResult) -> String {
+    private func failureText(_ result: BoxCommands.BulkActionResult) -> String {
         result.failures.map { row in
             (request.boxes.first { $0.id == row.boxID }?.displayName ?? row.boxID) + ": " + row.message
         }.joined(separator: "\n")
@@ -78,7 +78,7 @@ struct BulkBoxActionSheet: View {
         Task {
             defer { working = false }
             do {
-                let response = try await workspace.performBoxActions(request.action, boxIDs: request.boxes.map(\.id), connection: request.connection,
+                let response = try await workspace.commands.performBoxActions(request.action, boxIDs: request.boxes.map(\.id), connection: request.connection,
                     progress: { done, _ in progress = done }, beforeRequest: { id in
                         if [.stop, .archive, .upgrade, .repair].contains(request.action) {
                             terminals?.closeBox(id, connection: request.connection)
@@ -86,13 +86,13 @@ struct BulkBoxActionSheet: View {
                         }
                     }, onAccepted: { id in completed([id]) })
                 result = response
-                if closed, !response.failures.isEmpty, workspace.connectionID == request.connection {
-                    workspace.commandError = failureText(response)
+                if closed, !response.failures.isEmpty, workspace.connectionState.connectionID == request.connection {
+                    workspace.selection.commandError = failureText(response)
                 }
             } catch {
                 let message = error.localizedDescription + " Check the boxes before trying again. Nothing was retried."
                 failure = message
-                if closed, workspace.connectionID == request.connection { workspace.commandError = message }
+                if closed, workspace.connectionState.connectionID == request.connection { workspace.selection.commandError = message }
             }
         }
     }

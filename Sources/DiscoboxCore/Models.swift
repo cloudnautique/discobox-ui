@@ -135,25 +135,17 @@ public struct ServicesResponse: Decodable, Sendable {
     public let observedAt: String?
 }
 
-public struct InputPart: Codable, Sendable, Equatable {
-    public let text: String?
-    public let key: String?
-    public static func text(_ value: String) -> Self { Self(text: value, key: nil) }
-    public static func key(_ value: String) -> Self { Self(text: nil, key: value) }
-}
-
 /// The companion's bounded request contract. Operation names, permission
 /// classes and `version` are published in Companion/protocol.json, which the
 /// Go and Swift tests both check, so neither side can drift alone.
 public struct BridgeRequest: Encodable, Sendable {
     public static let protocolVersion = 2
-    public enum Operation: String, Encodable, Sendable, CaseIterable { case boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, saveAuditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit
+    public enum Operation: String, Encodable, Sendable, CaseIterable { case boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, saveAuditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, defaultProject, sandboxes, execs, services, screen, newShell, closeShell, closeTerminal, createBox, harnesses, audit
         /// The companion flag this operation needs. It keeps a polling read
         /// from mutating by mistake; it is not a security boundary.
-        public enum Permission: String, Sendable { case read, manage, shell, input }
+        public enum Permission: String, Sendable { case read, manage, shell }
         public var permission: Permission {
             switch self {
-            case .input: .input
             case .newShell: .shell
             case .setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy,
                  .clearPoolCache, .deleteSecret, .boxAction, .saveAuditBody, .upload, .download, .openTool, .newAgent,
@@ -187,10 +179,9 @@ public struct BridgeRequest: Encodable, Sendable {
     public let link: String?
     public let action: String?
     public let payload: JSONValue?
-    public let input: [InputPart]?
 
     public init(_ operation: Operation, projectID: String? = nil, sandboxID: String? = nil,
-                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, name: String? = nil, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, toolID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
+                execID: String? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, name: String? = nil, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, toolID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
         self.discoboxAPI = discoboxAPI
         self.name = name; self.secretID = secretID; self.recordID = recordID; self.toolID = toolID; self.link = link
         self.poolID = poolID
@@ -202,7 +193,6 @@ public struct BridgeRequest: Encodable, Sendable {
         self.projectID = projectID
         self.sandboxID = sandboxID
         self.execID = execID
-        self.input = input
     }
 }
 

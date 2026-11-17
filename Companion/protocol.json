@@ -22,7 +22,6 @@
     "harnessChanges": "read",
     "harnessDetails": "read",
     "harnesses": "read",
-    "input": "input",
     "newAgent": "manage",
     "newShell": "shell",
     "openTool": "manage",

@@ -43,7 +43,7 @@ struct BoxStartPrompt: View {
 /// A selected stopped box remains actionable when sidebar filters hide its row.
 struct StoppedBoxBar: View {
     let box: Sandbox
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @State private var intent: BoxStartIntent?
     private var starting: Bool { intent?.working == true || box.runtime.displayState == "starting" }
@@ -63,12 +63,12 @@ struct StoppedBoxBar: View {
                 Spacer()
                 if BoxAction.start.isAvailable(for: box) || starting {
                     NativeStartBoxButton {
-                        let request = BoxStartIntent(workspace: workspace, box: box,
-                            computer: connections?.sessions.first { $0.workspace === workspace }?.profile.displayName ?? workspace.endpointLabel)
+                        let request = BoxStartIntent(connection: workspace.connectionState, inventory: workspace.inventory, pending: workspace.pending, commands: workspace.commands, box: box,
+                            computer: connections?.sessions.first { $0 === workspace }?.profile.displayName ?? workspace.connectionState.endpointLabel)
                         intent = request
                         Task { _ = await request.start() }
                     }.fixedSize()
-                        .disabled(starting || !workspace.isConnected || workspace.pendingBoxActions.contains(box.id) || workspace.clearingPools.contains(box.poolId ?? ""))
+                        .disabled(starting || !workspace.connectionState.isConnected || workspace.pending.pendingBoxActions.contains(box.id) || workspace.pending.clearingPools.contains(box.poolId ?? ""))
                         .accessibilityIdentifier("boxStart.selected")
                 }
             }

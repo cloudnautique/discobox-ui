@@ -2,7 +2,10 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class HarnessManagement {
-    public let workspace: Workspace
+    public let connectionState: ConnectionStore
+    public let inventory: BoxInventoryStore
+    private let service: HarnessService
+    private let initialBoxID: String?
     public let harnessID: String
     public let connection: UUID
     public private(set) var details: JSONValue = .null
@@ -14,17 +17,18 @@ import Observation
     public private(set) var reviewRevision = 0
     private var revision = UUID()
     private var closed = false
-    public init(workspace: Workspace, harnessID: String) {
-        self.workspace = workspace; self.harnessID = harnessID; connection = workspace.connectionID
+    public init(connection: ConnectionStore, inventory: BoxInventoryStore, service: HarnessService, sourceBoxID: String?, harnessID: String) {
+        self.connectionState = connection; self.inventory = inventory; self.service = service; initialBoxID = sourceBoxID
+        self.harnessID = harnessID; self.connection = connection.connectionID
     }
-    public var validConnection: Bool { !closed && workspace.isConnected && workspace.connectionID == connection }
+    public var validConnection: Bool { !closed && connectionState.isConnected && connectionState.connectionID == connection }
     public var changes: JSONValue { review["changes"] }
     public var canSave: Bool {
         return validConnection && !busy && HarnessCapture.canSave(changes)
     }
     public var canDiscard: Bool { validConnection && !busy && changes["state"].string == "pending" && !changes["candidateId"].string.isEmpty }
     public var boxes: [Sandbox] {
-        workspace.sandboxes.filter { $0.config.harnessConfigId == harnessID && $0.isRunning }.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        inventory.sandboxes.filter { $0.config.harnessConfigId == harnessID && $0.isRunning }.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
     public func selectBox(_ id: String) {
         guard id != boxID, !busy else { return }
@@ -46,7 +50,7 @@ import Observation
             guard value["harness"]["id"].string == harnessID else { throw DiscoboxError("The harness changed. Close and reopen its settings.") }
             details = value
             if boxID.isEmpty {
-                let selected = boxes.first { $0.id == workspace.sandboxID } ?? boxes.first
+                let selected = boxes.first { $0.id == initialBoxID } ?? boxes.first
                 if let selected { boxID = selected.id }
             }
         } catch { if validConnection, token == revision { self.error = error.localizedDescription } }
@@ -94,6 +98,12 @@ import Observation
     public func close() { closed = true; revision = UUID() }
     private func perform(_ operation: BridgeRequest.Operation, box: String? = nil, payload: JSONValue? = nil) async throws -> JSONValue {
         guard validConnection else { throw DiscoboxError("This computer reconnected. Close and reopen harness management.") }
-        return try await workspace.harnessOperation(operation, harnessID: harnessID, boxID: box, payload: payload, connection: connection)
+        switch operation {
+        case .harnessDetails: return try await service.details(harness: harnessID)
+        case .harnessChanges: return try await service.changes(harness: harnessID, box: box ?? "")
+        case .saveHarnessChanges: return try await service.save(harness: harnessID, box: box ?? "", payload: payload ?? .null)
+        case .discardHarnessChanges: return try await service.discard(harness: harnessID, box: box ?? "", payload: payload ?? .null)
+        default: throw DiscoboxError("Unsupported harness operation.")
+        }
     }
 }

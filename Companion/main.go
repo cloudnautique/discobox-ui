@@ -51,12 +51,6 @@ type request struct {
 	Link        string          `json:"link,omitempty"`
 	Action      string          `json:"action,omitempty"`
 	Payload     json.RawMessage `json:"payload,omitempty"`
-	Input       []inputPart     `json:"input,omitempty"`
-}
-
-type inputPart struct {
-	Text *string `json:"text,omitempty"`
-	Key  *string `json:"key,omitempty"`
 }
 
 type response struct {
@@ -70,7 +64,6 @@ type response struct {
 type bridge struct {
 	client      *http.Client
 	base        string
-	allowInput  bool
 	allowShell  bool
 	allowManage bool
 }
@@ -79,7 +72,6 @@ func main() {
 	irohProxy := flag.Bool("iroh-proxy", false, "Keep an authenticated Iroh connection behind a private socket")
 	irohIdentity := flag.Bool("iroh-identity", false, "Print the public identity supplied over stdin")
 	endpoint := flag.String("endpoint", "unix://", "An existing Discobox endpoint")
-	allowInput := flag.Bool("allow-input", false, "Allow one explicit terminal input request")
 	desktop := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
 	desktopURL := flag.String("desktop-url", "", "Existing local desktop forward")
 	forward := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
@@ -156,7 +148,7 @@ func main() {
 		return
 	}
 	out := response{Version: protocolVersion}
-	err := runManaged(*endpoint, *allowInput, *allowShell, *allowManage, os.Stdin, &out)
+	err := runManaged(*endpoint, *allowShell, *allowManage, os.Stdin, &out)
 	if err != nil {
 		out.Error = err.Error()
 		out.ErrorKind = companionErrorKind(err)
@@ -182,13 +174,7 @@ func companionErrorKind(err error) string {
 	return ""
 }
 
-func run(endpoint string, allowInput bool, input io.Reader, out *response) error {
-	return runAuthorized(endpoint, allowInput, false, input, out)
-}
-func runAuthorized(endpoint string, allowInput, allowShell bool, input io.Reader, out *response) error {
-	return runManaged(endpoint, allowInput, allowShell, false, input, out)
-}
-func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input io.Reader, out *response) error {
+func runManaged(endpoint string, allowShell, allowManage bool, input io.Reader, out *response) error {
 	var req request
 	decoder := json.NewDecoder(io.LimitReader(input, 128<<10))
 	decoder.DisallowUnknownFields()
@@ -199,7 +185,7 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return errors.New("expected one request")
 	}
-	b, err := newBridge(endpoint, allowInput)
+	b, err := newBridge(endpoint)
 	if err != nil {
 		return err
 	}
@@ -242,7 +228,7 @@ func defaultSocket() string {
 	return parsed.Value
 }
 
-func newBridge(endpoint string, allowInput bool) (*bridge, error) {
+func newBridge(endpoint string) (*bridge, error) {
 	u, err := url.Parse(resolveLocalEndpoint(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("invalid endpoint: %w", err)
@@ -285,7 +271,7 @@ func newBridge(endpoint string, allowInput bool) (*bridge, error) {
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errEndpointRedirect },
 	}
-	return &bridge{client: client, base: base, allowInput: allowInput}, nil
+	return &bridge{client: client, base: base}, nil
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -322,7 +308,7 @@ func route(req request) (method, path string, body []byte, err error) {
 	switch req.Operation {
 	case "execs", "services":
 		return method, base + "/" + req.Operation, nil, nil
-	case "screen", "input":
+	case "screen":
 		if err = validID(req.ExecID); err != nil {
 			return
 		}
@@ -331,59 +317,17 @@ func route(req request) (method, path string, body []byte, err error) {
 			return
 		}
 		path = base + "/execs/" + req.ExecID + "/" + req.Operation
-		if req.Operation == "screen" {
-			return method, path + "?scrollback=250", nil, nil
-		}
-		if err = validateInput(req.Input); err != nil {
-			return
-		}
-		body, err = json.Marshal(struct {
-			Input []inputPart `json:"input"`
-		}{req.Input})
-		return http.MethodPost, path, body, err
+		return method, path + "?scrollback=250", nil, nil
 	default:
 		return "", "", nil, errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
 	}
 }
 
-func validateInput(parts []inputPart) error {
-	if len(parts) == 0 || len(parts) > 32 {
-		return errors.New("input requires 1–32 parts")
-	}
-	for _, p := range parts {
-		if (p.Text == nil) == (p.Key == nil) {
-			return errors.New("each input part requires exactly one text or key")
-		}
-		if p.Text != nil && len(*p.Text) > 64<<10 {
-			return errors.New("input text exceeds 64 KiB")
-		}
-		if p.Key != nil {
-			key := *p.Key
-			if len(key) == 3 && strings.HasPrefix(key, "C-") && key[2] >= 'a' && key[2] <= 'z' {
-				continue
-			}
-			switch key {
-			case "Enter", "Tab", "Escape", "Backspace", "Delete", "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown":
-			default:
-				return errors.New("unsupported terminal key")
-			}
-		}
-	}
-	return nil
-}
-
-// routed serves the plain resource reads and terminal input in route().
+// routed serves the plain resource reads in route().
 func (b *bridge) routed(ctx context.Context, req request) (response, error) {
 	method, path, body, err := route(req)
 	if err != nil {
 		return response{}, err
-	}
-	if method == http.MethodPost {
-		// Fail closed on stopped boxes and cached inventory. These checks do not
-		// revive an exec. The server ultimately owns the atomicity of input.
-		if err := b.requireRunning(ctx, req); err != nil {
-			return response{}, err
-		}
 	}
 	res, err := b.call(ctx, method, path, body)
 	if req.Operation == "sandboxes" && err == nil && res.Status == 200 {

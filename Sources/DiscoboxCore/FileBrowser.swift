@@ -25,7 +25,8 @@ import Observation
     public private(set) var receipt: String?
     public var error: String?
     public private(set) var conflict: UploadConflict?
-    private let workspace: Workspace
+    private let connectionState: ConnectionStore
+    private let selection: BoxSelectionStore
     private let connection: UUID
     private let box: String
     private var loaded = false
@@ -33,19 +34,19 @@ import Observation
     private var navigation = UUID()
     private var transferTask: Task<Void, Never>?
 
-    public init(workspace: Workspace) throws {
-        access = try workspace.fileAccess()
-        self.workspace = workspace
-        connection = workspace.connectionID
-        box = workspace.sandboxID ?? ""
-        let workdir = workspace.execs.first { $0.primary == true }?.workdir ?? ""
+    public init(connection: ConnectionStore, selection: BoxSelectionStore) throws {
+        access = try selection.fileAccess()
+        self.connectionState = connection; self.selection = selection
+        self.connection = connection.connectionID
+        box = selection.sandboxID ?? ""
+        let workdir = selection.execs.first { $0.primary == true }?.workdir ?? ""
         sourceDirectory = workdir.isEmpty || workdir == "~" ? "/workspace/source" : workdir
         path = sourceDirectory
         directory = sourceDirectory
     }
 
     public var isCurrent: Bool {
-        active && workspace.connectionID == connection && workspace.sandboxID == box && workspace.selectedBox?.isRunning == true
+        active && connectionState.connectionID == connection && selection.sandboxID == box && selection.selectedBox?.isRunning == true
     }
     public var canNavigate: Bool { isCurrent && !transferring && conflict == nil }
     public var canTransfer: Bool { canNavigate && loaded && !loading }

@@ -22,41 +22,41 @@ struct ConnectionLifecycle: View {
     let session: ConnectionSession
     let runtime: ConnectionRuntime
     var body: some View {
-        let workspace = session.workspace
+        let workspace = session
         Color.clear.frame(width: 0, height: 0)
             .onAppear { runtime.desktops.computerName = session.profile.displayName }
             .onChange(of: session.profile) { runtime.desktops.computerName = session.profile.displayName }
-            .onChange(of: workspace.connectionID) { old, _ in
+            .onChange(of: workspace.connectionState.connectionID) { old, _ in
                 runtime.close()
                 HarnessSetupWindows.shared.close(connection: old)
                 ApprovalNotifications.shared.synchronize(session)
                 connections.reconcileCreations()
             }
-            .onChange(of: workspace.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
-            .onChange(of: workspace.isConnected) { ApprovalNotifications.shared.synchronize(session) }
-            .onChange(of: workspace.transportEndpoint) { old, new in
+            .onChange(of: workspace.approvalStore.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
+            .onChange(of: workspace.connectionState.isConnected) { ApprovalNotifications.shared.synchronize(session) }
+            .onChange(of: workspace.connectionState.transportEndpoint) { old, new in
                 if !old.isEmpty, old != new { runtime.terminals.closeAll(); runtime.forwards.closeAll() }
             }
-            .onChange(of: workspace.lastRefresh) {
-                guard workspace.connectionError == nil, workspace.detailError == nil,
-                      let inventory = workspace.terminalInventory else { return }
-                runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+            .onChange(of: workspace.inventory.lastRefresh) {
+                guard workspace.connectionState.connectionError == nil, workspace.selection.detailError == nil,
+                      let inventory = workspace.selection.terminalInventory else { return }
+                runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
             }
-            .onChange(of: workspace.pendingBoxActions) {
-                for box in workspace.pendingBoxActions { runtime.forwards.close(box: box); runtime.desktops.close(box: box) }
+            .onChange(of: workspace.pending.pendingBoxActions) {
+                for box in workspace.pending.pendingBoxActions { runtime.forwards.close(box: box); runtime.desktops.close(box: box) }
             }
-            .onChange(of: workspace.terminalInventory) {
-                if let inventory = workspace.terminalInventory {
-                    runtime.terminals.retainExecs(inventory, connection: workspace.connectionID)
-                    if workspace.connectionError == nil, workspace.detailError == nil {
-                        runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+            .onChange(of: workspace.selection.terminalInventory) {
+                if let inventory = workspace.selection.terminalInventory {
+                    runtime.terminals.retainExecs(inventory, connection: workspace.connectionState.connectionID)
+                    if workspace.connectionState.connectionError == nil, workspace.selection.detailError == nil {
+                        runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
                     }
                 }
             }
-            .onChange(of: workspace.sandboxes) {
-                runtime.terminals.retainRunningBoxes(workspace.sandboxes, connection: workspace.connectionID)
-                runtime.forwards.retainRunningBoxes(workspace.sandboxes)
-                runtime.desktops.retainRunningBoxes(workspace.sandboxes)
+            .onChange(of: workspace.inventory.sandboxes) {
+                runtime.terminals.retainRunningBoxes(workspace.inventory.sandboxes, connection: workspace.connectionState.connectionID)
+                runtime.forwards.retainRunningBoxes(workspace.inventory.sandboxes)
+                runtime.desktops.retainRunningBoxes(workspace.inventory.sandboxes)
                 connections.reconcileCreations()
             }
     }
@@ -78,7 +78,7 @@ struct ConnectedWorkspace: View {
     let commands: WorkspaceCommands
     @State private var notifications = ApprovalNotifications.shared
     @State private var boxActions = BoxActionPresentation()
-    private var workspace: Workspace { connections.active.workspace }
+    private var workspace: ConnectionSession { connections.active }
     var body: some View {
         let runtime = runtimes.runtime(connections.activeID)
         WorkspaceView()
@@ -104,13 +104,13 @@ struct ConnectedWorkspace: View {
                 commands.restoreAgentLayout(); commands.cancelPrefix()
                 commands.install(workspace: workspace, connections: connections)
             }
-            .onChange(of: workspace.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
+            .onChange(of: workspace.selection.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in commands.cancelPrefix() }
             .modifier(PollingPresenceReporter(connections: connections, commands: commands))
             .sheet(item: $boxActions.request) { target in
                 let runtime = runtimes.runtime(target.host.id)
                 BoxActionSheet(request: .init(box: target.box, action: target.action, connection: target.connection))
-                    .environment(target.host.workspace)
+                    .environment(target.host)
                     .environment(connections)
                     .environment(runtime.terminals)
                     .environment(runtime.forwards)

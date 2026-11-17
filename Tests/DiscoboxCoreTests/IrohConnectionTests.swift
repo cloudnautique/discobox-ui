@@ -31,18 +31,18 @@ import Testing
 
 @MainActor @Test func workspaceSeparatesRemoteAddressAndPrivateTransport() async {
     let client = RemoteFixtureClient()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "discobox://fixture")
-    #expect(workspace.isConnected)
-    #expect(workspace.endpointLabel == "discobox://fixture")
-    #expect(workspace.transportEndpoint == "unix:///tmp/fixture.sock")
+    #expect(workspace.connectionState.isConnected)
+    #expect(workspace.connectionState.endpointLabel == "discobox://fixture")
+    #expect(workspace.connectionState.transportEndpoint == "unix:///tmp/fixture.sock")
     await workspace.reconnect()
     #expect(client.closes == 0)
-    #expect(workspace.transportEndpoint == "unix:///tmp/fixture.sock")
+    #expect(workspace.connectionState.transportEndpoint == "unix:///tmp/fixture.sock")
     workspace.disconnect()
     #expect(client.closes == 1)
-    #expect(workspace.transportEndpoint.isEmpty)
-    #expect(workspace.sandboxes.isEmpty)
+    #expect(workspace.connectionState.transportEndpoint.isEmpty)
+    #expect(workspace.inventory.sandboxes.isEmpty)
 }
 
 private final class RemoteFixtureClient: DiscoboxClient, @unchecked Sendable {

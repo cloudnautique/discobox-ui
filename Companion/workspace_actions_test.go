@@ -14,7 +14,7 @@ import (
 
 func TestCloseShellCannotEndAgentAndNeedsExplicitPermission(t *testing.T) {
 	for _, record := range []string{`{"primary":true,"tty":true}`, `{"tty":true,"harnessId":"agent"}`, `{"tty":true,"observedAt":"saved"}`, `{"tty":false}`} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		deletes := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -28,7 +28,7 @@ func TestCloseShellCannotEndAgentAndNeedsExplicitPermission(t *testing.T) {
 			t.Fatalf("unsafe close %s %v", record, err)
 		}
 	}
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) { t.Fatal("unauthorized transport"); return nil, nil })
 	for _, op := range []string{"createBox", "closeShell"} {
 		if _, err := b.execute(t.Context(), request{Operation: op, ProjectID: "p", SandboxID: "b", ExecID: "e"}); err == nil {
@@ -38,7 +38,7 @@ func TestCloseShellCannotEndAgentAndNeedsExplicitPermission(t *testing.T) {
 }
 
 func TestCloseShellDeletesOnlySelectedShell(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	var calls []string
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -52,7 +52,7 @@ func TestCloseShellDeletesOnlySelectedShell(t *testing.T) {
 }
 
 func TestAuditIncludesFiveTrailsAndReportsMissingPools(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	var mu sync.Mutex
 	seen := map[string]bool{}
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -100,7 +100,7 @@ func TestCreateBoxWithoutRepositoryUsesSelectedHarness(t *testing.T) {
 	t.Setenv("DISCOBOX_HOST_ID", "fixture-host")
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	creates := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -150,7 +150,7 @@ func TestCreateBoxWithoutRepositoryUsesSelectedHarness(t *testing.T) {
 func TestCreateReadinessSupportsBothHarnessGenerations(t *testing.T) {
 	for _, field := range []string{``, `,"configured":true`, `,"configured":false`} {
 		t.Run(field, func(t *testing.T) {
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			b.allowManage = true
 			creates := 0
 			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -185,7 +185,7 @@ func TestCreateBoxReturnsReadableProblemWithoutRetry(t *testing.T) {
 	t.Setenv("DISCOBOX_HOST_ID", "fixture-host")
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	creates := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

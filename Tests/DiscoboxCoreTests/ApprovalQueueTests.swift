@@ -3,11 +3,11 @@ import Testing
 @testable import DiscoboxCore
 
 @MainActor @Test func approvalQueueReviewsThreeRequestsAndKeepsOtherBoxesSeparate() async throws {
-    let client = ApprovalQueueFixture(), workspace = Workspace()
+    let client = ApprovalQueueFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Approval queue fixture", demo: true)
     defer { workspace.disconnect() }
-    await workspace.refreshApprovals()
-    let queue = ApprovalQueue(workspace: workspace, boxID: "demo-ui")
+    await workspace.approvalStore.refreshApprovals()
+    let queue = ApprovalQueue(connection: workspace.connectionState, approvals: workspace.approvalStore, boxID: "demo-ui")
     queue.synchronize()
     #expect(queue.requests.count == 3)
     #expect(queue.selected?.id == "use-1")
@@ -20,7 +20,7 @@ import Testing
         queue.reviewSelected()
         let item = try #require(queue.reviewing)
         #expect(item.id == expected)
-        let receipt = try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { result in
+        let receipt = try await workspace.approvalStore.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { result in
             #expect(result["recorded"] == .bool(true))
             #expect(!queue.requests.contains { $0.id == expected })
             queue.back()
@@ -29,47 +29,47 @@ import Testing
         #expect(queue.reviewing == nil)
     }
     #expect(queue.requests.isEmpty && queue.selection == nil)
-    #expect(!workspace.approvals.contains { $0.boxID == "demo-ui" })
-    #expect(workspace.approvals.map(\.id) == ["other-box"])
+    #expect(!workspace.approvalStore.approvals.contains { $0.boxID == "demo-ui" })
+    #expect(workspace.approvalStore.approvals.map(\.id) == ["other-box"])
     #expect(await client.answers == ["use-1", "share", "use-2"])
 }
 
 @MainActor @Test func approvalQueueUsesLatestRowAndDoesNotRetargetAcrossConnections() async throws {
-    let client = ApprovalQueueFixture(), workspace = Workspace()
+    let client = ApprovalQueueFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Approval queue fixture", demo: true)
     defer { workspace.disconnect() }
-    await workspace.refreshApprovals()
-    let queue = ApprovalQueue(workspace: workspace, boxID: "demo-ui")
+    await workspace.approvalStore.refreshApprovals()
+    let queue = ApprovalQueue(connection: workspace.connectionState, approvals: workspace.approvalStore, boxID: "demo-ui")
     queue.synchronize()
     let previous = try #require(queue.selected)
     await client.changeReason()
-    await workspace.refreshApprovals()
+    await workspace.approvalStore.refreshApprovals()
     queue.review(previous)
     #expect(queue.reviewing?.request["justification"].string == "Updated request")
     await client.withdraw("use-1")
-    await workspace.refreshApprovals()
+    await workspace.approvalStore.refreshApprovals()
     queue.back()
     #expect(queue.selected?.id == "share")
     #expect(queue.selected?.intent == "Share with child boxes")
     #expect(queue.selected?.destinationSummary == "api.example.test")
     workspace.disconnect()
     await workspace.connect(client: ApprovalQueueFixture(), label: "Different host", demo: true)
-    await workspace.refreshApprovals()
+    await workspace.approvalStore.refreshApprovals()
     queue.reviewSelected()
     #expect(!queue.valid && queue.requests.isEmpty && queue.reviewing == nil)
 }
 
 @MainActor @Test func approvalQueueKeepsFailedAnswersPendingWithoutRetrying() async throws {
-    let client = ApprovalQueueFixture(fail: true), workspace = Workspace()
+    let client = ApprovalQueueFixture(fail: true), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Refusal fixture", demo: true)
     defer { workspace.disconnect() }
-    await workspace.refreshApprovals()
-    let queue = ApprovalQueue(workspace: workspace, boxID: "demo-ui")
+    await workspace.approvalStore.refreshApprovals()
+    let queue = ApprovalQueue(connection: workspace.connectionState, approvals: workspace.approvalStore, boxID: "demo-ui")
     queue.synchronize(); queue.reviewSelected()
     let item = try #require(queue.reviewing)
     var accepted = false
     await #expect(throws: DiscoboxError.self) {
-        try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { _ in accepted = true })
+        try await workspace.approvalStore.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { _ in accepted = true })
     }
     #expect(!accepted && queue.requests.count == 3 && queue.reviewing == item)
     #expect(await client.answers == [item.id])

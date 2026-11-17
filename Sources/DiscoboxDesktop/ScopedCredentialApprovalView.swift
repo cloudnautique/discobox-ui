@@ -4,7 +4,7 @@ import DiscoboxCore
 struct ScopedCredentialApprovalView: View {
     let item: ApprovalItem
     var onClose: (() -> Void)? = nil
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
     @State private var connection: UUID?
@@ -33,7 +33,7 @@ struct ScopedCredentialApprovalView: View {
         do { _ = try CredentialDecision.payload(request: request, secret: secret, held: context["held"].array, use: use, delegate: delegate); return nil }
         catch { return error.localizedDescription }
     }
-    private var resolved: Bool { connection != nil && (workspace.connectionID != connection || !workspace.approvals.contains(item)) }
+    private var resolved: Bool { connection != nil && (workspace.connectionState.connectionID != connection || !workspace.approvalStore.approvals.contains(item)) }
     private var draftKey: String { (payload?.pretty ?? "") + secretID + "|" + String(creating) }
     private var conflicts: [JSONValue] { context["conflicts"].array }
     private var contextMatchesDraft: Bool { contextDraft == draftKey }
@@ -120,7 +120,7 @@ struct ScopedCredentialApprovalView: View {
                 }
             }
         }.task {
-            connection = workspace.connectionID
+            connection = workspace.connectionState.connectionID
             // These are preview drafts. Only the footer's explicit Approve
             // action sends them; opening the form never grants access.
             if request["use"] != .null { use.decision = "approve" }
@@ -270,8 +270,8 @@ struct ScopedCredentialApprovalView: View {
         loading = true; error = nil
         defer { if token == reviewRequest { loading = false } }
         do {
-            let result = try await workspace.approvalContext(for: item, candidate: payload, connection: connection)
-            guard !closed, workspace.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
+            let result = try await workspace.approvalStore.context(item: item, payload: payload)
+            guard !closed, workspace.connectionState.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
             guard result["request"] == request else { throw DiscoboxError("The request changed. Reopen it from the current inbox.") }
             context = result
             contextDraft = requestedDraft
@@ -297,12 +297,13 @@ struct ScopedCredentialApprovalView: View {
         Task {
             defer { busy = false; newValue = "" }
             do {
-                try await workspace.validateApproval(item, connection: connection)
+                try await workspace.approvalStore.validateApproval(item, connection: connection)
                 guard !closed else { return }
                 operationStatus = "Storing the credential on the requesting computer…"
-                let created = try await workspace.createSecret(body, connection: connection)
-                guard !closed, workspace.connectionID == connection else { return }
-                secretID = created; creating = false
+                let result = try await workspace.credentials.create(payload: body)
+                guard !closed, workspace.connectionState.connectionID == connection else { return }
+                guard !result["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
+                secretID = result["id"].string; creating = false
                 await reload(selectDefault: false)
             } catch { if !closed { self.error = error.localizedDescription; requiresReload = true } }
         }
@@ -321,9 +322,9 @@ struct ScopedCredentialApprovalView: View {
                     return true
                 }
                 if deny {
-                    try await workspace.answer(item, .deny, connection: connection, proceed: proceed, onAccepted: { _ in close() })
+                    try await workspace.approvalStore.answer(item, .deny, connection: connection, proceed: proceed, onAccepted: { _ in close() })
                 } else if let decision {
-                    try await workspace.answer(item, .reviewedCredential(approval: decision, contextFingerprint: fingerprint), connection: connection, proceed: proceed, onAccepted: { result in
+                    try await workspace.approvalStore.answer(item, .reviewedCredential(approval: decision, contextFingerprint: fingerprint), connection: connection, proceed: proceed, onAccepted: { result in
                         busy = false
                         guard !closed else { return }
                         receipt = result

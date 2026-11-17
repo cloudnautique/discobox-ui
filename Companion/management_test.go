@@ -32,7 +32,7 @@ func TestHarnessSetupResolvesToUpstreamConfigureCommand(t *testing.T) {
 
 func TestCredentialDeleteIsScopedExplicitAndNotRetried(t *testing.T) {
 	for _, authorized := range []bool{false, true} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = authorized
 		calls := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -54,7 +54,7 @@ func TestCredentialDeleteIsScopedExplicitAndNotRetried(t *testing.T) {
 			t.Fatalf("calls %d", calls)
 		}
 	}
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	if _, err := b.execute(t.Context(), request{Operation: "deleteSecret", ProjectID: "p", SecretID: "../other"}); err == nil {
 		t.Fatal("accepted invalid credential")

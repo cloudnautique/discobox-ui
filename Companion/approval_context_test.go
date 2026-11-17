@@ -43,7 +43,7 @@ func TestApprovalContextWireEnvelope(t *testing.T) {
 			defer server.Close()
 			out := response{Version: protocolVersion}
 			input := `{"operation":"approvalContext","projectID":"p","requestID":"ask"}`
-			if err := runManaged(server.URL, false, false, false, strings.NewReader(input), &out); err != nil {
+			if err := runManaged(server.URL, false, false, strings.NewReader(input), &out); err != nil {
 				t.Fatal(err)
 			}
 			wire, err := json.Marshal(out)
@@ -67,7 +67,7 @@ func TestApprovalContextWireEnvelope(t *testing.T) {
 }
 
 func TestCredentialReviewUsesRequesterAndCanonicalCombinedPlan(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	changed := false
 	writes := 0
@@ -150,7 +150,7 @@ func TestDelegatedBindingConflictIsReviewedBeforeAnyWrite(t *testing.T) {
 		{name: "inactive base has no addition shortcut", as: "replace", parent: "parent", variable: "TOKEN", notApplied: "expired", use: true, conflicts: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			b.allowManage = true
 			writes := 0
 			parent := tc.parent
@@ -244,7 +244,7 @@ func TestDelegatedBindingConflictIsReviewedBeforeAnyWrite(t *testing.T) {
 // Independent metadata must not add three serial remote round trips to every
 // draft edit. All remain read-only, request-scoped, and bounded by one context.
 func TestCredentialContextFetchesIndependentMetadataTogether(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	entered := make(chan string, 3)
 	release := make(chan struct{})
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

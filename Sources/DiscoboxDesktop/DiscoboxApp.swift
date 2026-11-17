@@ -1,8 +1,7 @@
 import SwiftUI
 import DiscoboxCore
 
-@main
-struct DiscoboxApp: App {
+public struct DiscoboxApplication: App {
     @NSApplicationDelegateAdaptor(DiscoboxApplicationDelegate.self) private var applicationDelegate
     @State private var connections = Connections()
     @State private var runtimes = ConnectionRuntimes()
@@ -10,7 +9,7 @@ struct DiscoboxApp: App {
     @AppStorage("computerName") private var computerName = ""
     @AppStorage(DiscoboxAppearance.preferenceKey) private var appearance = DiscoboxAppearance.Mode.system
     private var localProfile: ConnectionProfile { .localComputer(name: computerName) }
-    private var workspace: Workspace { connections.active.workspace }
+    private var workspace: ConnectionSession { connections.active }
     private var terminals: TerminalStore { runtimes.runtime(connections.activeID).terminals }
     private var forwards: ServiceForwards { runtimes.runtime(connections.activeID).forwards }
     private var desktops: DesktopWindows { runtimes.runtime(connections.activeID).desktops }
@@ -18,9 +17,9 @@ struct DiscoboxApp: App {
     @State private var boxLinks = BoxLinkNavigation()
     @State private var didAttemptStartup = false
 
-    init() { BrandTypography.register() }
+    public init() { BrandTypography.register() }
 
-    var body: some Scene {
+    public var body: some Scene {
         Window("Discobox", id: "workspace") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
                 .environment(boxLinks)
@@ -42,55 +41,26 @@ struct DiscoboxApp: App {
                 }
                 .frame(minWidth: 1000, minHeight: 650)
                 .task {
-                    if ProcessInfo.processInfo.arguments.contains("--notification-status") {
-                        await ApprovalNotifications.printSystemStatus()
-                        exit(0)
-                    }
                     guard !didAttemptStartup else { return }
                     didAttemptStartup = true
-                    if ProcessInfo.processInfo.arguments.contains("--sidebar-swipe-smoke") || ProcessInfo.processInfo.arguments.contains("--sidebar-manual-swipe-smoke") { await SidebarSwipeSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--terminal-recovery-smoke") { await TerminalRecoverySmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--terminal-input-smoke") { await TerminalInputSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--box-link-smoke") { await BoxLinkSmoke.run() }
                     // Explicitly set the running app's Dock icon as well as the
                     // bundle icon, which Launch Services may cache across builds.
                     if let url = Bundle.main.url(forResource: "Discobox", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
                         NSApp.applicationIconImage = icon
                     }
-                    if ProcessInfo.processInfo.arguments.contains("--approval-workflow-smoke") { await ApprovalWorkflowSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--binding-conflict-smoke") { await BindingConflictSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--agent-activity-smoke") { await AgentActivitySmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--approval-queue-smoke") { await ApprovalQueueSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--harness-smoke") { await HarnessManagementSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--recovery-smoke") { await ConnectionRecoverySmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--recovery-terminal-smoke") { await ConnectionRecoverySmoke.run(includeTerminal: true) }
-                    if ProcessInfo.processInfo.arguments.contains("--multihost-smoke") { await MultiHostSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--desktop-smoke") { await DesktopSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--feature-smoke") { await FeatureSmoke.run() }
-                    if ProcessInfo.processInfo.arguments.contains("--files-smoke") { await FilesSmoke.run() }
-                    workspace.streamsLiveTerminals = true
                     commands.install(workspace: workspace, connections: connections)
                     connections.syncProfiles(ConnectionProfiles.decode(savedConnections) ?? [])
                     let demoClient = DemoClient()
                     // An explicit demo launch is safe for screenshots and previews.
-                    if ProcessInfo.processInfo.arguments.contains("--demo") || ProcessInfo.processInfo.arguments.contains("--terminal-smoke") || ProcessInfo.processInfo.arguments.contains("--command-smoke") || ProcessInfo.processInfo.arguments.contains("--dialog-smoke") {
+                    if ProcessInfo.processInfo.arguments.contains("--demo") {
                         _ = try? await connections.connect(localProfile, demo: true) { demoClient }
-                        await workspace.selectBox("demo-ui")
+                        await workspace.selection.selectBox("demo-ui")
                     } else {
                         _ = try? await connections.connect(localProfile) { CompanionClient(executable: CompanionLocation.executable, endpoint: "unix://") }
                     }
-                    if ProcessInfo.processInfo.arguments.contains("--terminal-smoke") {
-                        await TerminalSmoke.run(workspace: workspace, store: terminals)
-                    }
-                    if ProcessInfo.processInfo.arguments.contains("--command-smoke") {
-                        await CommandSmoke.run(workspace: workspace, commands: commands, terminals: terminals, client: demoClient)
-                    }
-                    if ProcessInfo.processInfo.arguments.contains("--dialog-smoke") {
-                        await DialogSmoke.run(workspace: workspace, commands: commands, terminals: terminals)
-                    }
                     ApprovalNotifications.shared.configure(connections)
                     boxLinks.finishStartup(connections: connections, commands: commands)
-                    if !workspace.isDemo { ConnectionReachability.shared.start(connections) }
+                    if !workspace.connectionState.isDemo { ConnectionReachability.shared.start(connections) }
                 }
         }
         .defaultSize(width: 1320, height: 850)
@@ -107,20 +77,20 @@ struct DiscoboxApp: App {
                 ForEach(AppShortcutAction.allCases.filter { $0 != .help }) { action in
                     Button(action.title) { commands.performAppShortcut(action) }
                         .keyboardShortcut(commands.keyboardShortcut(action))
-                        .disabled(!workspace.isConnected && !(action == .switchBox && connections.sessions.contains(where: { $0.workspace.isConnected })))
+                        .disabled(!workspace.connectionState.isConnected && !(action == .switchBox && connections.sessions.contains(where: { $0.connectionState.isConnected })))
                 }
                 Divider()
                 ForEach(WorkspaceCommand.allCases) { command in
                     Button(command.title) { commands.perform(command) }
-                        .disabled(!workspace.isConnected || (command == .newShell && (workspace.selectedBox?.isRunning != true || workspace.isOpeningShell)))
+                        .disabled(!workspace.connectionState.isConnected || (command == .newShell && (workspace.selection.selectedBox?.isRunning != true || workspace.selection.isOpeningShell)))
                 }
             }
             CommandGroup(after: .newItem) {
                 Button("Refresh Workspace") { Task { await workspace.refresh() } }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!workspace.isConnected)
+                    .disabled(!workspace.connectionState.isConnected)
                 Button("Disconnect Selected Computer") { connections.disconnect(connections.activeID) }
-                    .disabled(!workspace.canReconnect && !workspace.isConnecting)
+                    .disabled(!workspace.connectionState.canReconnect && !workspace.connectionState.isConnecting)
             }
         }
         Settings {

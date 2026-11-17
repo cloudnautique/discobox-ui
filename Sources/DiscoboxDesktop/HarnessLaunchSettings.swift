@@ -4,9 +4,9 @@ import DiscoboxCore
 
 struct HarnessLaunchSettings: View {
     let harness: Harness
-    let workspace: Workspace
+    let connection: ConnectionStore
     @AppStorage("harnessLaunchDefaults.v1") private var stored = "{}"
-    private var key: String { HarnessLaunchDefaults.key(computer: workspace.endpointLabel, project: workspace.projectID ?? "", harness: harness.id) }
+    private var key: String { HarnessLaunchDefaults.key(computer: connection.endpointLabel, project: connection.projectID ?? "", harness: harness.id) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("NEW BOX DEFAULTS").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
@@ -14,7 +14,7 @@ struct HarnessLaunchSettings: View {
                 Toggle("Enable Discobox API access", isOn: Binding(get: {
                     HarnessLaunchDefaults.enabled(stored, key: key)
                 }, set: { stored = HarnessLaunchDefaults.setting(stored, key: key, enabled: $0) }))
-                    .disabled(harness.usesLegacySetup || !workspace.isConnected)
+                    .disabled(harness.usesLegacySetup || !connection.isConnected)
                     .accessibilityIdentifier("harness.managerDefault")
                 Text(harness.usesLegacySetup ? "Update this host’s Discobox server to enable manager access at launch." : "New boxes can act as managers: discover boxes, create children and manage boxes they lead, within Discobox’s permissions. This grants no credential access.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -32,12 +32,12 @@ struct HarnessChangesBanner: View {
     let harness: Harness
     let review: () -> Void
     let prompt: () -> Bool
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @AppStorage("harnessLoginPrompts.v1") private var presented = "[]"
     @State private var model: HarnessManagement?
     @State private var retry = 0
     private var key: String {
-        [workspace.connectionID.uuidString, box.id, (box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string,
+        [workspace.connectionState.connectionID.uuidString, box.id, (box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string,
          (box.runtime.agentStatus ?? .null)["harnessConfigState"].string, (box.harnessConfig ?? .null)["revision"].pretty, String(retry)].joined(separator: "|")
     }
     var body: some View {
@@ -63,7 +63,7 @@ struct HarnessChangesBanner: View {
                 }.padding(.horizontal, 16).padding(.vertical, 8).background(DiscoboxAppearance.chrome)
             }
         }.task(id: key) {
-            let current = HarnessManagement(workspace: workspace, harnessID: harness.id)
+            let current = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: harness.id)
             model = current; current.selectBox(box.id)
             await current.refreshPreview(includeSharedDetails: false)
             if !Task.isCancelled { offerLoginReview() }
@@ -73,10 +73,10 @@ struct HarnessChangesBanner: View {
     }
 
     private func offerLoginReview() {
-        guard NSApp.isActive, let model, model.canSave, workspace.connectionError == nil,
-              workspace.sandboxID == box.id,
-              let identity = HarnessLoginPrompts.key(preview: model.changes, computer: workspace.endpointLabel,
-                  project: workspace.projectID ?? "", harness: harness.id, box: box.id),
+        guard NSApp.isActive, let model, model.canSave, workspace.connectionState.connectionError == nil,
+              workspace.selection.sandboxID == box.id,
+              let identity = HarnessLoginPrompts.key(preview: model.changes, computer: workspace.connectionState.endpointLabel,
+                  project: workspace.connectionState.projectID ?? "", harness: harness.id, box: box.id),
               !HarnessLoginPrompts.contains(identity, in: presented), prompt() else { return }
         presented = HarnessLoginPrompts.recording(identity, in: presented)
     }
