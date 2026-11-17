@@ -471,29 +471,29 @@ struct AuditView: View {
         }
     }
     private func exportBody(_ record: AuditRecord, part: String) {
-        let pieces = record.id.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count >= 3 else { return }
-        let panel = NSSavePanel(); panel.nameFieldStringValue = String(pieces[2]) + "-" + part + ".bin"
+        guard let reference = AuditRecordReference(record.id) else { return }
+        let box = boxID
+        let panel = NSSavePanel(); panel.nameFieldStringValue = reference.record + "-" + part + ".bin"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             recordingBusy = true
             Task {
                 defer { recordingBusy = false }
                 do {
-                    let result = try await workspace.audit.body(id: String(pieces[2]), kind: String(pieces[1]), part: part, localPath: url.path)
+                    let result = try await workspace.audit.save(reference, part: part, box: box, to: url)
                     recording = "Exported \(Int(result["bytes"].number ?? 0)) bytes." + (result["recordingTruncatedFrom"].string.isEmpty ? "" : " The pool retained only part of this recording (original: " + result["recordingTruncatedFrom"].string + " bytes).")
                 } catch { recording = error.localizedDescription }
             }
         }
     }
     private func readBody(_ record: AuditRecord, part: String) {
-        let pieces = record.id.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count >= 3 else { return }
+        guard let reference = AuditRecordReference(record.id) else { return }
+        let box = boxID
         recordingBusy = true; recording = nil
         Task {
             defer { recordingBusy = false }
             do {
-                let result = try await workspace.audit.body(id: String(pieces[2]), kind: String(pieces[1]), part: part)
+                let result = try await workspace.audit.body(reference, part: part, box: box)
                 guard selected == record.id else { return }
                 recording = result["text"].string + (result["truncated"] == .bool(true) ? "\n[Preview limited to 1 MiB]" : "") + (result["recordingTruncatedFrom"].string.isEmpty ? "" : "\n[Pool recording was truncated from " + result["recordingTruncatedFrom"].string + " bytes]")
             } catch { recording = error.localizedDescription }

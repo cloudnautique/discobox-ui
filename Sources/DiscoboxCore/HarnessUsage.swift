@@ -137,10 +137,10 @@ private enum UsageCollector {
             do {
                 let windows: [QuotaWindow]
                 if row.provider == "claude-headers" {
-                    let result = try await client.decode(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId), as: UsageHeaders.self)
+                    let result = try await client.decode(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId, recordID: row.id, poolID: row.poolId), as: UsageHeaders.self)
                     windows = QuotaParser.headers(result.headers)
                 } else {
-                    let body = try await client.decode(.init(.auditBody, projectID: project, sandboxID: row.sandboxId, requestID: row.id, kind: row.poolId, action: "response"), as: UsageBody.self)
+                    let body = try await client.decode(.init(.auditBody, projectID: project, sandboxID: row.sandboxId, recordID: row.id, action: "response", poolID: row.poolId), as: UsageBody.self)
                     guard body.truncated != true, body.recordingTruncatedFrom?.isEmpty != false else {
                         notices.append("A quota recording was truncated."); continue
                     }

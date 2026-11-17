@@ -99,7 +99,7 @@ struct PoolNetworkView: View {
         do {
             let result = try await workspace.poolSettings.read(pool: poolID)
             guard !changedConnection else { return }; pool = result; draft = .init(proxy: result["proxy"]); reviewed = false
-        } catch { self.error = error.localizedDescription }
+        } catch { if !changedConnection { self.error = error.localizedDescription } }
     }
     private func save() {
         guard !changedConnection, !busy, reviewed, let proxy = try? draft.payload() else { return }
@@ -112,7 +112,7 @@ struct PoolNetworkView: View {
                 guard !changedConnection else { return }
                 pool = result; draft = .init(proxy: result["proxy"])
                 message = "Saved. Check the applied revision above. Restart the pool yourself if required; saving does not restart it."
-            } catch { self.error = error.localizedDescription }
+            } catch { if !changedConnection { self.error = error.localizedDescription } }
         }
     }
 }

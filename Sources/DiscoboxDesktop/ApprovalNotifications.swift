@@ -288,7 +288,7 @@ struct ApprovalNotificationConfiguration {
         let content = UNMutableNotificationContent()
         content.title = "Approval needed"
         content.subtitle = String((computer + " · " + box).prefix(180))
-        let direct = notice.item.notificationApprovalPayload != nil
+        let direct = notice.item.notificationApprovalAnswer != nil
         if direct {
             let duration = notice.item.request["grantTTLSeconds"].number.map { "Requested: " + ApprovalDuration.label($0) + "; credential limit applies." }
                 ?? "Duration respects the credential limit."

@@ -37,9 +37,6 @@ func (b *bridge) toolOperation(ctx context.Context, req request) (response, erro
 	if req.Operation == "tools" {
 		return b.call(ctx, "GET", base+"/tools", nil)
 	}
-	if !b.allowManage {
-		return response{}, errors.New("opening a tool or harness requires explicit permission")
-	}
 	body := map[string]any{"tty": true, "cols": 100, "rows": 30, "env": map[string]string{"TERM": "xterm-256color"}}
 	if req.Operation == "openTool" {
 		// Reuse only a live matching session. Never revive an ended tool implicitly.
@@ -59,8 +56,8 @@ func (b *bridge) toolOperation(ctx context.Context, req request) (response, erro
 				Status   string            `json:"status"`
 				Metadata map[string]string `json:"metadata"`
 			}
-			if json.Unmarshal(raw, &e) == nil && e.Status == "running" && e.Metadata["tool"] == req.Kind && req.Action != "review" && e.Metadata["review"] != "true" {
-				return response{Version: 1, Status: 200, Body: raw}, nil
+			if json.Unmarshal(raw, &e) == nil && e.Status == "running" && e.Metadata["tool"] == req.ToolID && req.Action != "review" && e.Metadata["review"] != "true" {
+				return response{Version: protocolVersion, Status: 200, Body: raw}, nil
 			}
 		}
 		catalog, err := b.call(ctx, "GET", base+"/tools", nil)
@@ -77,7 +74,7 @@ func (b *bridge) toolOperation(ctx context.Context, req request) (response, erro
 		var tool *declaredTool
 		// Source declarations override the image's declaration.
 		for i := range list.Tools {
-			if list.Tools[i].ID == req.Kind && list.Tools[i].Problem == "" {
+			if list.Tools[i].ID == req.ToolID && list.Tools[i].Problem == "" {
 				tool = &list.Tools[i]
 			}
 		}

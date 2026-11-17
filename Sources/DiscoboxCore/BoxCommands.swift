@@ -33,7 +33,7 @@ import Observation
         defer { if connection == connectionState.connectionID { pending.pendingBoxActions.remove(boxID) } }
         if selection.sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { selection.clearSelection() }
         beforeRequest()
-        _ = try await client.perform(.init(.boxAction, projectID: projectID, sandboxID: boxID, prompt: name, action: action.rawValue))
+        _ = try await client.perform(.init(.boxAction, projectID: projectID, sandboxID: boxID, name: name, action: action.rawValue))
         guard connection == connectionState.connectionID else { return }
         if action == .purge {
             inventory.acknowledgePurge(boxID)

@@ -12,14 +12,14 @@ import (
 // Parse upstream's address grammar without resolving DNS or dialing an address
 // from terminal output. Only existing UI connections are candidates.
 func parseBoxLink(req request) (response, error) {
-	if len(req.Kind) > 8192 {
+	if len(req.Link) > 8192 {
 		return response{}, errors.New("the box link is too long")
 	}
-	u, err := url.Parse(req.Kind)
+	u, err := url.Parse(req.Link)
 	if err != nil || u.User != nil || u.Opaque != "" {
 		return response{}, errors.New("invalid box link; credentials are not accepted in links")
 	}
-	address, ok, err := endpoint.ParseSandboxAddress(req.Kind)
+	address, ok, err := endpoint.ParseSandboxAddress(req.Link)
 	if err != nil || !ok {
 		return response{}, errors.New("invalid box link; use discobox:///<box-id> or discobox://<server>/<box-id>")
 	}

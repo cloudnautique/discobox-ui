@@ -20,6 +20,27 @@ import Observation
         revealRevision = UUID()
     }
     public init() {}
+    @ObservationIgnored private var fleetMemo: BrowserFleet?
+    @ObservationIgnored private var snapshotMemo: (fleet: Int, query: BrowserQuery, snapshot: BrowserSnapshot)?
+    var query: BrowserQuery {
+        .init(computerID: computerID, filter: filter, searchText: searchText, selectedTags: selectedTags, matchAnyTag: matchAnyTag, activityFilter: activityFilter)
+    }
+    /// Callers read every input first, so Observation tracks them; the memo
+    /// only avoids re-deriving rows when those inputs are unchanged.
+    func fleet(_ hosts: [BrowserFleet.Host]) -> BrowserFleet {
+        if let fleetMemo, fleetMemo.hosts == hosts { return fleetMemo }
+        let fleet = BrowserFleet(hosts: hosts, revision: (fleetMemo?.revision ?? 0) + 1)
+        fleetMemo = fleet
+        return fleet
+    }
+    /// Filters and counts for the current scope, using the selectors below.
+    func snapshot(hosts: [BrowserFleet.Host], query: BrowserQuery) -> BrowserSnapshot {
+        let fleet = fleet(hosts)
+        if let snapshotMemo, snapshotMemo.fleet == fleet.revision, snapshotMemo.query == query { return snapshotMemo.snapshot }
+        let snapshot = BrowserSnapshot(browser: self, fleet: fleet)
+        snapshotMemo = (fleet.revision, query, snapshot)
+        return snapshot
+    }
     public func toggleComputer(_ id: String) { computerID = computerID == id ? nil : id; archivedSelection.removeAll(); selectedBoxes.removeAll() }
 
     public func selectBoxes(_ ids: Set<BoxLocation>) {
@@ -39,10 +60,24 @@ import Observation
 }
 
 public extension Connections {
-    var browserCandidates: [ConnectedBox] { browser.candidates(in: qualifiedBoxes) }
-    var browserBoxes: [ConnectedBox] { browser.results(in: browserCandidates) }
-    var browserSelectionPin: ConnectedBox? {
-        browser.selectionPin(in: browserCandidates, selected: active.selection.sandboxID.map { BoxLocation(connection: activeID, box: $0) })
+    /// Reading this registers dependencies on every input (each connected
+    /// host's boxes, approvals, aging clock, reachability and pending actions,
+    /// and the browser's scope), even when the memo is reused.
+    var browserSnapshot: BrowserSnapshot { browser.snapshot(hosts: browserHosts, query: browser.query) }
+    var browserCandidates: [ConnectedBox] { browserSnapshot.candidates }
+    var browserBoxes: [ConnectedBox] { browserSnapshot.boxes }
+    var browserSelectionPin: ConnectedBox? { browserSelectionPin(in: browserSnapshot) }
+    /// For callers that already hold this render's snapshot.
+    func browserSelectionPin(in snapshot: BrowserSnapshot) -> ConnectedBox? {
+        browser.selectionPin(in: snapshot.candidates, selected: active.selection.sandboxID.map { BoxLocation(connection: activeID, box: $0) })
+    }
+    internal var browserFleet: BrowserFleet { browser.fleet(browserHosts) }
+    internal var browserHosts: [BrowserFleet.Host] {
+        sessions.filter { $0.connectionState.isConnected }.map { host in
+            .init(id: host.id, computer: host.profile.displayName, boxes: host.inventory.sandboxes, approvals: host.approvalStore.approvals,
+                  clock: host.activityClock, reachable: host.hasCurrentBoxInventory,
+                  canAct: host.connectionState.connectionError == nil, pending: host.pending.pendingBoxActions)
+        }
     }
 }
 
@@ -105,7 +140,7 @@ public extension BoxBrowser {
         return .init(title: item.box.status, rank: 2)
     }
     private static func precedes(_ lhs: ConnectedBox, _ rhs: ConnectedBox, sidebar: Bool) -> Bool {
-        let name = (sidebar ? lhs.box.sidebarTitle : lhs.box.displayName).localizedStandardCompare(sidebar ? rhs.box.sidebarTitle : rhs.box.displayName)
+        let name = (sidebar ? lhs.title : lhs.box.displayName).localizedStandardCompare(sidebar ? rhs.title : rhs.box.displayName)
         if name != .orderedSame { return name == .orderedAscending }
         let computer = lhs.computer.localizedStandardCompare(rhs.computer)
         if computer != .orderedSame { return computer == .orderedAscending }

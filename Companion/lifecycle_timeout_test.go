@@ -9,11 +9,11 @@ import (
 )
 
 func TestArchiveAcknowledgementHasAShortDeadline(t *testing.T) {
-	deadline := requestTimeout(request{Operation: "boxAction", Action: "archive"})
+	deadline := operations["boxAction"].deadlineFor(request{Operation: "boxAction", Action: "archive"})
 	if deadline <= 0 || deadline > time.Minute {
 		t.Fatalf("archive acknowledgement can stall too long: %s", deadline)
 	}
-	if requestTimeout(request{Operation: "boxAction", Action: "repair"}) < 10*time.Minute {
+	if operations["boxAction"].deadlineFor(request{Operation: "boxAction", Action: "repair"}) < 10*time.Minute {
 		t.Fatal("long-running repair lost its completion budget")
 	}
 }

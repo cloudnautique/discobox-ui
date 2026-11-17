@@ -43,7 +43,7 @@ func TestHarnessManagementWireEnvelopes(t *testing.T) {
 			defer server.Close()
 			payload, _ := json.Marshal(map[string]string{"candidateId": "login-one", "fingerprint": harnessReviewFingerprint([]byte(preview))})
 			input, _ := json.Marshal(request{Operation: operation, ProjectID: "p", HarnessID: "h", SandboxID: "source", Payload: payload})
-			out := response{Version: 1}
+			out := response{Version: protocolVersion}
 			if err := runManaged(server.URL, false, true, strings.NewReader(string(input)), &out); err != nil {
 				t.Fatal(err)
 			}
@@ -54,7 +54,7 @@ func TestHarnessManagementWireEnvelopes(t *testing.T) {
 				t.Fatal(err)
 			}
 			var decoded response
-			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != 1 || decoded.Status != 200 || !json.Valid(decoded.Body) {
+			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != protocolVersion || decoded.Status != 200 || !json.Valid(decoded.Body) {
 				t.Fatalf("invalid companion envelope: version=%d status=%d err=%v", decoded.Version, decoded.Status, err)
 			}
 			wantWrites := 0
@@ -170,11 +170,11 @@ func TestHarnessDetailsLoadLegacyFieldsWithoutConsoleOrPrivateCapture(t *testing
 
 func TestHarnessSaveBackHasTimeForTheServerHandoff(t *testing.T) {
 	for _, operation := range []string{"harnessChanges", "saveHarnessChanges", "discardHarnessChanges"} {
-		if requestTimeout(request{Operation: operation}) != 90*time.Second {
+		if operations[operation].deadlineFor(request{Operation: operation}) != 90*time.Second {
 			t.Fatalf("handoff budget for %s is too short", operation)
 		}
 	}
-	if requestTimeout(request{Operation: "harnessDetails"}) != 15*time.Second {
+	if operations["harnessDetails"].deadlineFor(request{Operation: "harnessDetails"}) != 15*time.Second {
 		t.Fatal("metadata reads were needlessly slowed")
 	}
 }

@@ -49,7 +49,7 @@ func TestUsageHeadersOnlyReturnsSubscriptionQuotaFields(t *testing.T) {
 		}
 		return reply(`{"url":"https://api.anthropic.com/v1/messages?beta=true","responseHeaders":{"Anthropic-Ratelimit-Unified-5h-Utilization":["0.1"],"Anthropic-Ratelimit-Unified-7d-Utilization":["0.03"],"Set-Cookie":["private"],"anthropic-ratelimit-requests-remaining":["99"]},"requestHeaders":{"Authorization":"private"}}`), nil
 	})}}
-	result, err := b.usageHeaders(context.Background(), request{ProjectID: "p", Kind: "pool", RequestID: "http_1", SandboxID: "box"})
+	result, err := b.usageHeaders(context.Background(), request{ProjectID: "p", PoolID: "pool", RecordID: "http_1", SandboxID: "box"})
 	if err != nil {
 		t.Fatal(err)
 	}

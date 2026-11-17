@@ -58,7 +58,7 @@ public actor DemoClient: DiscoboxClient {
             guard let id = request.sandboxID, var box = boxOverrides[id] ?? all.first(where: { $0["id"] as? String == id }) else { throw DiscoboxError("Box not found") }
             switch request.action {
             case "purge": purgedBoxes.insert(id)
-            case "rename": box["displayName"] = request.prompt
+            case "rename": box["displayName"] = request.name
             case "archive": box["runtime"] = ["state": "archived", "displayState": "archived"]
             case "stop", "unarchive": box["runtime"] = ["state": "ready", "runtimeState": "stopped"]
             default: box["runtime"] = ["state": "ready", "runtimeState": "running"]
@@ -68,9 +68,9 @@ public actor DemoClient: DiscoboxClient {
         case .usageHeaders: return Data(#"{"headers":{}}"#.utf8)
         case .usage:
             return try JSONSerialization.data(withJSONObject: ["records": [["id": "demo-quota", "poolId": "local", "sandboxId": "demo-ui", "createdAt": "2026-10-27T17:00:00Z", "provider": "codex"]], "missing": []])
-        case .auditBody where request.requestID == "demo-quota":
+        case .auditBody where request.recordID == "demo-quota":
             return try JSONSerialization.data(withJSONObject: ["text": #"{"rate_limit":{"primary_window":{"used_percent":70,"limit_window_seconds":18000,"reset_at":1793124000},"secondary_window":{"used_percent":30,"limit_window_seconds":604800}}}"#, "truncated": false])
-        case .auditBody: return Data(#"{"text":"Offline response"}"#.utf8)
+        case .auditBody, .saveAuditBody: return Data(#"{"text":"Offline response"}"#.utf8)
         case .files: return Data(#"{"path":"/workspace","entries":[]}"#.utf8)
         case .upload, .download: throw DiscoboxError("File transfer is unavailable in the offline demo.")
         case .tools: return Data(#"{"tools":[]}"#.utf8)
@@ -82,7 +82,6 @@ public actor DemoClient: DiscoboxClient {
         case .answer: lastApprovalAction = request.action; pendingRequests = false; return Data("{}".utf8)
         case .deleteSecret: return Data("{}".utf8)
         case .createSecret: return Data(#"{"id":"demo-token"}"#.utf8)
-        case .ruleProposals: return Data("{}".utf8)
         case .setDefaultHarness: throw DiscoboxError("Default harness editing is unavailable in the offline demo.")
         case .harnesses:
             return Data(#"{"harnessConfigs":[{"id":"demo-harness","name":"Demo agent","configured":true}]}"#.utf8)

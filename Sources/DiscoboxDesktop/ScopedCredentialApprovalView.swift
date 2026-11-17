@@ -264,7 +264,7 @@ struct ScopedCredentialApprovalView: View {
         }
     }
     private func reload(selectDefault: Bool = true) async {
-        guard !closed, !resolved else { return }
+        guard !closed, !resolved, let connection else { return }
         let token = UUID(); reviewRequest = token
         let requestedDraft = draftKey
         loading = true; error = nil
@@ -316,13 +316,15 @@ struct ScopedCredentialApprovalView: View {
         Task {
             defer { busy = false }
             do {
-                try await workspace.approvalStore.validateApproval(item, connection: connection)
-                guard !closed else { return }
-                operationStatus = "Waiting for the requesting computer to record your decision…"
+                let proceed = { () -> Bool in
+                    guard !closed else { return false }
+                    operationStatus = "Waiting for the requesting computer to record your decision…"
+                    return true
+                }
                 if deny {
-                    try await workspace.approvalStore.answer(item, action: "deny", payload: .object([:]), onAccepted: close)
+                    try await workspace.approvalStore.answer(item, .deny, connection: connection, proceed: proceed, onAccepted: { _ in close() })
                 } else if let decision {
-                    try await workspace.approvalStore.answerWithReceipt(item, action: "approve", payload: .object(["approval": decision, "contextFingerprint": fingerprint]), onAccepted: { result in
+                    try await workspace.approvalStore.answer(item, .reviewedCredential(approval: decision, contextFingerprint: fingerprint), connection: connection, proceed: proceed, onAccepted: { result in
                         busy = false
                         guard !closed else { return }
                         receipt = result

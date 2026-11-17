@@ -153,7 +153,7 @@ public final class BoxSelectionStore {
         defer { if selection == selectionRevision { isOpeningSession = false } }
         guard let client = connectionState.client, let projectID = connectionState.projectID, let sandboxID, selectedBox?.isRunning == true else { throw DiscoboxError("Select a running box.") }
         let payload: JSONValue? = base.isEmpty ? nil : .object(["base": .string(base), "head": .string(head)])
-        let created = try await client.decode(.init(tool == nil ? .newAgent : .openTool, projectID: projectID, sandboxID: sandboxID, kind: tool, action: base.isEmpty ? nil : "review", payload: payload), as: Exec.self)
+        let created = try await client.decode(.init(tool == nil ? .newAgent : .openTool, projectID: projectID, sandboxID: sandboxID, toolID: tool, action: base.isEmpty ? nil : "review", payload: payload), as: Exec.self)
         guard selection == selectionRevision else { return }
         await refreshDetails()
         guard selection == selectionRevision else { return }

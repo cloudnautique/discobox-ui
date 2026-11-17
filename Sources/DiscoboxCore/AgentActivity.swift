@@ -46,7 +46,7 @@ public struct AgentActivity: Equatable, Sendable {
         // an unchanged Idle/Working report can legitimately be much older.
         let observedText = status["observedAt"].string
         if !observedText.isEmpty {
-            guard let observed = Self.date(observedText), abs(now.timeIntervalSince(observed)) <= 120 else {
+            guard let observed = Self.date(observedText), abs(now.timeIntervalSince(observed)) <= BoxPowerStatus.maximumReportAge else {
                 state = .unavailable; label = "Status unavailable"; message = "Activity report is out of date"; return
             }
         }

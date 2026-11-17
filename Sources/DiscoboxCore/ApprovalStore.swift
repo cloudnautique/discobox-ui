@@ -45,11 +45,21 @@ public final class ApprovalStore {
         }
     }
 
-    public func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
-        _ = try await answerWithReceipt(item, action: action, payload: payload, onAccepted: { _ in onAccepted() })
+    /// Validates the request is still pending, then answers it once. After
+    /// validation `proceed` can still withdraw (a closed window); nothing is
+    /// sent and nil is returned. Views choose a decision; Core builds the payload.
+    @discardableResult
+    public func answer(_ item: ApprovalItem, _ answer: ApprovalAnswer, connection: UUID, proceed: () -> Bool = { true },
+                       onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue? {
+        let payload = try answer.payload()
+        try await validateApproval(item, connection: connection)
+        guard proceed() else { return nil }
+        return try await answerWithReceipt(item, action: answer.action, payload: payload, onAccepted: onAccepted)
     }
 
-    @discardableResult public func answerWithReceipt(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue {
+    /// Publish the acknowledgment and remove this request before an unrelated
+    /// inbox refresh can stall. A committed response is never submitted twice.
+    @discardableResult func answerWithReceipt(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue {
         let connection = connectionState.connectionID
         let result = try await ScopedAPI(connection: connectionState).json(.answer, box: item.boxID, request: item.id, kind: item.kind, action: action, payload: payload)
         guard connection == connectionState.connectionID else { throw CancellationError() }

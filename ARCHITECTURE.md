@@ -149,7 +149,7 @@ shows connection controls and recovery status. Connecting reads existing resourc
 live terminal opens an interactive stream, resizes it, and holds activity while
 attached. Stopped/cached terminals use the observational screen endpoint.
 Lifecycle, file-write, and approval mutations require explicit UI actions; the
-companion validates an allowlist and requires per-request management permission.
+companion validates an allowlist and requires the per-request management flag.
 No server shutdown operation is exposed. The explicit New Shell operation creates and starts only a newly returned shell ID;
 it is never called by selection or polling.
 Before every attach the helper verifies running box and terminal state. Both
@@ -251,6 +251,17 @@ terminates that child only. This favors a small, inspectable first integration.
 If profiling warrants a persistent companion, retain request IDs and cancellation
 in a versioned protocol rather than adding ad hoc output parsing.
 
+The bounded request surface is one registry (`Companion/operations.go`): each
+operation's handler, permission class (read, manage or shell) and
+deadline. `Companion/protocol.json` publishes the names, classes and wire
+version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
+drift from the companion. Each request field has one meaning (a box's new name
+is `name`, a secret is `secretID`, an audit record is `poolID` + `recordID`, a
+link is `link`, a tool is `toolID`); `requestID` and `kind` name only an
+approval request. The `--allow-manage` and `--allow-shell` flags keep a
+polling read from mutating by mistake. They are not a security boundary
+against another process running as the same user.
+
 The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
 including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection
 remains independent of that environment setting. Attach and forwarding use the
@@ -335,7 +346,7 @@ its record. Ambiguous failures are never retried automatically. Selection revisi
 checks prevent late responses from changing a different box's current terminal.
 
 
-New Box and Close Shell use a separate management authorization flag. Creation
+New Box and Close Shell require the management flag. Creation
 reuses sandboxcreate for origin, source pinning, and delivery, then returns the
 new record; it does not start/stop an existing box, invoke the CLI, or sync SSH
 configuration. Long requests are cancelled on application termination; source
@@ -358,7 +369,9 @@ silently dropped. History uses per-trail inclusive time bounds; HTTP following
 uses per-pool row cursors. Timestamp-only ties are reported as a limitation.
 Body previews are explicit bounded reads, never included in background polling.
 
-Approval snapshots are project-wide and independently polled every two seconds.
+Approval snapshots are project-wide and independently polled: every two seconds
+for the focused computer, slower for others and while the window is hidden, but
+never paused, so notifications still arrive in the background.
 Connection/request generations reject stale reads. Answers re-read the specific
 pending record then perform one authenticated backend mutation without retry.
 Policy JSON preserves resolved variables and unknown fields. Secret values are
@@ -560,6 +573,14 @@ timings. It never creates a box or accesses Keychain/backend data.
 
 Connections owns a ConnectionSession per normalized server address, each with its
 own stores and independent inventory, approval, resource, and usage polling tasks.
+Their cadence follows what can be seen (`PollingCadence`): each workspace window
+reports whether it is focused, visible behind another app or hidden, and the
+computer being viewed polls fastest. Approvals never pause, so notifications
+still arrive while hidden; resources and usage pause until a window shows again.
+Activity aging uses an `ActivityClock` that advances only when a report's
+freshness would change, so unchanged refreshes publish nothing, and the sidebar
+derives each box's row values once per input change before `BoxBrowser`'s
+selectors filter and sort them.
 Active selection is an address plus box ID. Equal project, box, harness, or exec
 IDs on two computers never identify the same UI object. Already-connected hosts
 reuse their clients when selected; failed connection attempts leave the active

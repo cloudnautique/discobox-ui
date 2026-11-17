@@ -6,7 +6,7 @@ public struct BoxLocation: Hashable, Sendable {
     public let box: String
     public init(connection: String, box: String) { self.connection = connection; self.box = box }
 }
-public struct ConnectedBox: Identifiable, Sendable {
+public struct ConnectedBox: Identifiable, Sendable, Equatable {
     public var id: BoxLocation { location }
     public let location: BoxLocation
     public let computer: String
@@ -14,9 +14,12 @@ public struct ConnectedBox: Identifiable, Sendable {
     public let needsAttention: Bool
     public let activity: AgentActivity?
     public let power: BoxPowerStatus
-    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil, power: BoxPowerStatus? = nil) {
+    /// `Sandbox.sidebarTitle`, derived once because sorting compares it repeatedly.
+    public let title: String
+    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil, power: BoxPowerStatus? = nil, title: String? = nil) {
         self.location = location; self.computer = computer; self.box = box; self.needsAttention = needsAttention; self.activity = activity
         self.power = power ?? BoxPowerStatus(box: box)
+        self.title = title ?? box.sidebarTitle
     }
     public func matches(_ query: String) -> Bool {
         query.split(whereSeparator: { $0.isWhitespace }).allSatisfy {
@@ -30,9 +33,31 @@ public struct ConnectedBox: Identifiable, Sendable {
 @MainActor @Observable public final class Connections {
     public let browser = BoxBrowser()
     public private(set) var sessions: [ConnectionSession]
-    public private(set) var activeID: String
+    public private(set) var activeID: String { didSet { if activeID != oldValue { updateCadence() } } }
     var creations: [BoxCreation] = []
     @ObservationIgnored private let pollingEnabled: Bool
+    /// The most visible of the workspace windows' reports (see reportPresence).
+    public var presence = PollingPresence.focused {
+        didSet {
+            guard presence != oldValue else { return }
+            updateCadence()
+            // Hidden windows poll slowly; re-age activity before it is seen again.
+            if oldValue == .hidden { for host in sessions { host.advanceActivityClock() } }
+        }
+    }
+    @ObservationIgnored private var presenceReports: [UUID: PollingPresence] = [:]
+    /// Each workspace window reports what it shows, from app activation and
+    /// occlusion; polling follows the most visible. A closed window withdraws.
+    public func reportPresence(_ value: PollingPresence, from window: UUID) {
+        presenceReports[window] = value; presence = combinedPresence
+    }
+    public func withdrawPresence(from window: UUID) {
+        presenceReports[window] = nil; presence = combinedPresence
+    }
+    private var combinedPresence: PollingPresence {
+        let reports = presenceReports.values
+        return reports.contains(.focused) ? .focused : reports.contains(.visible) ? .visible : .hidden
+    }
     public var active: ConnectionSession { sessions.first { $0.id == activeID } ?? sessions[0] }
     public var suggestedCreationComputerID: String {
         if let id = browser.computerID, session(id)?.connectionState.isConnected == true { return id }
@@ -42,6 +67,7 @@ public struct ConnectedBox: Identifiable, Sendable {
     public init(polling: Bool = true, now: @escaping () -> Date = Date.init) {
         let local = ConnectionSession(profile: .thisComputer, now: now)
         sessions = [local]; activeID = local.id; pollingEnabled = polling
+        updateCadence()
     }
     public func session(_ id: String) -> ConnectionSession? { sessions.first { $0.id == id } }
     public func syncProfiles(_ profiles: [ConnectionProfile]) {
@@ -50,6 +76,10 @@ public struct ConnectedBox: Identifiable, Sendable {
             if let existing = session(id) { existing.update(profile) }
             else { sessions.append(ConnectionSession(profile: profile)) }
         }
+        updateCadence()
+    }
+    private func updateCadence() {
+        for host in sessions { host.cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID) }
     }
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }
@@ -120,15 +150,8 @@ public struct ConnectedBox: Identifiable, Sendable {
             }
         }
     }
-    public var qualifiedBoxes: [ConnectedBox] {
-        sessions.filter { $0.connectionState.isConnected }.flatMap { host in
-            host.inventory.sandboxes.filter { !$0.isDeleted }.map { box in
-                let activity = host.activity(for: box)
-                return ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName,
-                    box: box, needsAttention: box.matchesAttention || activity.needsYou,
-                    activity: activity, power: host.powerStatus(for: box))
-            }
-        }
-    }
+    /// Every connected box with its activity, power and title derived once per
+    /// input change (see BoxBrowser.fleet); the browser's selectors consume it.
+    public var qualifiedBoxes: [ConnectedBox] { browserFleet.items }
     public var switcherBoxes: [ConnectedBox] { browser.switcherBoxes(in: qualifiedBoxes) }
 }

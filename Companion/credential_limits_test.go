@@ -54,7 +54,7 @@ func TestSharedCredentialLimitsRequireFreshMetadataAndExactProtocol(t *testing.T
 					}
 				}
 				payload, _ := json.Marshal(map[string]any{"expectedSecret": expected, "limits": limits})
-				res, err := b.execute(t.Context(), request{Operation: "updateSecretLimits", ProjectID: "p", RequestID: "s", Payload: payload})
+				res, err := b.execute(t.Context(), request{Operation: "updateSecretLimits", ProjectID: "p", SecretID: "s", Payload: payload})
 				if mode == "save" {
 					if err != nil || res.Status != 200 || writes != 1 {
 						t.Fatalf("save=%v status=%d writes=%d", err, res.Status, writes)
@@ -127,7 +127,7 @@ func TestCredentialLimitSaveReadsBackWithoutReplayingTheWrite(t *testing.T) {
 					res.StatusCode = http.StatusNoContent
 					return res, nil
 				})
-				result, err := b.execute(t.Context(), request{Operation: "updateSecretLimits", ProjectID: "p", RequestID: "s", Payload: payload})
+				result, err := b.execute(t.Context(), request{Operation: "updateSecretLimits", ProjectID: "p", SecretID: "s", Payload: payload})
 				if writes != 1 {
 					t.Fatalf("writes = %d, want exactly one", writes)
 				}

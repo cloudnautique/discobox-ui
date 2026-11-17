@@ -40,7 +40,8 @@ struct WorkspaceView: View {
         })
     }
     private var activityCounts: (needsYou: Int, working: Int) {
-        connections.browser.activityCounts(in: connections.browserCandidates)
+        let snapshot = connections.browserSnapshot
+        return (snapshot.needsYouCount, snapshot.workingCount)
     }
     private var archiveCount: Int { connections.browser.archivedSelection.count }
     private var selectedCreation: Bool {
@@ -302,7 +303,7 @@ private struct WorkspaceHostDialogs: View {
         @Bindable var commands = commands
         Color.clear.frame(width: 0, height: 0)
             .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
-            .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
+            .sheet(isPresented: $commands.showTools) { ToolsSheet(box: workspace.selection.sandboxID).environment(workspace) }
             .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
     }
 }
@@ -581,30 +582,32 @@ struct RepositoryGroupHeader: View {
 struct BoxRow: View {
     let box: Sandbox
     var computer: String? = nil
+    /// Precomputed by the sidebar; without it the row derives from its workspace.
+    var presentation: BoxRowPresentation? = nil
     @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @State private var showInbox = false
     var body: some View {
-        let activity = workspace.activity(for: box)
-        let power = workspace.powerStatus(for: box)
+        let state = presentation ?? workspace.rowPresentation(for: box)
+        let activity = state.activity, power = state.power
         let indicator = BoxIndicator(box: box, activity: activity, power: power)
         let tint = indicator.state == .error ? DiscoboxAppearance.activityFailure : DiscoboxAppearance.activityAttention
         HStack(alignment: .top, spacing: 9) {
             BoxStatusLight(indicator: indicator)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(box.sidebarTitle).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    Text(state.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     Spacer(minLength: 0)
                     if activity.approvalCount > 0 {
                         Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
                             .buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
-                            .disabled(!workspace.connectionState.isConnected || workspace.connectionState.connectionError != nil)
+                            .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.review." + box.id)
                             .help("Review pending requests for this box")
                     } else if activity.needsYou || box.matchesAttention {
                         Button("Open", action: openAgent).buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
-                            .disabled(!workspace.connectionState.isConnected || workspace.connectionState.connectionError != nil)
+                            .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.open." + box.id)
                             .help("Open the agent on this box’s computer")
                     }
@@ -613,7 +616,7 @@ struct BoxRow: View {
                 HStack(spacing: 4) {
                     Text([box.harnessName ?? box.config.name ?? "Agent", computer].compactMap { $0 }.joined(separator: " · ")).lineLimit(1)
                     Spacer(minLength: 4)
-                    if workspace.pending.pendingBoxActions.contains(box.id) { ProgressView().controlSize(.mini) }
+                    if state.isPending { ProgressView().controlSize(.mini) }
                     if let branch = box.branch, !branch.isEmpty {
                         Label(branch, systemImage: "arrow.triangle.branch")
                             .font(.system(size: 9)).lineLimit(1).truncationMode(.middle)

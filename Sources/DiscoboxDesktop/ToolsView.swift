@@ -12,7 +12,12 @@ struct ToolsSheet: View {
     @State private var loading = true
     @State private var reviewExpanded: Bool
 
-    init(initiallyExpanded: Bool = false) {
+    /// The box the sheet was presented for; nil falls back to the selection
+    /// at first appearance (fixtures).
+    private let box: String?
+
+    init(box: String? = nil, initiallyExpanded: Bool = false) {
+        self.box = box
         _reviewExpanded = State(initialValue: initiallyExpanded)
     }
 
@@ -52,7 +57,8 @@ struct ToolsSheet: View {
         }.frame(height: 640).interactiveDismissDisabled(busy)
         .task {
             defer { loading = false }
-            do { tools = try await workspace.tools.list(box: workspace.selection.sandboxID)["tools"].array }
+            guard let box = box ?? workspace.selection.sandboxID else { error = "Select a box to see its tools."; return }
+            do { tools = try await workspace.tools.list(box: box)["tools"].array }
             catch { self.error = error.localizedDescription }
         }
     }

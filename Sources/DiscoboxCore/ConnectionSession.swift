@@ -44,33 +44,78 @@ import Observation
         pools.refresh = { [weak self] in await self?.refresh() }
         commands.refresh = { [weak self] in await self?.refresh() }
     }
-    var activityObservationTime: Date { _ = inventory.lastRefresh; return now() }
+    /// Existing refreshes advance this only when an age check could change,
+    /// so unchanged reports still age out without republishing every tick.
+    public private(set) var activityClock = ActivityClock()
+    var activityObservationTime: Date { activityClock.now }
+    func advanceActivityClock() {
+        let next = activityClock.advanced(to: now(), inventoryObservedAt: inventory.boxesObservedAt, reportDates: reportDates)
+        if next != activityClock { activityClock = next }
+    }
+    /// Parsed once per box list, not on every approvals poll.
+    @ObservationIgnored private var reportDatesCache: (boxes: [Sandbox], dates: [Date])?
+    private var reportDates: [Date] {
+        if let cache = reportDatesCache, cache.boxes == inventory.sandboxes { return cache.dates }
+        let dates = ActivityClock.reportDates(inventory.sandboxes)
+        reportDatesCache = (inventory.sandboxes, dates)
+        return dates
+    }
     public func update(_ profile: ConnectionProfile) { self.profile = profile }
-    enum Poll: CaseIterable, Sendable, Hashable { case inventory, approvals, resources, usage }
+    typealias Poll = PollingLoop
     @ObservationIgnored var pollSleep: @Sendable (Poll, Double) async throws -> Void = { _, delay in
         try await Task.sleep(for: .seconds(delay))
     }
+    /// Set by Connections from window presence and the active computer. A change
+    /// wakes sleeping loops so they recompute their deadline from the last poll.
+    @ObservationIgnored var cadence = PollingCadence() { didSet { if cadence != oldValue { schedule.wake() } } }
+    @ObservationIgnored private let schedule = PollingSchedule()
     func startPolling() {
         stopPolling()
-        let sleep = pollSleep
+        let sleep = pollSleep, schedule = schedule
         polling = Poll.allCases.map { kind in
             Task(priority: kind == .resources || kind == .usage ? .utility : nil) { [weak self] in
-                if kind != .inventory { await self?.poll(kind) }
+                // Inventory waits one interval first. Others poll at once, unless
+                // paused (resources, usage while hidden): they are then due as
+                // soon as the cadence resumes them.
+                var last: Date? = kind == .inventory ? self?.now() : nil
+                if kind != .inventory, self?.cadence.interval(kind) != nil { await self?.poll(kind); last = self?.now() }
                 while !Task.isCancelled {
-                    guard let delay = self?.delay(for: kind) else { return }
-                    do { try await sleep(kind, delay) } catch { return }
+                    // Sleeping holds only the schedule, never this session.
+                    do {
+                        waiting: while true {
+                            guard let wait = self?.pollWait(kind, since: last) else { return }
+                            switch wait {
+                            case .due: break waiting
+                            case .after(let seconds): if try await !schedule.sleep(kind, seconds: seconds, using: sleep) { break waiting }
+                            case .paused: _ = try await schedule.sleep(kind, seconds: nil, using: sleep)
+                            }
+                        }
+                    } catch { return }
                     guard !Task.isCancelled else { return }
                     await self?.poll(kind)
+                    last = self?.now() ?? last
                 }
             }
         }
+        observeRecovery(attempt)
     }
-    private func delay(for poll: Poll) -> Double {
-        switch poll {
-        case .inventory: connectionState.recovery.nextRetryAt.map { min(3, max(0.05, $0.timeIntervalSince(now()))) } ?? 3
-        case .approvals: 2
-        case .resources: 30
-        case .usage: 60
+    private enum PollWait { case due, after(Double), paused }
+    private func pollWait(_ kind: Poll, since last: Date?) -> PollWait {
+        let retryIn = kind == .inventory ? connectionState.recovery.nextRetryAt?.timeIntervalSince(now()) : nil
+        guard let delay = cadence.delay(kind, sinceLastPoll: last.map { .seconds(now().timeIntervalSince($0)) }, retryIn: retryIn) else { return .paused }
+        let seconds = Double(delay.components.seconds) + Double(delay.components.attoseconds) / 1e18
+        return seconds <= 0 ? .due : .after(seconds)
+    }
+    /// Retries scheduled outside the inventory loop (wake, network hints,
+    /// reconnect) must not wait out a long background interval.
+    private func observeRecovery(_ generation: UUID) {
+        let retry = connectionState.recovery.nextRetryAt
+        withObservationTracking { _ = connectionState.recovery.nextRetryAt } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.attempt == generation else { return }
+                if self.connectionState.recovery.nextRetryAt != retry { self.schedule.wake() }
+                self.observeRecovery(generation)
+            }
         }
     }
     private func poll(_ kind: Poll) async {
@@ -81,7 +126,7 @@ import Observation
         guard connectionState.isConnected, connectionState.connectionError == nil else { return }
         switch kind {
         case .inventory: await refresh()
-        case .approvals: await approvalStore.refreshApprovals()
+        case .approvals: await approvalStore.refreshApprovals(); advanceActivityClock()
         case .resources: await pools.refreshResources()
         case .usage: await refreshUsage()
         }
@@ -123,6 +168,7 @@ import Observation
         do {
             guard let request = try await inventory.refresh(using: connectionState, now: now), current == connectionState.revision else { return }
             connectionState.didRefresh()
+            advanceActivityClock()
             selection.reconcileInventory()
             await selection.refreshDetails()
             guard current == connectionState.revision, !Task.isCancelled else { return }
@@ -186,5 +232,6 @@ import Observation
         selection.reset()
         inventory.reset(); approvalStore.reset(); catalog.reset(); pools.reset(); pending.reset()
         usage = HarnessUsage()
+        activityClock = ActivityClock(); reportDatesCache = nil
     }
 }

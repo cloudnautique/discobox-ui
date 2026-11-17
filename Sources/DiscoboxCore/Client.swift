@@ -22,7 +22,7 @@ extension DiscoboxClient {
 }
 
 /// A separate process for each bounded request keeps cancellation independent
-/// from the backend. Only an explicit input request opts into the write route.
+/// from the backend. Each operation passes only its own permission flag.
 public actor CompanionClient: DiscoboxClient {
     public nonisolated static func cancelAllRequests() { ProcessRequest.cancelAll() }
     private let executable: URL
@@ -61,7 +61,7 @@ public actor CompanionClient: DiscoboxClient {
         let deadline: TimeInterval? = request.operation == .serverPeer ? 5 : (isApproval ? approvalTimeout : nil)
         let job = ProcessRequest(executable: executable, endpoint: destination, timeout: deadline,
                                  timeoutMessage: request.operation == .serverPeer ? "The computer did not report its identity in time." : timeoutMessage,
-                                 newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
+                                 permission: request.operation.permission, payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await BlockingThread.run(name: "Discobox companion request") { try job.run() }
@@ -70,7 +70,7 @@ public actor CompanionClient: DiscoboxClient {
         let response: BridgeResponse
         do { response = try JSONDecoder().decode(BridgeResponse.self, from: data) }
         catch { throw DiscoboxError("The companion returned an invalid response. Rebuild the app and companion together.") }
-        guard response.version == 1 else { throw DiscoboxError("Unsupported companion protocol version.") }
+        guard response.version == BridgeRequest.protocolVersion else { throw DiscoboxError("Unsupported companion protocol version. Rebuild the app and companion together.") }
         if let error = response.error, !error.isEmpty { throw DiscoboxError(error, connectionRetryable: response.errorKind == "transport") }
         guard (200..<300).contains(response.status) else {
             if response.status == 401 || response.status == 403 {
@@ -119,12 +119,17 @@ private final class ProcessRequest: @unchecked Sendable {
     private let payload: Data
     private let progress: (@Sendable (Int64) -> Void)?
 
-    init(executable: URL, endpoint: String, timeout: TimeInterval?, timeoutMessage: String, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
+    init(executable: URL, endpoint: String, timeout: TimeInterval?, timeoutMessage: String, permission: BridgeRequest.Operation.Permission, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
         self.progress = progress
         self.timeout = timeout; self.timeoutMessage = timeoutMessage
         process.executableURL = executable
         if Task.currentPriority.rawValue <= TaskPriority.utility.rawValue { process.qualityOfService = .utility }
-        process.arguments = ["--endpoint", endpoint] + (newShell ? ["--allow-shell"] : []) + (manage ? ["--allow-manage"] : [])
+        let flag: [String] = switch permission {
+        case .read: []
+        case .manage: ["--allow-manage"]
+        case .shell: ["--allow-shell"]
+        }
+        process.arguments = ["--endpoint", endpoint] + flag
         self.payload = payload
     }
 

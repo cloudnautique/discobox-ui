@@ -18,20 +18,12 @@ func (b *bridge) approvals(ctx context.Context, req request) (response, error) {
 		return b.call(ctx, "GET", base+"/secrets", nil)
 	case "approvalContext":
 		return b.previewCredential(ctx, req)
-	case "ruleProposals":
-		if validID(req.RequestID) != nil {
-			return response{}, errors.New("invalid request")
-		}
-		return b.call(ctx, "POST", base+"/secret-requests/"+req.RequestID+"/rule-proposals", nil)
-	}
-	if !b.allowManage {
-		return response{}, errors.New("answering requests requires explicit permission")
 	}
 	if req.Operation == "deleteSecret" {
-		if validID(req.RequestID) != nil {
+		if validID(req.SecretID) != nil {
 			return response{}, errors.New("invalid credential")
 		}
-		return b.call(ctx, "DELETE", base+"/secrets/"+req.RequestID, nil)
+		return b.call(ctx, "DELETE", base+"/secrets/"+req.SecretID, nil)
 	}
 	if req.Operation == "createSecret" {
 		return b.call(ctx, "POST", base+"/secrets", req.Payload)

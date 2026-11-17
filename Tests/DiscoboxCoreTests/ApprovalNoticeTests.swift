@@ -12,9 +12,9 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
 
 @Test func notificationApprovalAlwaysRequiresTheCurrentReviewForm() {
     for changes: [String: JSONValue] in [[:], ["grantTTLSeconds": .null], ["purpose": .string("delegate")], ["reason": .string("refresh")]] {
-        #expect(noticeItem(changes).notificationApprovalPayload == nil)
+        #expect(noticeItem(changes).notificationApprovalAnswer == nil)
     }
-    #expect(noticeItem(kind: "trust").notificationApprovalPayload == nil)
+    #expect(noticeItem(kind: "trust").notificationApprovalAnswer == nil)
 }
 
 @MainActor @Test func noticesDeduplicateAndScopeIdenticalRequestIDsByHostAndConnection() throws {

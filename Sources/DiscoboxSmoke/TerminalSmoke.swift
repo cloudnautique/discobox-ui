@@ -68,6 +68,18 @@ import DiscoboxCore
             try await checkArrows(session.view, window: window, application: true)
             "\u{2}".withCString { ghostty_surface_text(surface, $0, 1) }
             try await wait { text(session.view).contains("zINPUT-é") }; print("SMOKE: text OK")
+            // System Command-Control chords and read-only terminals leave key
+            // equivalents to AppKit; neither sends anything to the fixture.
+            window.makeFirstResponder(session.view)
+            func equivalent(_ flags: NSEvent.ModifierFlags, _ key: String) -> NSEvent {
+                NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: 3)!
+            }
+            guard !session.view.performKeyEquivalent(with: equivalent([.control, .command], "f")) else { throw Failure("terminal claimed Control-Command-F") }
+            session.view.readOnly = true
+            let claimedWhileReadOnly = session.view.performKeyEquivalent(with: equivalent(.control, "f"))
+            session.view.readOnly = false
+            guard !claimedWhileReadOnly else { throw Failure("read-only terminal claimed a Control chord") }
+            print("SMOKE: system Control-Command chords pass through")
             let selectAll = "select_all"
             selectAll.withCString { _ = ghostty_surface_binding_action(surface, $0, UInt(selectAll.utf8.count)) }
             guard ghostty_surface_has_selection(surface) else { throw Failure("Selection unavailable") }

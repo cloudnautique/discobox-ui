@@ -28,7 +28,7 @@ func TestBoxLinkUsesUpstreamGrammarAndOnlyMatchesExistingEndpoints(t *testing.T)
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			candidates, _ := json.Marshal([]string{tc.candidate})
-			res, err := parseBoxLink(request{Kind: tc.raw, Payload: candidates})
+			res, err := parseBoxLink(request{Link: tc.raw, Payload: candidates})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +61,7 @@ func TestBoxLinkRejectsMalformedOrCredentialBearingLinks(t *testing.T) {
 		"discobox://user:private@box.test/sbx_research", "discobox://box.test/sbx_%1b", "discobox://box.test/sbx_a%2fb",
 		"discobox+http:///sbx_research", "discobox://d1-typo/sbx_research", strings.Repeat("x", 9000),
 	} {
-		if _, err := parseBoxLink(request{Kind: raw}); err == nil {
+		if _, err := parseBoxLink(request{Link: raw}); err == nil {
 			t.Errorf("accepted %q", raw)
 		}
 	}

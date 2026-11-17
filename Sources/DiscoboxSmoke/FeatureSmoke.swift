@@ -202,7 +202,7 @@ import UserNotifications
             inboxWorkspace.disconnect()
             toolsWorkspace.disconnect()
             print("STUDIO_THEME_AUDIT_OK: \(auditPanels.count) additional dialog/settings surfaces checked in both Light and Dark")
-            try await workspace.approvalStore.answer(item, action: "approve", payload: .object(["grantTTLSeconds": .number(900)]))
+            try await workspace.approvalStore.answer(item, .credential(request: item.request, secretID: "", duration: "900", maximum: nil), connection: workspace.connectionState.connectionID)
             guard workspace.approvalStore.approvals.isEmpty else { throw DiscoboxError("Answer did not clear fixture inbox") }
             print("FEATURE_SMOKE_OK: pool resources, cache confirmation, box rows, lifecycle confirmations, approval, new-box preflight, tools and file panel layout; fixture answer clears inbox")
             fflush(stdout); exit(0)
@@ -410,7 +410,7 @@ private actor ComputerUsageFixture: DiscoboxClient {
     init(percent: Int) { self.percent = percent }
     func perform(_ request: BridgeRequest) async throws -> Data {
         if request.operation == .usage { usageReads += 1 }
-        if request.operation == .auditBody, request.requestID == "demo-quota" {
+        if request.operation == .auditBody, request.recordID == "demo-quota" {
             return try JSONSerialization.data(withJSONObject: ["text": "{\"rate_limit\":{\"primary_window\":{\"used_percent\":\(percent),\"limit_window_seconds\":18000}}}", "truncated": false])
         }
         return try await demo.perform(request)

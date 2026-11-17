@@ -96,7 +96,7 @@ func TestEndpointValidationAndRedirectPolicy(t *testing.T) {
 }
 
 func TestResponseEnvelopeRoundTripsBinaryJSON(t *testing.T) {
-	before := response{Version: 1, Status: 200, Body: []byte(`{"projects":null}`)}
+	before := response{Version: protocolVersion, Status: 200, Body: []byte(`{"projects":null}`)}
 	encoded, err := json.Marshal(before)
 	if err != nil {
 		t.Fatal(err)

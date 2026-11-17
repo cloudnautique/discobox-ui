@@ -106,6 +106,7 @@ struct ConnectedWorkspace: View {
             }
             .onChange(of: workspace.selection.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in commands.cancelPrefix() }
+            .modifier(PollingPresenceReporter(connections: connections, commands: commands))
             .sheet(item: $boxActions.request) { target in
                 let runtime = runtimes.runtime(target.host.id)
                 BoxActionSheet(request: .init(box: target.box, action: target.action, connection: target.connection))
@@ -124,5 +125,27 @@ struct ConnectedWorkspace: View {
                     notifications.actionError = nil
                 }
             }
+    }
+}
+
+/// Polling cadence follows what can be seen. A workspace window not yet read
+/// counts as on screen, so a missed notification never slows a visible host.
+@MainActor private struct PollingPresenceReporter: ViewModifier {
+    let connections: Connections
+    let commands: WorkspaceCommands
+    @State private var id = UUID()
+    func body(content: Content) -> some View {
+        content
+            .onAppear { report() }
+            .onDisappear { connections.withdrawPresence(from: id) }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in report() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in report() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { _ in report() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification)) { _ in report() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didDeminiaturizeNotification)) { _ in report() }
+    }
+    private func report() {
+        let onScreen = commands.window.map { $0.occlusionState.contains(.visible) && !$0.isMiniaturized } ?? true
+        connections.reportPresence(!onScreen ? .hidden : NSApp.isActive ? .focused : .visible, from: id)
     }
 }
