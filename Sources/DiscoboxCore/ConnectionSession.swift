@@ -136,25 +136,25 @@ import Observation
     public func connect(client: any DiscoboxClient, label: String, demo: Bool = false) async {
         resetConnection()
         connectionState.begin(client: client, label: label, demo: demo)
-        let current = connectionState.revision
-        defer { if current == connectionState.revision, Task.isCancelled { disconnect() } }
+        let current = connectionState.connectionID
+        defer { if current == connectionState.connectionID, Task.isCancelled { disconnect() } }
         do {
             let project = try await connectionState.resolveProject()
             connectionState.accept(project)
             catalog.acceptProject(project)
             prefetchCatalog(current)
             await refresh()
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             connectionState.finishInitialConnection()
         } catch {
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             connectionState.failed(error, now: now())
             connectionState.finishInitialConnection()
         }
     }
     private func prefetchCatalog(_ revision: UUID) {
         Task { [weak self] in
-            guard let self, self.connectionState.revision == revision else { return }
+            guard let self, self.connectionState.connectionID == revision else { return }
             _ = try? await self.catalog.harnesses()
         }
     }
@@ -164,17 +164,17 @@ import Observation
         if connectionState.connectionError != nil && !connectionState.recoveryInFlight && !connectionState.isConnecting {
             await retryConnection(); return
         }
-        let current = connectionState.revision
+        let current = connectionState.connectionID
         do {
-            guard let request = try await inventory.refresh(using: connectionState, now: now), current == connectionState.revision else { return }
+            guard let request = try await inventory.refresh(using: connectionState, now: now), current == connectionState.connectionID else { return }
             connectionState.didRefresh()
             advanceActivityClock()
             selection.reconcileInventory()
             await selection.refreshDetails()
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             inventory.complete(request, at: now())
         } catch {
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             connectionState.failed(error, now: now())
         }
     }
@@ -196,7 +196,7 @@ import Observation
         defer { connectionState.finishRecovery(current, now: now()) }
         do {
             let project = try await connectionState.resolveProject()
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             if let projectID = connectionState.projectID, projectID != project.id {
                 let label = connectionState.endpointLabel, demo = connectionState.isDemo
                 guard let client = connectionState.detachClient() else { return }
@@ -206,10 +206,10 @@ import Observation
             connectionState.accept(project)
             catalog.acceptProject(project)
             await refresh()
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             if connectionState.recovered(wasConnected: wasConnected) { prefetchCatalog(current) }
         } catch {
-            guard current == connectionState.revision, !Task.isCancelled else { return }
+            guard connectionState.isCurrent(current) else { return }
             connectionState.failed(error, now: now())
         }
     }

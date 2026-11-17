@@ -5,22 +5,21 @@ import Observation
 public final class ApprovalStore {
     public private(set) var approvals: [ApprovalItem] = []
     public private(set) var approvalError: String?
-    @ObservationIgnored private var approvalRequest = UUID()
-    func reset() { approvalRequest = UUID(); approvals = []; approvalError = nil }
+    @ObservationIgnored private var approvalRequest = LatestRequest()
+    func reset() { approvalRequest.invalidate(); approvals = []; approvalError = nil }
     let connectionState: ConnectionStore
     init(connection: ConnectionStore) { self.connectionState = connection }
     public func refreshApprovals() async {
         guard let client = connectionState.client, let projectID = connectionState.projectID else { return }
-        let connection = connectionState.connectionID, request = UUID()
-        approvalRequest = request
+        let connection = connectionState.connectionID, request = approvalRequest.begin()
         do {
             let result = try await client.decode(.init(.approvals, projectID: projectID), as: ApprovalInbox.self)
-            guard connectionState.connectionID == connection, approvalRequest == request, !Task.isCancelled else { return }
+            guard connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
             let pending = result.approvalRequests.filter { $0.request["status"].string == "pending" }
             if approvals != pending { approvals = pending }
             approvalError = nil
         } catch {
-            guard connectionState.connectionID == connection, approvalRequest == request, !Task.isCancelled else { return }
+            guard connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
             approvalError = error.localizedDescription
         }
     }
@@ -63,7 +62,7 @@ public final class ApprovalStore {
         let connection = connectionState.connectionID
         let result = try await ScopedAPI(connection: connectionState).json(.answer, box: item.boxID, request: item.id, kind: item.kind, action: action, payload: payload)
         guard connection == connectionState.connectionID else { throw CancellationError() }
-        approvalRequest = UUID()
+        approvalRequest.invalidate()
         approvals.removeAll { $0.id == item.id }
         onAccepted(result)
         await refreshApprovals()
