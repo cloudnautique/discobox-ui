@@ -486,6 +486,10 @@ No backend files or endpoints are changed. The unavoidable check/attach race is
 the same as terminal attach; backend validation remains authoritative.
 
 The companion streams bounded JSON snapshots to a retained Swift process session.
+`CompanionChild` (Core) owns each long-lived `--forward`/`--desktop` child: its
+arguments, an unwritten stdin kept open as the parent-death signal, a bounded
+line reader on a dedicated thread, and an idempotent SIGTERM-then-SIGKILL close
+that also runs on deinit.
 HTTP/HTTPS links use the reported local binding, never the sandbox's port number
 by assumption. Ghostty's open-URL callback resolves loopback/wildcard HTTP(S) links
 against the originating terminal's box, preserving the path, query, and fragment.

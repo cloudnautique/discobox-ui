@@ -35,14 +35,14 @@ import DiscoboxCore
     private var copyRequested = false
     private let pasteboard: NSPasteboard
     private var origin: URL?
-    private let process = Process()
-    private let input = Pipe()
-    private let output = Pipe()
-    private var buffer = Data()
+    /// The loopback proxy; its stdin EOF also stops it if the app exits.
+    private let proxy: CompanionChild<[String: String]>
+    private var proxyEvents: Task<Void, Never>?
 
     init(source: URL, title: String, pasteboard: NSPasteboard = .general) {
         self.pasteboard = pasteboard
         self.source = source
+        proxy = CompanionChild(executable: CompanionLocation.executable, arguments: ["--desktop", "--desktop-url", source.absoluteString], maxLineBytes: 65536)
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         web = DesktopWebView(frame: .zero, configuration: config)
@@ -53,24 +53,21 @@ import DiscoboxCore
         web.session = self
         web.navigationDelegate = self
         config.userContentController.add(self, name: "discoboxDesktop")
-        process.executableURL = CompanionLocation.executable
-        process.arguments = ["--desktop", "--desktop-url", source.absoluteString]
-        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil }
-            Task { @MainActor [weak self] in self?.receive(data) }
-        }
-        do { try process.run() } catch { self.error = error.localizedDescription }
+        do {
+            try proxy.start()
+            let events = proxy.events
+            proxyEvents = Task { @MainActor [weak self] in
+                for await event in events { self?.receive(event) }
+            }
+        } catch { self.error = error.localizedDescription }
     }
-    private func receive(_ data: Data) {
+    private func receive(_ event: CompanionChild<[String: String]>.Event) {
         guard !closed else { return }
-        guard !data.isEmpty else { ready = false; if error == nil { error = "Desktop connection ended. Close and reopen this window to reconnect." }; return }
-        buffer.append(data)
-        guard buffer.count < 65536 else { error = "Invalid desktop launcher response."; return }
-        while let end = buffer.firstIndex(of: 10) {
-            let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
-            guard let response = try? JSONDecoder().decode([String: String].self, from: line) else { continue }
+        switch event {
+        case .invalidLine: break
+        case .ended(.lineTooLong): ready = false; error = "Invalid desktop launcher response."
+        case .ended(.exited): ready = false; if error == nil { error = "Desktop connection ended. Close and reopen this window to reconnect." }
+        case .message(let response):
             if let failure = response["error"] { error = failure }
             if let raw = response["url"], let url = URL(string: raw), url.scheme == "http", url.host == "127.0.0.1", url.port != nil {
                 origin = url
@@ -132,10 +129,8 @@ import DiscoboxCore
         web.stopLoading(); web.loadHTMLString("", baseURL: nil)
         web.configuration.userContentController.removeScriptMessageHandler(forName: "discoboxDesktop")
         web.navigationDelegate = nil
-        output.fileHandleForReading.readabilityHandler = nil
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-        try? output.fileHandleForReading.close(); try? output.fileHandleForWriting.close()
+        proxyEvents?.cancel(); proxyEvents = nil
+        proxy.close()
     }
 }
 

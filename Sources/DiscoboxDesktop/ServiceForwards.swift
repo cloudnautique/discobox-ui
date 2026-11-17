@@ -63,54 +63,43 @@ import DiscoboxCore
     private(set) var ports: [ServicePort] = []
     private(set) var error: String?
     private(set) var loading = true
-    private let process = Process()
-    private let input = Pipe()
-    private let output = Pipe()
-    private var pending = Data()
+    /// The `--forward` child; its stdin EOF also cancels listeners if the app exits.
+    @ObservationIgnored private var forwarder: CompanionChild<ServiceForwardSnapshot>?
+    @ObservationIgnored private var reports: Task<Void, Never>?
     private var closed = false
 
     init(endpoint: String, project: String, box: String, demo: Bool) {
         if demo {
-            receive(Data(#"{"ports":[{"port":6900,"local":6901,"protocol":"http","serviceId":"ai.discobox.desktop","serviceName":"Desktop"},{"port":5173,"local":5173,"protocol":"http","serviceId":"web","serviceName":"Development server"},{"port":5432,"local":5433,"protocol":"tcp","serviceId":"","serviceName":""}]}"#.utf8) + Data([10]))
+            let fixture = #"{"ports":[{"port":6900,"local":6901,"protocol":"http","serviceId":"ai.discobox.desktop","serviceName":"Desktop"},{"port":5173,"local":5173,"protocol":"http","serviceId":"web","serviceName":"Development server"},{"port":5432,"local":5433,"protocol":"tcp","serviceId":"","serviceName":""}]}"#
+            do { let snapshot = try JSONDecoder().decode(ServiceForwardSnapshot.self, from: Data(fixture.utf8)); receive(.message(snapshot)) }
+            catch { receive(.invalidLine(error.localizedDescription)) }
             return
         }
-        process.executableURL = CompanionLocation.executable
-        process.arguments = ["--forward", "--endpoint", endpoint, "--project", project, "--box", box]
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil }
-            Task { @MainActor [weak self] in
-                guard let self, !self.closed else { return }
-                if data.isEmpty {
-                    self.loading = false; self.ports = []
-                    if self.error == nil { self.error = "Port forwarding ended. Reconnect ports to try again." }
-                } else { self.receive(data) }
+        let forwarder = CompanionChild<ServiceForwardSnapshot>(executable: CompanionLocation.executable,
+            arguments: ["--forward", "--endpoint", endpoint, "--project", project, "--box", box], maxLineBytes: 1024 * 1024)
+        self.forwarder = forwarder
+        do {
+            try forwarder.start()
+            let events = forwarder.events
+            reports = Task { @MainActor [weak self] in
+                for await event in events { self?.receive(event) }
             }
-        }
-        do { try process.run() }
-        catch { self.error = error.localizedDescription; loading = false; close() }
+        } catch { self.error = error.localizedDescription; loading = false; close() }
     }
-    private func receive(_ data: Data) {
-        pending.append(data)
-        guard pending.count <= 1024 * 1024 else { error = "Port report exceeded its size limit."; close(); return }
-        while let end = pending.firstIndex(of: 10) {
-            let line = Data(pending[..<end]); pending.removeSubrange(...end)
-            do {
-                let snapshot = try JSONDecoder().decode(ServiceForwardSnapshot.self, from: line)
-                ports = snapshot.ports; error = snapshot.error; loading = false
-            } catch { self.error = "Invalid port report: \(error.localizedDescription)"; loading = false }
+    private func receive(_ event: CompanionChild<ServiceForwardSnapshot>.Event) {
+        guard !closed else { return }
+        switch event {
+        case .message(let snapshot): ports = snapshot.ports; error = snapshot.error; loading = false
+        case .invalidLine(let reason): error = "Invalid port report: \(reason)"; loading = false
+        case .ended(.lineTooLong): error = "Port report exceeded its size limit."; close()
+        case .ended(.exited):
+            loading = false; ports = []
+            if error == nil { error = "Port forwarding ended. Reconnect ports to try again." }
         }
     }
     func close() {
         closed = true; loading = false; ports = []
-        output.fileHandleForReading.readabilityHandler = nil
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-        try? output.fileHandleForReading.close()
-        try? output.fileHandleForWriting.close()
-        try? input.fileHandleForReading.close()
+        reports?.cancel(); reports = nil
+        forwarder?.close()
     }
 }
