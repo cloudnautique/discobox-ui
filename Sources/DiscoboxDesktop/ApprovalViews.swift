@@ -7,6 +7,21 @@ struct ApprovalInboxView: View {
     var body: some View { ApprovalQueueContent(workspace: workspace, boxID: boxID) }
 }
 
+/// The window's single approval inbox sheet. Rows and buttons request it
+/// through `ApprovalInboxPresentation`; it always shows the requesting
+/// computer's session, whichever computer is active.
+struct ApprovalInboxHost: ViewModifier {
+    @Bindable var presentation: ApprovalInboxPresentation
+    let connections: Connections?
+    func body(content: Content) -> some View {
+        content
+            .environment(presentation)
+            .sheet(item: $presentation.request) { target in
+                ApprovalInboxView(boxID: target.boxID).environment(target.host).environment(connections).id(target.id)
+            }
+    }
+}
+
 private struct ApprovalQueueContent: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss

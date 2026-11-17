@@ -83,3 +83,24 @@ private actor PresentedActionClient: DiscoboxClient {
     #expect(presentation.request == nil)
     #expect(await client.mutations == ["demo-api"])
 }
+
+@MainActor @Test func approvalInboxPresentationKeepsItsHostAndBoxAcrossComputerChanges() async throws {
+    let connections = Connections(polling: false)
+    let local = try await connections.connect(.thisComputer, demo: true) { PresentedActionClient() }
+    let remote = try await connections.connect(.init(name: "Remote", endpoint: "https://remote.example.invalid"), demo: true) { PresentedActionClient() }
+    defer { connections.disconnectAll() }
+    let inbox = ApprovalInboxPresentation()
+    inbox.present(on: local, box: "demo-api")
+    let request = try #require(inbox.request)
+    connections.activate(remote.id)
+    inbox.present(on: remote)
+    #expect(inbox.request?.id == request.id)
+    #expect(request.host === local && request.boxID == "demo-api" && request.connection == local.connectionState.connectionID)
+
+    inbox.request = nil
+    remote.disconnect()
+    inbox.present(on: remote)
+    #expect(inbox.request == nil)
+    inbox.present(on: local)
+    #expect(inbox.request?.host === local && inbox.request?.boxID == nil)
+}

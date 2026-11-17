@@ -6,11 +6,11 @@ struct WorkspaceView: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(BoxActionPresentation.self) private var boxActions: BoxActionPresentation
+    @Environment(ApprovalInboxPresentation.self) private var inbox: ApprovalInboxPresentation
     @State private var refreshingBoxes = false
     @State private var contentWidth: CGFloat = 0
     @State private var sidebarWidth: CGFloat = 282
     @State private var responsiveRail = false
-    @State private var showInbox = false
     @AppStorage("boxGrouping") private var grouping = "repository"
     @AppStorage("boxGroupingTagKey") private var groupingTagKey = ""
     @AppStorage("inspectorCompactRail") private var compactRail = true
@@ -120,7 +120,7 @@ struct WorkspaceView: View {
                 // is drawing its prompt. Keep hints and approvals in one row.
                 HStack(spacing: 12) {
                     if !workspace.approvalStore.approvals.isEmpty {
-                        Button { showInbox = true } label: { Label("\(workspace.approvalStore.approvals.count) waiting", systemImage: "exclamationmark.circle.fill") }.foregroundStyle(.red).buttonStyle(.borderless)
+                        Button { inbox.present(on: workspace) } label: { Label("\(workspace.approvalStore.approvals.count) waiting", systemImage: "exclamationmark.circle.fill") }.foregroundStyle(.red).buttonStyle(.borderless)
                     }
                     if workspace.approvalStore.approvalError != nil { Text("Approval inbox unavailable").font(.caption).foregroundStyle(.orange) }
                     if let hint = commands.hint {
@@ -178,9 +178,8 @@ struct WorkspaceView: View {
         .background {
             // These dialogs belong to one computer. Only their presentation
             // anchor resets on a host change, not the shared sidebar.
-            WorkspaceHostDialogs(showInbox: $showInbox).id(workspace.connectionState.connectionID)
+            WorkspaceHostDialogs().id(workspace.connectionState.connectionID)
         }
-        .onChange(of: connections.activeID) { showInbox = false }
         .background { WorkspaceDialogs() }
         .sheet(isPresented: $showTagFilters) {
             TagFilterSheet(choices: tagChoices, selected: tagBinding, matchAny: matchAnyBinding)
@@ -290,13 +289,10 @@ struct WorkspaceView: View {
 private struct WorkspaceHostDialogs: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
-    @Binding var showInbox: Bool
     var body: some View {
         @Bindable var commands = commands
         Color.clear.frame(width: 0, height: 0)
-            .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
             .sheet(isPresented: $commands.showTools) { ToolsSheet(box: workspace.selection.sandboxID).environment(workspace) }
-            .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
     }
 }
 
@@ -579,7 +575,7 @@ struct BoxRow: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
-    @State private var showInbox = false
+    @Environment(ApprovalInboxPresentation.self) private var inbox: ApprovalInboxPresentation?
     var body: some View {
         let state = presentation ?? workspace.rowPresentation(for: box)
         let activity = state.activity, power = state.power
@@ -592,7 +588,7 @@ struct BoxRow: View {
                     Text(state.title).font(.callout.weight(.medium)).lineLimit(2)
                     Spacer(minLength: 0)
                     if activity.approvalCount > 0 {
-                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
+                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { inbox?.present(on: workspace, box: box.id) }
                             .buttonStyle(.borderless).font(.caption2.weight(.medium)).foregroundStyle(tint)
                             .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.review." + box.id)
@@ -620,7 +616,6 @@ struct BoxRow: View {
         }.padding(.vertical, 8)
         .accessibilityValue([power.label, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
         .help([box.displayName, "Box: " + power.label, power.message, "Agent: " + activity.label, activity.message, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
-        .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
     }
     private func openAgent() {
         let generation = workspace.connectionState.connectionID

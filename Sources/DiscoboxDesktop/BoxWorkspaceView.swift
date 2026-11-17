@@ -8,7 +8,7 @@ struct BoxWorkspaceView: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(TerminalStore.self) private var terminals
-    @State private var showInbox = false
+    @Environment(ApprovalInboxPresentation.self) private var inbox
     @State private var closing: TerminalCloseRequest?
     @State private var renaming: PaneRenameRequest?
     @State private var creationAction: BoxActionRequest?
@@ -65,7 +65,6 @@ struct BoxWorkspaceView: View {
         .onChange(of: commands.agentFocusRequest) { focusActiveTerminal(agent: true) }
         .onChange(of: commands.showFiles) { _, show in if show { layout.open("files") } }
         .onChange(of: commands.showAudit) { _, show in if show { layout.open("audit") } }
-        .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
         .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
         .sheet(item: $renaming) { request in PaneRenameSheet(name: request.name) { layout.rename(request.id, to: $0) } }
         .sheet(item: $creationAction) { BoxActionSheet(request: $0).environment(workspace).id($0.id) }
@@ -77,7 +76,7 @@ struct BoxWorkspaceView: View {
                 Label("Agent", systemImage: "sparkles").fontWeight(.semibold)
                 Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 if workspace.approvalStore.approvals.contains(where: { $0.boxID == box.id }) {
-                    Button { showInbox = true } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
+                    Button { inbox.present(on: workspace, box: box.id) } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
                 Spacer()

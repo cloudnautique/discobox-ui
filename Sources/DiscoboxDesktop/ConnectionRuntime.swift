@@ -78,6 +78,7 @@ struct ConnectedWorkspace: View {
     let commands: WorkspaceCommands
     @State private var notifications = ApprovalNotifications.shared
     @State private var boxActions = BoxActionPresentation()
+    @State private var inbox = ApprovalInboxPresentation()
     private var workspace: ConnectionSession { connections.active }
     var body: some View {
         let runtime = runtimes.runtime(connections.activeID)
@@ -107,6 +108,13 @@ struct ConnectedWorkspace: View {
             .onChange(of: workspace.selection.sandboxID) { commands.restoreAgentLayout(); commands.cancelPrefix(); commands.tab = .terminal }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in commands.cancelPrefix() }
             .modifier(PollingPresenceReporter(connections: connections, commands: commands))
+            .modifier(ApprovalInboxHost(presentation: inbox, connections: connections))
+            .onChange(of: commands.showApprovals, initial: true) {
+                // The command opens the active computer's inbox in the one owner.
+                guard commands.showApprovals else { return }
+                commands.showApprovals = false
+                inbox.present(on: workspace)
+            }
             .sheet(item: $boxActions.request) { target in
                 let runtime = runtimes.runtime(target.host.id)
                 BoxActionSheet(request: .init(box: target.box, action: target.action, connection: target.connection))

@@ -47,13 +47,16 @@ import DiscoboxCore
         // host's two requests without answering either of them.
         guard let box = host.inventory.sandboxes.first(where: { $0.id == "approval" }) else { throw DiscoboxError("Approval fixture missing") }
         let review = NSWindow(contentRect: .init(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
-        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host))
+        // The window's single inbox owner presents the row's request.
+        let inbox = ApprovalInboxPresentation()
+        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host)
+            .modifier(ApprovalInboxHost(presentation: inbox, connections: hub)))
         review.makeKeyAndOrderFront(nil)
         defer { review.orderOut(nil) }
         try await wait { buttons(review).count == 1 && buttons(review)[0].isEnabled }
         buttons(review)[0].performClick(nil)
         try await wait { review.attachedSheet?.defaultButtonCell != nil }
-        guard host.approvalStore.approvals.count == 2, await client.writes == 0 else { throw DiscoboxError("Review sent an answer or used another inbox") }
+        guard host.approvalStore.approvals.count == 2, await client.writes == 0, inbox.request?.host === host, inbox.request?.boxID == box.id else { throw DiscoboxError("Review sent an answer or used another inbox") }
         if let sheet = review.attachedSheet { review.endSheet(sheet) }
         // Open on a row from another computer must activate that computer and
         // its agent without changing the computer filter or the original box.
