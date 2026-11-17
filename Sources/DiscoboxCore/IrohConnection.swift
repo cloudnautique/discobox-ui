@@ -25,7 +25,7 @@ public actor IrohConnection {
         if startup == nil {
             let process = makeProcess()
             guard slot.install(process) else { throw CancellationError() }
-            startup = (UUID(), Task.detached { try process.start() })
+            startup = (UUID(), Task.detached { try await BlockingThread.run(name: "Discobox Iroh startup") { try process.start() } })
         }
         let attempt = startup!
         do {
@@ -51,7 +51,7 @@ public actor IrohConnection {
         let process = IrohProcess(executable: executable, arguments: ["--iroh-identity"], seed: seed, relayURLs: [], directOnly: false)
         defer { process.close() }
         return try await withTaskCancellationHandler {
-            let ready = try await Task.detached { try process.start() }.value
+            let ready = try await BlockingThread.run(name: "Discobox Iroh identity") { try process.start() }
             guard let id = ready.peerID, id.hasPrefix("d1-") else { throw DiscoboxError("The companion returned an invalid peer ID.") }
             return id
         } onCancel: { process.close() }

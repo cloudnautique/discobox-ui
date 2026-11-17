@@ -51,6 +51,32 @@ import Testing
     #expect(ContinuousClock.now - start < .seconds(3))
 }
 
+@Test func inFlightRequestsDoNotOccupyCooperativeThreads() async throws {
+    // Twice as many one-second helpers as the cooperative pool has threads.
+    // Requests that blocked pool threads would complete in successive waves,
+    // and the probe would wait behind them; concurrently they take ~1 second.
+    let body = Data(#"{"id":"p","name":"Default"}"#.utf8).base64EncodedString()
+    let fixture = try FixtureExecutable(script: """
+    #!/bin/sh
+    /bin/cat >/dev/null
+    /bin/sleep 1
+    printf '%s' '{"version":1,"status":200,"body":"\(body)"}'
+    """)
+    defer { fixture.remove() }
+    let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
+    let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
+    let started = ContinuousClock.now
+    try await withThrowingTaskGroup(of: Project.self) { group in
+        for _ in 0..<count { group.addTask { try await client.decode(.init(.defaultProject), as: Project.self) } }
+        try await Task.sleep(for: .milliseconds(200))
+        let probe = ContinuousClock.now
+        _ = await Task.detached { 1 }.value
+        #expect(ContinuousClock.now - probe < .milliseconds(500))
+        for try await project in group { #expect(project.id == "p") }
+    }
+    #expect(ContinuousClock.now - started < .seconds(2.5))
+}
+
 private struct FixtureExecutable {
     let directory: URL
     let url: URL
