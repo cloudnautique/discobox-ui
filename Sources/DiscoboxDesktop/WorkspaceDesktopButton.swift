@@ -26,10 +26,7 @@ struct WorkspaceDesktopButton: View {
         opening = true
         task = Task {
             defer { opening = false }
-            for _ in 0..<100 {
-                guard session.loading else { break }
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-            }
+            _ = await session.discovered(timeout: .seconds(10))
             guard !Task.isCancelled, workspace.connectionState.connectionID == generation, workspace.selection.sandboxID == box.id else { return }
             guard let port = session.ports.first(where: \.isDesktop), let url = port.browserURL else {
                 workspace.selection.commandError = session.error ?? "No Desktop service is available for this box. Open Services to check its available ports."

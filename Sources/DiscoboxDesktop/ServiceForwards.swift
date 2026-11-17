@@ -33,10 +33,7 @@ import DiscoboxCore
               !workspace.pending.pendingBoxActions.contains(identity.box) else { return }
         let forward = session(box: identity.box, workspace: workspace)
         openingLink = Task { @MainActor [weak workspace, weak window] in
-            for _ in 0..<100 {
-                guard forward.loading else { break }
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-            }
+            _ = await forward.discovered(timeout: .seconds(10))
             guard !Task.isCancelled, let workspace, workspace.connectionState.connectionID == identity.connection else { return }
             if let local = ForwardedServiceURL.resolve(url, ports: forward.ports) {
                 NSWorkspace.shared.open(local)
@@ -85,6 +82,10 @@ import DiscoboxCore
                 for await event in events { self?.receive(event) }
             }
         } catch { self.error = error.localizedDescription; loading = false; close() }
+    }
+    /// Waits for the first port report (or failure) without polling.
+    func discovered(timeout: Duration) async -> Bool {
+        await ObservedCondition.wait(timeout: timeout) { [weak self] in self?.loading != true }
     }
     private func receive(_ event: CompanionChild<ServiceForwardSnapshot>.Event) {
         guard !closed else { return }

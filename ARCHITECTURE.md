@@ -493,7 +493,8 @@ that also runs on deinit.
 HTTP/HTTPS links use the reported local binding, never the sandbox's port number
 by assumption. Ghostty's open-URL callback resolves loopback/wildcard HTTP(S) links
 against the originating terminal's box, preserving the path, query, and fragment.
-It waits for that box's forward discovery when necessary; an unavailable mapping
+It awaits that box's first forward report when necessary (observed, not polled,
+for up to 10 seconds, as Open Desktop does); an unavailable mapping
 produces a notice instead of opening an unrelated localhost service. Public URLs
 are unchanged. The inspector labels box and Mac ports explicitly; compact rail
 labels show the usable Mac port. A parent's stdin EOF or termination cancels all listeners. Swift
