@@ -27,9 +27,9 @@ public struct BoxCreation: Identifiable, Sendable {
 public extension Connections {
     var creationPins: [BoxCreation] {
         creations.compactMap { creation in
-            guard let host = session(creation.id.connection), host.workspace.isConnected,
-                  host.workspace.connectionID == creation.connection else { return nil }
-            let box = host.workspace.sandboxes.first { $0.id == creation.id.box } ?? creation.item.box
+            guard let host = session(creation.id.connection), host.connectionState.isConnected,
+                  host.connectionState.connectionID == creation.connection else { return nil }
+            let box = host.inventory.sandboxes.first { $0.id == creation.id.box } ?? creation.item.box
             guard !box.isArchived else { return nil }
             return BoxCreation(connection: creation.connection,
                                item: .init(location: creation.id, computer: host.profile.displayName, box: box, needsAttention: box.matchesAttention))
@@ -41,9 +41,9 @@ public extension Connections {
         guard !creations.isEmpty else { return }
         let visible = Set(browserBoxes.map(\.location))
         creations = creationPins.filter { creation in
-            guard let host = session(creation.id.connection), host.workspace.sandboxes.contains(where: { $0.id == creation.id.box }) else { return false }
+            guard let host = session(creation.id.connection), host.inventory.sandboxes.contains(where: { $0.id == creation.id.box }) else { return false }
             if creation.phase == .ready && visible.contains(creation.id) {
-                if activeID == host.id && host.workspace.sandboxID == creation.id.box { browser.requestReveal(creation.id) }
+                if activeID == host.id && host.selection.sandboxID == creation.id.box { browser.requestReveal(creation.id) }
                 return false
             }
             return true
@@ -63,10 +63,10 @@ public extension Connections {
             }
             if !creation.item.matches(browser.searchText) { browser.searchText = "" }
             if !BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) { browser.selectedTags.removeAll() }
-            if browser.activityFilter?.matches(host.workspace.activity(for: box), box: box) == false { browser.activityFilter = nil }
+            if browser.activityFilter?.matches(host.activity(for: box), box: box) == false { browser.activityFilter = nil }
         }
         await selectBox(location)
-        guard host.workspace.connectionID == creation.connection else { return }
+        guard host.connectionState.connectionID == creation.connection else { return }
         browser.requestReveal(location)
         reconcileCreations()
     }

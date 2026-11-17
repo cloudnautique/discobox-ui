@@ -24,7 +24,7 @@ struct ApprovalSheet: View {
 struct ConsentApprovalView: View {
     let item: ApprovalItem
     var onClose: (() -> Void)? = nil
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
     @State private var connection: UUID?
@@ -35,7 +35,7 @@ struct ConsentApprovalView: View {
     @State private var approved = false
     @State private var closed = false
     @State private var error: String?
-    private var resolved: Bool { connection != nil && (connection != workspace.connectionID || !workspace.approvals.contains(item)) }
+    private var resolved: Bool { connection != nil && (connection != workspace.connectionState.connectionID || !workspace.approvalStore.approvals.contains(item)) }
     private var isRefresh: Bool { item.kind == "refresh" }
     private var approveTitle: String { isRefresh ? "Update credential" : item.kind == "apiAccess" ? "Enable API access" : "Allow leadership" }
     var body: some View {
@@ -49,7 +49,7 @@ struct ConsentApprovalView: View {
             } else {
                 ApprovalReview(reviewed: $reviewed, revision: item.request.pretty) {
                     VStack(alignment: .leading, spacing: 18) {
-                        if let host = connections?.sessions.first(where: { $0.workspace === workspace }) { LabeledContent("Computer", value: host.profile.displayName) }
+                        if let host = connections?.sessions.first(where: { $0 === workspace }) { LabeledContent("Computer", value: host.profile.displayName) }
                         LabeledContent("Requesting box", value: name(item.boxID))
                         if !item.request["justification"].string.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
@@ -80,7 +80,7 @@ struct ConsentApprovalView: View {
                     Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }
             }
-        }.onAppear { connection = workspace.connectionID }
+        }.onAppear { connection = workspace.connectionState.connectionID }
             .onDisappear { closed = true; value = "" }
     }
     @ViewBuilder private var details: some View {
@@ -106,24 +106,24 @@ struct ConsentApprovalView: View {
             Text("This server uses a request type this build cannot answer. Use a compatible Discobox console to review it. The request remains pending.").foregroundStyle(.secondary)
         }
     }
-    private func name(_ id: String) -> String { workspace.sandboxes.first { $0.id == id }?.displayName ?? id }
+    private func name(_ id: String) -> String { workspace.inventory.sandboxes.first { $0.id == id }?.displayName ?? id }
     private func close() { closed = true; value = ""; if let onClose { onClose() } else { dismiss() } }
     private func submit(approve: Bool) {
-        guard !busy, !resolved, connection == workspace.connectionID else { return }
+        guard !busy, !resolved, connection == workspace.connectionState.connectionID else { return }
         busy = true; error = nil
         let payload: JSONValue = isRefresh && approve ? .object(["value": .string(value)]) : .object([:])
         Task {
             do {
-                try await workspace.validateApproval(item, connection: connection!)
-                try await workspace.answerWithReceipt(item, action: approve ? (isRefresh ? "refresh" : "approve") : "deny", payload: payload, onAccepted: { result in
+                try await workspace.approvalStore.validateApproval(item, connection: connection!)
+                try await workspace.approvalStore.answerWithReceipt(item, action: approve ? (isRefresh ? "refresh" : "approve") : "deny", payload: payload, onAccepted: { result in
                     busy = false; value = ""
                     if !closed { receipt = result; approved = approve }
                 })
             } catch {
                 busy = false
                 if !closed { self.error = error.localizedDescription }
-                else if connection == workspace.connectionID { workspace.commandError = error.localizedDescription }
-                await workspace.refreshApprovals()
+                else if connection == workspace.connectionState.connectionID { workspace.selection.commandError = error.localizedDescription }
+                await workspace.approvalStore.refreshApprovals()
             }
         }
     }

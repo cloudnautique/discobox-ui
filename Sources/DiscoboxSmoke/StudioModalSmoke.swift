@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -92,3 +94,5 @@ import DiscoboxCore
         var timer: Timer?
     }
 }
+
+#endif

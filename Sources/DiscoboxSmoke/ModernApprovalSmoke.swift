@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -7,10 +9,10 @@ import DiscoboxCore
     static func verify() async throws {
         for mode in ["use", "sharing", "both", "failure", "new", "deny"] {
             let client = RemoteApprovalFixture(mode: mode)
-            let workspace = Workspace()
+            let workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Remote fixture", demo: true)
-            await workspace.refreshApprovals()
-            guard let item = workspace.approvals.first else { throw DiscoboxError("Missing remote approval fixture") }
+            await workspace.approvalStore.refreshApprovals()
+            guard let item = workspace.approvalStore.approvals.first else { throw DiscoboxError("Missing remote approval fixture") }
             var closed = false
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = NSHostingView(rootView: ScopedCredentialApprovalView(item: item, onClose: { closed = true }).environment(workspace))
@@ -150,3 +152,5 @@ private actor RemoteApprovalFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

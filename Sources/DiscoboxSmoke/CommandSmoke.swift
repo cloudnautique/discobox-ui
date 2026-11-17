@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import GhosttyKit
 import SwiftUI
@@ -6,13 +8,13 @@ import DiscoboxCore
 /// Runs against the demo workspace only. Events enter the real AppKit event
 /// queue so this exercises the monitor before Ghostty's responder methods.
 @MainActor enum CommandSmoke {
-    static func run(workspace: Workspace, commands: WorkspaceCommands, terminals: TerminalStore, client: DemoClient) async {
+    static func run(workspace: ConnectionSession, connections: Connections, commands: WorkspaceCommands, terminals: TerminalStore, client: DemoClient) async {
         let saved = commands.bindings
         let savedShortcuts = commands.appShortcuts
         commands.appShortcuts = AppShortcuts()
         defer { commands.bindings = saved; commands.appShortcuts = savedShortcuts }
         do {
-            guard workspace.isDemo else { throw Failure("offline workspace required") }
+            guard workspace.connectionState.isDemo else { throw Failure("offline workspace required") }
             try await wait { commands.window != nil }
             let window = commands.window!
             window.setContentSize(NSSize(width: 1320, height: 850))
@@ -72,7 +74,7 @@ import DiscoboxCore
             let originalGrid = ghostty_surface_size(harness.surface!)
             for pending in [true, false, true, false] {
                 await client.setPendingRequests(pending)
-                await workspace.refreshApprovals()
+                await workspace.approvalStore.refreshApprovals()
                 commands.hint = pending ? "ctrl+a  …   Esc to cancel" : nil
                 try await Task.sleep(for: .milliseconds(150))
                 window.contentView!.layoutSubtreeIfNeeded()
@@ -87,7 +89,7 @@ import DiscoboxCore
             commands.bindings = CommandBindings(leader: "ctrl+d")
             try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             do { try await wait { commands.hint != nil } }
-            catch { throw Failure("Leader event not routed: key=\(window.isKeyWindow), active=\(NSApp.isActive), connected=\(workspace.isConnected), sheet=\(window.attachedSheet != nil), responder=\(String(describing: window.firstResponder)), bindings=\(commands.bindings.leader)") }
+            catch { throw Failure("Leader event not routed: key=\(window.isKeyWindow), active=\(NSApp.isActive), connected=\(workspace.connectionState.isConnected), sheet=\(window.attachedSheet != nil), responder=\(String(describing: window.firstResponder)), bindings=\(commands.bindings.leader)") }
             try await post(window, code: 1, text: "S", plain: "s", flags: .shift)
             try await Task.sleep(for: .milliseconds(100))
             try await post(window, code: 29, text: "0")
@@ -109,11 +111,11 @@ import DiscoboxCore
             try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
             try await post(window, code: 0, text: "a")
-            try await wait { commands.tab == .terminal && workspace.selectedExec?.primary == true && window.firstResponder is GhosttyTerminalView }
+            try await wait { commands.tab == .terminal && workspace.selection.selectedExec?.primary == true && window.firstResponder is GhosttyTerminalView }
             try await post(window, code: 2, text: "\u{4}", plain: "d", flags: .control)
             try await wait { commands.hint != nil }
             try await post(window, code: 1, text: "s")
-            try await wait { workspace.execID == "shell-1" && !workspace.isOpeningShell }
+            try await wait { workspace.selection.execID == "shell-1" && !workspace.selection.isOpeningShell }
             try await wait { terminalViews(window.contentView!).count == 2 }
             let splitViews = terminalViews(window.contentView!)
             guard splitViews.allSatisfy({ $0.bounds.width > 150 && $0.bounds.height > 200 }) else { throw Failure("split terminal has collapsed bounds") }
@@ -134,10 +136,13 @@ import DiscoboxCore
             print("COMMAND: split"); fflush(stdout)
             window.setContentSize(NSSize(width: 1680, height: 850))
             try await Task.sleep(for: .milliseconds(250))
+            commands.showInspector = true
+            // Let the native inspector finish its asynchronous presentation
+            // before issuing the separate maximize command.
+            try await Task.sleep(for: .milliseconds(450))
             let beforeMaximize = commands.currentLayout!.selected
             let beforeFocus = commands.currentLayout!.agentFocused
             let beforeSidebar = commands.focusMode
-            commands.showInspector = true
             commands.perform(.focus)
             try await wait {
                 guard commands.isAgentMaximized, let view = terminalViews(window.contentView!).first,
@@ -148,24 +153,24 @@ import DiscoboxCore
             guard commands.focusMode == beforeSidebar && !commands.showInspector,
                   commands.currentLayout?.selected == "agent",
                   terminalViews(window.contentView!).first === splitViews[0] else {
-                throw Failure("maximization did not isolate the existing agent")
+                throw Failure("maximization did not isolate the existing agent: sidebar=\(commands.focusMode) expected=\(beforeSidebar), inspector=\(commands.showInspector), selected=\(commands.currentLayout?.selected ?? "nil"), originalAgent=\(terminalViews(window.contentView!).first === splitViews[0]), originalShell=\(terminalViews(window.contentView!).first === splitViews[1])")
             }
             commands.perform(.focus)
             try await wait { !commands.isAgentMaximized && terminalViews(window.contentView!).count == 2 }
             guard commands.focusMode == beforeSidebar && commands.showInspector,
                   commands.currentLayout?.selected == beforeMaximize,
                   commands.currentLayout?.agentFocused == beforeFocus else {
-                throw Failure("maximization did not restore the previous layout")
+                throw Failure("maximization did not restore the previous layout: sidebar=\(commands.focusMode) expected=\(beforeSidebar), inspector=\(commands.showInspector), selection=\(commands.currentLayout?.selected ?? "nil") expected=\(beforeMaximize), focused=\(String(describing: commands.currentLayout?.agentFocused)) expected=\(beforeFocus)")
             }
             commands.showInspector = false
             print("COMMAND: maximize and restore agent preserve layout and terminal identity"); fflush(stdout)
 
-            let originalBox = workspace.sandboxID
+            let originalBox = workspace.selection.sandboxID
             for _ in 0..<3 {
                 commands.perform(.nextBox)
-                try await wait { workspace.sandboxID != originalBox }
+                try await wait { workspace.selection.sandboxID != originalBox }
                 commands.perform(.previousBox)
-                do { try await wait { workspace.sandboxID == originalBox && terminalViews(window.contentView!).count == 2 } }
+                do { try await wait { workspace.selection.sandboxID == originalBox && terminalViews(window.contentView!).count == 2 } }
                 catch { throw Failure("box restore: selected=\(commands.currentLayout?.selected ?? "nil") terminals=\(terminalViews(window.contentView!).count)") }
                 try await wait {
                     terminalViews(window.contentView!).allSatisfy { view in
@@ -250,7 +255,7 @@ import DiscoboxCore
                 capture(window, path: directory + "/split-audit.png")
             }
             print("COMMAND: tab navigation, retained agent, shell hide/restore and focus OK"); fflush(stdout)
-            let snapshot = try await workspace.auditSnapshot(box: workspace.sandboxID!)
+            let snapshot = try await workspace.audit.snapshot(box: workspace.selection.sandboxID!)
             guard snapshot.records.count == 2 else { throw Failure("audit fixture missing") }
             try await post(window, code: 4, text: "h", flags: .command)
             try await wait { commands.showCommands }
@@ -264,9 +269,9 @@ import DiscoboxCore
             try await wait { commands.choosingBox && window.attachedSheet != nil }
             let chooser = window.attachedSheet!
             try await wait { chooser.firstResponder is NSTextView }
-            let candidates = workspace.switcherBoxes
+            let candidates = connections.switcherBoxes.map(\.box)
             guard candidates.map(\.id) == ["demo-tests", "demo-ui", "demo-api"] else { throw Failure("switcher state priority incorrect") }
-            workspace.filter = .running
+            connections.browser.filter = .running
             try await post(chooser, code: 125, text: "\u{f701}")
             try await post(chooser, code: 125, text: "\u{f701}")
             try await post(chooser, code: 36, text: "\r")
@@ -279,25 +284,25 @@ import DiscoboxCore
                 descendants(window.contentView!).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "boxStart.selected" }
             }
             try await wait { chooser.defaultButtonCell != nil && savedButton() != nil }
-            guard workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw Failure("Prompt started the stopped box without confirmation") }
+            guard workspace.inventory.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw Failure("Prompt started the stopped box without confirmation") }
             try await post(chooser, code: 53, text: "\u{1b}")
             try await wait { chooser.firstResponder is NSTextView }
             try await post(chooser, code: 36, text: "\r")
             try await wait { chooser.defaultButtonCell != nil && savedButton() != nil }
             savedButton()!.performClick(nil)
-            try await wait { window.attachedSheet == nil && workspace.sandboxID == candidates[2].id }
+            try await wait { window.attachedSheet == nil && workspace.selection.sandboxID == candidates[2].id }
             try await wait { startButton() != nil }
-            guard workspace.filter == .running, !workspace.visibleBoxes.contains(where: { $0.id == "demo-api" }) else { throw Failure("Viewing saved output changed the Running filter") }
+            guard connections.browser.filter == .running, !connections.browserBoxes.map(\.box).contains(where: { $0.id == "demo-api" }) else { throw Failure("Viewing saved output changed the Running filter") }
             startButton()!.performClick(nil)
-            try await wait { workspace.selectedBox?.isRunning == true && workspace.hasLiveTerminal }
-            guard workspace.filter == .running else { throw Failure("Starting the selected box changed the filter") }
+            try await wait { workspace.selection.selectedBox?.isRunning == true && workspace.selection.hasLiveTerminal }
+            guard connections.browser.filter == .running else { throw Failure("Starting the selected box changed the filter") }
             try await post(window, code: 40, text: "k", flags: .command)
             try await wait { window.attachedSheet?.firstResponder is NSTextView }
             let searchSheet = window.attachedSheet!
             (searchSheet.firstResponder as! NSTextView).insertText("claude discobox-ui", replacementRange: NSRange(location: NSNotFound, length: 0))
             try await Task.sleep(for: .milliseconds(150))
             try await post(searchSheet, code: 36, text: "\r")
-            try await wait { window.attachedSheet == nil && workspace.sandboxID == "demo-ui" }
+            try await wait { window.attachedSheet == nil && workspace.selection.sandboxID == "demo-ui" }
             print("COMMAND: box chooser arrows, Return, stopped-box prompt, saved-only viewing, Start bar under Running filter, harness/repository search OK"); fflush(stdout)
             commands.appShortcuts[.newBox] = "cmd+option+n"
             try await post(window, code: 45, text: "n", flags: [.command, .option])
@@ -325,21 +330,23 @@ import DiscoboxCore
             commands.showFiles = false
             print("COMMAND: files"); fflush(stdout)
             await client.setPendingRequests(true)
-            await workspace.refreshApprovals()
-            guard workspace.approvals.count == 1 else { throw Failure("demo approval missing") }
+            await workspace.approvalStore.refreshApprovals()
+            guard workspace.approvalStore.approvals.count == 1 else { throw Failure("demo approval missing") }
             commands.showApprovals = true
             try await wait { window.attachedSheet != nil }
             let approvalWindow = window.attachedSheet!
             try await Task.sleep(for: .milliseconds(400))
             if let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"] { capture(approvalWindow, path: directory + "/approval.png") }
             approvalWindow.makeFirstResponder(nil)
-            try await post(approvalWindow, code: 36, text: "\r")
-            try await wait { workspace.approvals.isEmpty && window.attachedSheet == nil }
-            guard await client.lastApprovalAction == "deny" else { throw Failure("approval form default was not Deny") }
-            print("COMMAND: single request opens directly; Return denies without review step"); fflush(stdout)
+            try await post(approvalWindow, code: 53, text: "\u{1b}")
+            try await wait { window.attachedSheet == nil }
+            guard workspace.approvalStore.approvals.count == 1, await client.lastApprovalAction == nil else {
+                throw Failure("Closing the approval inbox answered a pending request")
+            }
+            print("COMMAND: approval inbox opens and Escape closes without answering"); fflush(stdout)
             window.makeKeyAndOrderFront(nil)
             await client.setAdditionalShells(1)
-            await workspace.refreshDetails()
+            await workspace.selection.refreshDetails()
             try await wait { commands.currentLayout?.terminalIDs.contains("exec:shell-extra-1") == true }
             let layout = commands.currentLayout!
             layout.open("exec:shell-1"); layout.split(with: "exec:shell-extra-1")
@@ -374,11 +381,11 @@ import DiscoboxCore
             try await wait { terminalViews(window.contentView!).count == 3 }
             layout.mergeShells()
             try await wait { terminalViews(window.contentView!).count == 2 }
-            try await workspace.closeShell("shell-extra-1")
+            try await workspace.selection.closeShell("shell-extra-1")
             try await wait { layout.selected == "exec:shell-1" }
             print("COMMAND: two-shell split/merge, hide/restore, names, retained agent and closed-session fallback OK"); fflush(stdout)
-            try await workspace.closeShell("shell-1")
-            guard !workspace.execs.contains(where: { $0.id == "shell-1" }) else { throw Failure("closed shell remains") }
+            try await workspace.selection.closeShell("shell-1")
+            guard !workspace.selection.execs.contains(where: { $0.id == "shell-1" }) else { throw Failure("closed shell remains") }
             commands.tab = .terminal
             commands.bindings = saved
             if let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"] {
@@ -396,7 +403,8 @@ import DiscoboxCore
             print("COMMAND_SMOKE_OK: remapped leader, multi-key services, text-field isolation, agent navigation, demo shell, split terminal bounds, cancellation, tab navigation, pane focus, shell split/merge, hide/restore and aligned headers, Cmd-H help, new-box prompt, tools sheet, files drawer, approval sheet and resolution, shell close")
             fflush(stdout); exit(0)
         } catch {
-            print("COMMAND_SMOKE_FAILED: \(error)"); fflush(stdout)
+            print("COMMAND_SMOKE_FAILED: \(error)")
+            print("COMMAND STATE: selected=\(commands.currentLayout?.selected ?? "nil"), exec=\(workspace.selection.execID ?? "nil"), maximized=\(commands.isAgentMaximized), inspector=\(commands.showInspector), shortcut=\(commands.appShortcuts[.toggleShells]), key=\(commands.window?.isKeyWindow == true), responder=\(String(describing: commands.window?.firstResponder))"); fflush(stdout)
             terminals.closeAll(); exit(1)
         }
     }
@@ -452,3 +460,5 @@ private extension NSView {
         return nil
     }
 }
+
+#endif

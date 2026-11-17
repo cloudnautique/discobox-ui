@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewShellRequiresAuthorizationAndRunningBox(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	calls := 0
 	b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -27,7 +27,7 @@ func TestNewShellRequiresAuthorizationAndRunningBox(t *testing.T) {
 }
 
 func TestNewShellStartsOnlyNewlyCreatedExec(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowShell = true
 	var routes []string
 	b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -64,7 +64,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestNewShellRejectsUnsafeCreatedIdentity(t *testing.T) {
 	for _, body := range []string{`{"exec":{"id":"primary"}}`, `{"exec":{"id":"../other/start"}}`, `{"exec":{"id":"agent","primary":true}}`} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowShell = true
 		calls := 0
 		b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {

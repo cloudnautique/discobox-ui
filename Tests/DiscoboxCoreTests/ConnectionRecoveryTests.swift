@@ -35,20 +35,20 @@ import Testing
     defer { hub.disconnectAll() }
     await hub.selectBox(.init(connection: remote.id, box: "demo-ui"))
     hub.browser.filter = .running; hub.browser.searchText = "keep this"
-    let generation = remote.workspace.connectionID, selection = remote.workspace.execID
-    let boxes = remote.workspace.sandboxes
-    await b.setOnline(false); await remote.workspace.refresh()
-    #expect(remote.workspace.connectionError != nil && remote.workspace.recovery.nextRetryAt != nil)
-    #expect(remote.workspace.isConnected && remote.workspace.sandboxes == boxes)
+    let generation = remote.connectionState.connectionID, selection = remote.selection.execID
+    let boxes = remote.inventory.sandboxes
+    await b.setOnline(false); await remote.refresh()
+    #expect(remote.connectionState.connectionError != nil && remote.connectionState.recovery.nextRetryAt != nil)
+    #expect(remote.connectionState.isConnected && remote.inventory.sandboxes == boxes)
     let probes = await b.count(.defaultProject)
-    await remote.workspace.retryConnection(automatically: true)
+    await remote.retryConnection(automatically: true)
     #expect(await b.count(.defaultProject) == probes)
-    await b.setOnline(true); await remote.workspace.retryConnection()
-    #expect(remote.workspace.connectionError == nil && remote.workspace.recovery == ConnectionRecovery())
-    #expect(remote.workspace.connectionID == generation && remote.workspace.sandboxID == "demo-ui" && remote.workspace.execID == selection)
-    #expect(remote.workspace.recoveryCount == 1 && b.lifetime.closes == 0)
+    await b.setOnline(true); await remote.retryConnection()
+    #expect(remote.connectionState.connectionError == nil && remote.connectionState.recovery == ConnectionRecovery())
+    #expect(remote.connectionState.connectionID == generation && remote.selection.sandboxID == "demo-ui" && remote.selection.execID == selection)
+    #expect(remote.connectionState.recoveryCount == 1 && b.lifetime.closes == 0)
     #expect(hub.browser.filter == .running && hub.browser.searchText == "keep this" && hub.active === remote)
-    #expect(local.workspace.isConnected && a.lifetime.closes == 0)
+    #expect(local.connectionState.isConnected && a.lifetime.closes == 0)
 }
 
 @MainActor @Test func initiallyUnreachableHostRetriesWithoutAnotherConnectClick() async throws {
@@ -56,20 +56,20 @@ import Testing
     await client.setOnline(false)
     let host = try await hub.connect(.thisComputer) { client }
     defer { hub.disconnectAll() }
-    #expect(!host.workspace.isConnected && host.workspace.recovery.nextRetryAt != nil)
+    #expect(!host.connectionState.isConnected && host.connectionState.recovery.nextRetryAt != nil)
     await client.setOnline(true)
     for _ in 0..<100 {
-        if host.workspace.isConnected && !host.workspace.recovery.isAttempting { break }
+        if host.connectionState.isConnected && !host.connectionState.recovery.isAttempting { break }
         try await Task.sleep(for: .milliseconds(50))
     }
-    #expect(host.workspace.isConnected && host.workspace.connectionError == nil)
-    #expect(!host.workspace.sandboxes.isEmpty && host.workspace.recoveryCount == 1)
+    #expect(host.connectionState.isConnected && host.connectionState.connectionError == nil)
+    #expect(!host.inventory.sandboxes.isEmpty && host.connectionState.recoveryCount == 1)
 }
 
 @MainActor @Test func recoveryIsSingleFlightAndDisconnectIgnoresItsLateCompletion() async throws {
-    let workspace = Workspace(), client = RecoveryFixture()
+    let workspace = ConnectionSession(), client = RecoveryFixture()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
+    await workspace.selection.selectBox("demo-ui")
     await client.setOnline(false); await workspace.refresh()
     await client.setOnline(true); await client.blockNextProbe()
     let pending = Task { await workspace.retryConnection() }
@@ -78,32 +78,32 @@ import Testing
     #expect(await client.count(.defaultProject) == 2)
     workspace.disconnect()
     await client.releaseProbe(); await pending.value
-    #expect(!workspace.isConnected && !workspace.canReconnect && workspace.sandboxes.isEmpty)
-    #expect(workspace.recovery == ConnectionRecovery() && client.lifetime.closes == 1)
+    #expect(!workspace.connectionState.isConnected && !workspace.connectionState.canReconnect && workspace.inventory.sandboxes.isEmpty)
+    #expect(workspace.connectionState.recovery == ConnectionRecovery() && client.lifetime.closes == 1)
 }
 
 @MainActor @Test func recoveryNeverReplaysAnAmbiguousApproval() async throws {
-    let workspace = Workspace(), client = RecoveryFixture()
+    let workspace = ConnectionSession(), client = RecoveryFixture()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.refreshApprovals()
-    let item = try #require(workspace.approvals.first)
-    do { try await workspace.answer(item, action: "deny", payload: .object([:])); Issue.record("Lost response accepted") } catch { }
+    await workspace.approvalStore.refreshApprovals()
+    let item = try #require(workspace.approvalStore.approvals.first)
+    do { try await workspace.approvalStore.answer(item, action: "deny", payload: .object([:])); Issue.record("Lost response accepted") } catch { }
     await client.setOnline(false); await workspace.refresh()
     await client.setOnline(true); await workspace.retryConnection()
     #expect(await client.count(.answer) == 1)
-    #expect(workspace.connectionError == nil)
+    #expect(workspace.connectionState.connectionError == nil)
     workspace.disconnect()
 }
 
 @MainActor @Test func changedDefaultProjectInvalidatesOldConfirmationsDuringRecovery() async throws {
-    let workspace = Workspace(), client = RecoveryFixture()
+    let workspace = ConnectionSession(), client = RecoveryFixture()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    let generation = workspace.connectionID
+    await workspace.selection.selectBox("demo-ui")
+    let generation = workspace.connectionState.connectionID
     await client.setOnline(false); await workspace.refresh()
     await client.changeProject(); await client.setOnline(true); await workspace.retryConnection()
-    #expect(workspace.isConnected && workspace.projectID == "replacement-project")
-    #expect(workspace.connectionID != generation && workspace.sandboxID == nil)
+    #expect(workspace.connectionState.isConnected && workspace.connectionState.projectID == "replacement-project")
+    #expect(workspace.connectionState.connectionID != generation && workspace.selection.sandboxID == nil)
     workspace.disconnect()
 }
 
@@ -113,25 +113,25 @@ import Testing
     let remote = try await hub.connect(.init(name: "Remote", endpoint: "https://remote.example.invalid")) { b }
     defer { hub.disconnectAll() }
     hub.disconnect(local.id)
-    await b.denyAccess(); await remote.workspace.refresh()
-    #expect(remote.workspace.recovery.requiresAction)
+    await b.denyAccess(); await remote.refresh()
+    #expect(remote.connectionState.recovery.requiresAction)
     await hub.retryInterruptedConnections(probeHealthy: true)
-    #expect(!local.workspace.canReconnect && !local.workspace.isConnected)
+    #expect(!local.connectionState.canReconnect && !local.connectionState.isConnected)
     #expect(await a.count(.defaultProject) == 1)
     #expect(await b.count(.defaultProject) == 1)
 }
 
 @MainActor @Test func cancelledProbeCanBeRetriedInsteadOfGettingStuckConnecting() async throws {
-    let workspace = Workspace(), client = RecoveryFixture()
+    let workspace = ConnectionSession(), client = RecoveryFixture()
     await workspace.connect(client: client, label: "fixture")
     await client.setOnline(false); await workspace.refresh()
     await client.setOnline(true); await client.blockNextProbe()
     let pending = Task { await workspace.retryConnection() }
     await client.waitForProbe(); pending.cancel()
     await client.releaseProbe(); await pending.value
-    #expect(!workspace.recovery.isAttempting && workspace.recovery.nextRetryAt != nil)
+    #expect(!workspace.connectionState.recovery.isAttempting && workspace.connectionState.recovery.nextRetryAt != nil)
     await workspace.retryConnection()
-    #expect(workspace.connectionError == nil)
+    #expect(workspace.connectionState.connectionError == nil)
     workspace.disconnect()
 }
 
@@ -142,8 +142,8 @@ import Testing
     await client.waitForProbe(); pending.cancel()
     await client.releaseProbe()
     let host = try await pending.value
-    #expect(!host.workspace.canReconnect && !host.workspace.isConnecting && !host.workspace.isConnected)
-    #expect(host.workspace.recovery.nextRetryAt == nil && client.lifetime.closes == 1)
+    #expect(!host.connectionState.canReconnect && !host.connectionState.isConnecting && !host.connectionState.isConnected)
+    #expect(host.connectionState.recovery.nextRetryAt == nil && client.lifetime.closes == 1)
     await hub.retryInterruptedConnections(probeHealthy: true)
     #expect(await client.count(.defaultProject) == 1)
     hub.disconnectAll()

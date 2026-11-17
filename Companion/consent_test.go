@@ -10,7 +10,7 @@ import (
 func TestConsentUsesItsOwnRoutesAndRechecksPending(t *testing.T) {
 	for _, kind := range []string{"apiAccess", "adoption"} {
 		for _, pending := range []bool{true, false} {
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			b.allowManage = true
 			resource := "api-access-requests"
 			if kind == "adoption" {
@@ -45,7 +45,7 @@ func TestConsentUsesItsOwnRoutesAndRechecksPending(t *testing.T) {
 
 func TestRefreshNeverRunsCommandsAndRechecksPending(t *testing.T) {
 	for _, action := range []string{"refresh", "deny"} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		writes := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -76,7 +76,7 @@ func TestRefreshNeverRunsCommandsAndRechecksPending(t *testing.T) {
 			t.Fatalf("writes=%d err=%v", writes, err)
 		}
 	}
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	if _, err := b.execute(t.Context(), request{Operation: "answer", ProjectID: "p", RequestID: "ask", Kind: "apiAccess", Action: "approve"}); err == nil {
 		t.Fatal("consent write without explicit manage permission")
 	}

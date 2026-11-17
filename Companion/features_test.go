@@ -14,7 +14,7 @@ import (
 
 func TestApprovalsRejectResolvedAndDoNotRetry(t *testing.T) {
 	for _, status := range []string{"approved", "pending"} {
-		b, _ := newBridge("http://fixture", false)
+		b, _ := newBridge("http://fixture")
 		b.allowManage = true
 		posts := 0
 		b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -38,7 +38,7 @@ func TestApprovalsRejectResolvedAndDoNotRetry(t *testing.T) {
 	}
 }
 func TestApprovalRefreshBindsTheRequestAndSecret(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method == "GET" {
@@ -61,7 +61,7 @@ func TestApprovalRefreshBindsTheRequestAndSecret(t *testing.T) {
 }
 func fileFixture(t *testing.T, changed bool) *bridge {
 	t.Helper()
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	stats := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -120,7 +120,7 @@ func TestUploadUsesVersionAndStreamsRawContent(t *testing.T) {
 	dir := t.TempDir()
 	local := filepath.Join(dir, "file")
 	_ = os.WriteFile(local, []byte("hello"), 0600)
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	writes := 0
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
@@ -150,7 +150,7 @@ func TestUploadUsesVersionAndStreamsRawContent(t *testing.T) {
 	}
 }
 func TestToolReattachesWithoutCreatingOrStarting(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "GET" {
@@ -175,7 +175,7 @@ func TestFileNamesCannotEscapeDestination(t *testing.T) {
 }
 
 func TestAuditForwardCursorIsScopedPerPool(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/audit/http"):
@@ -200,7 +200,7 @@ func TestAuditForwardCursorIsScopedPerPool(t *testing.T) {
 }
 
 func TestRecordingExportKeepsExactBytesAndDoesNotOverwrite(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.allowManage = true
 	payload := strings.Repeat("\x00binary\xff", 150000)
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {

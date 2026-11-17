@@ -4,7 +4,7 @@ public extension BoxAction {
     static var bulkActions: [Self] { [.start, .stop, .archive, .unarchive, .upgrade, .repair] }
 }
 
-public extension Workspace {
+public extension BoxCommands {
     struct BulkActionResult: Sendable {
         public let accepted: [String]
         public let failures: [PurgeResult.Failure]
@@ -18,14 +18,14 @@ public extension Workspace {
                            onAccepted: (String) -> Void = { _ in }) async throws -> BulkActionResult {
         var seen: Set<String> = []
         let ids = boxIDs.filter { seen.insert($0).inserted }
-        guard BoxAction.bulkActions.contains(action), connection == connectionID, !ids.isEmpty,
+        guard BoxAction.bulkActions.contains(action), connection == connectionState.connectionID, !ids.isEmpty,
               ids.allSatisfy({ id in
-                  sandboxes.contains { $0.id == id && action.isAvailable(for: $0) && !clearingPools.contains($0.poolId ?? "") } && !pendingBoxActions.contains(id)
+                  inventory.sandboxes.contains { $0.id == id && action.isAvailable(for: $0) && !pending.clearingPools.contains($0.poolId ?? "") } && !pending.pendingBoxActions.contains(id)
               }) else { throw DiscoboxError("The selection or connection changed. Review the selected boxes again.") }
         var accepted: [String] = []
         var failures: [PurgeResult.Failure] = []
         for (index, id) in ids.enumerated() {
-            guard connection == connectionID, !Task.isCancelled else {
+            guard connection == connectionState.connectionID, !Task.isCancelled else {
                 failures += ids[index...].map { .init(boxID: $0, message: "Not attempted: the connection changed or the operation was cancelled.") }
                 break
             }
@@ -38,7 +38,7 @@ public extension Workspace {
             } catch { failures.append(.init(boxID: id, message: error.localizedDescription)) }
             progress(index + 1, ids.count)
         }
-        if connection == connectionID, !Task.isCancelled { await refresh() }
+        if connection == connectionState.connectionID, !Task.isCancelled { await refresh() }
         return .init(accepted: accepted, failures: failures)
     }
 }

@@ -4,7 +4,7 @@ import DiscoboxCore
 struct PoolResourcesView: View {
     let computer: String
     var initialPoolID: String? = nil
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(TerminalStore.self) private var terminals: TerminalStore?
     @Environment(ServiceForwards.self) private var forwards: ServiceForwards?
     @Environment(DesktopWindows.self) private var desktops: DesktopWindows?
@@ -16,8 +16,8 @@ struct PoolResourcesView: View {
     @State private var clearRequest: PoolCacheClearRequest?
     @State private var stopRequest: BulkBoxActionRequest?
     @State private var actionError: String?
-    private var pool: ResourcePool? { workspace.resources.pools.first { $0.id == poolID } }
-    private var boxes: [Sandbox] { workspace.sandboxes.filter { $0.poolId == poolID } }
+    private var pool: ResourcePool? { workspace.pools.resources.pools.first { $0.id == poolID } }
+    private var boxes: [Sandbox] { workspace.inventory.sandboxes.filter { $0.poolId == poolID } }
     private var rows: [Sandbox] {
         boxes.sorted { lhs, rhs in
             let l = reading(lhs), r = reading(rhs)
@@ -26,28 +26,28 @@ struct PoolResourcesView: View {
             return order == .orderedSame ? lhs.id < rhs.id : order == .orderedAscending
         }
     }
-    private var busy: Bool { workspace.clearingPools.contains(poolID) }
+    private var busy: Bool { workspace.pending.clearingPools.contains(poolID) }
     private var selectedRunning: [Sandbox] { boxes.filter { selection.contains($0.id) && BoxAction.stop.isAvailable(for: $0) } }
     var body: some View {
         StudioConfirmation(title: "Resources", symbol: "gauge.with.dots.needle.33percent", subtitle: computer, width: 860) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("Pool").foregroundStyle(.secondary)
-                    StudioMenuPicker(title: "Pool", selection: $poolID, options: workspace.resources.pools.isEmpty
+                    StudioMenuPicker(title: "Pool", selection: $poolID, options: workspace.pools.resources.pools.isEmpty
                         ? [.init(id: "", title: "No pools available")]
-                        : workspace.resources.pools.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.resources.defaultPoolID ? " (default)" : "")) }, alignment: .left)
+                        : workspace.pools.resources.pools.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.pools.resources.defaultPoolID ? " (default)" : "")) }, alignment: .left)
                         .padding(8).studioCard().frame(maxWidth: 360)
                     Spacer()
                     Text("Sort by").foregroundStyle(.secondary)
                     StudioMenuPicker(title: "Sort by", selection: $sort, options: [.init(id: "disk", title: "Disk"), .init(id: "cpu", title: "CPU"), .init(id: "memory", title: "Memory")], alignment: .left)
                         .padding(8).studioCard().frame(width: 100)
-                    if workspace.resources.isRefreshing { ProgressView().controlSize(.small) }
-                    Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.resources.isRefreshing || busy)
+                    if workspace.pools.resources.isRefreshing { ProgressView().controlSize(.small) }
+                    Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.pools.resources.isRefreshing || busy)
                 }.disabled(busy)
-                if let status = workspace.poolCleanupStatus[poolID] {
+                if let status = workspace.pools.poolCleanupStatus[poolID] {
                     Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                if let error = workspace.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if let error = workspace.pools.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                 if let pool {
                     TimelineView(.periodic(from: .now, by: 15)) { context in
                         resourceSummary(pool, now: context.date)
@@ -76,28 +76,28 @@ struct PoolResourcesView: View {
                     }
                     if let actionError { Text(actionError).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                 } else {
-                    ContentUnavailableView(workspace.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
+                    ContentUnavailableView(workspace.pools.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
                 }
             }
         } footer: {
             HStack {
                 if let pool {
                     Button("Stop Selected…") {
-                        stopRequest = .init(boxes: selectedRunning, action: .stop, connection: workspace.connectionID, computer: computer)
+                        stopRequest = .init(boxes: selectedRunning, action: .stop, connection: workspace.connectionState.connectionID, computer: computer)
                     }.disabled(selectedRunning.isEmpty || busy)
-                    Button("Network & Trust…") { networkPool = .init(pool: pool, connection: workspace.connectionID) }.disabled(busy || !workspace.isConnected)
-                    Button("Clear Caches…", role: .destructive) { clearRequest = .init(pool: pool, connection: workspace.connectionID) }
-                        .disabled(busy || !workspace.isConnected).accessibilityIdentifier("resources.clearCaches")
+                    Button("Network & Trust…") { networkPool = .init(pool: pool, connection: workspace.connectionState.connectionID) }.disabled(busy || !workspace.connectionState.isConnected)
+                    Button("Clear Caches…", role: .destructive) { clearRequest = .init(pool: pool, connection: workspace.connectionState.connectionID) }
+                        .disabled(busy || !workspace.connectionState.isConnected).accessibilityIdentifier("resources.clearCaches")
                 }
                 Spacer()
                 Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction)
             }
         }.frame(height: 690)
             .onChange(of: poolID) { selection = []; actionError = nil }
-            .task(id: workspace.connectionID) {
-                let generation = workspace.connectionID
-                await workspace.refreshResources()
-                guard !Task.isCancelled, generation == workspace.connectionID else { return }
+            .task(id: workspace.connectionState.connectionID) {
+                let generation = workspace.connectionState.connectionID
+                await workspace.pools.refreshResources()
+                guard !Task.isCancelled, generation == workspace.connectionState.connectionID else { return }
                 choosePool()
             }
             .sheet(item: $networkPool) { request in
@@ -114,20 +114,20 @@ struct PoolResourcesView: View {
         switch sort { case "cpu": box.resourceCPU; case "memory": box.resourceMemory; default: box.resourceDisk }
     }
     private func choosePool() {
-        let pools = workspace.resources.pools
+        let pools = workspace.pools.resources.pools
         if pools.contains(where: { $0.id == poolID }) { return }
-        poolID = [initialPoolID, workspace.resources.defaultPoolID, pools.first?.id].compactMap { $0 }.first(where: { id in pools.contains { $0.id == id } }) ?? ""
+        poolID = [initialPoolID, workspace.pools.resources.defaultPoolID, pools.first?.id].compactMap { $0 }.first(where: { id in pools.contains { $0.id == id } }) ?? ""
     }
     private func refresh(force: Bool) {
         Task {
-            let generation = workspace.connectionID
-            await workspace.refreshResources(force: force)
-            guard generation == workspace.connectionID else { return }
+            let generation = workspace.connectionState.connectionID
+            await workspace.pools.refreshResources(force: force)
+            guard generation == workspace.connectionState.connectionID else { return }
             choosePool()
         }
     }
     private func resourceSummary(_ pool: ResourcePool, now: Date) -> some View {
-        let health = workspace.resources.health(pool.id, now: now)
+        let health = workspace.pools.resources.health(pool.id, now: now)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 metric("CPU", value: ResourceValue.cpu(pool.totalCPU(boxes: boxes)), capacity: pool.cpuCapacity.map { ResourceValue.cpu($0) + " cores" })
@@ -206,15 +206,15 @@ struct PoolCacheClearRequest: Identifiable {
 struct PoolCacheClearSheet: View {
     let request: PoolCacheClearRequest
     let computer: String
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(TerminalStore.self) private var terminals: TerminalStore?
     @Environment(ServiceForwards.self) private var forwards: ServiceForwards?
     @Environment(DesktopWindows.self) private var desktops: DesktopWindows?
     @Environment(\.dismiss) private var dismiss
     @State private var working = false
-    @State private var result: Workspace.CacheClearResult?
+    @State private var result: PoolCommands.CacheClearResult?
     @State private var failure: String?
-    private var running: [Sandbox] { workspace.sandboxes.filter { $0.poolId == request.pool.id && $0.isRunning } }
+    private var running: [Sandbox] { workspace.inventory.sandboxes.filter { $0.poolId == request.pool.id && $0.isRunning } }
     var body: some View {
         StudioConfirmation(title: "Clear pool caches?", symbol: "internaldrive", subtitle: computer + " › " + request.pool.name, destructive: true) {
             VStack(alignment: .leading, spacing: 16) {
@@ -247,7 +247,7 @@ struct PoolCacheClearSheet: View {
                     Spacer()
                     Button("Stop Boxes & Clear Caches", role: .destructive) { clear() }
                         .buttonStyle(.borderedProminent).tint(.red)
-                        .disabled(working || failure != nil || request.connection != workspace.connectionID)
+                        .disabled(working || failure != nil || request.connection != workspace.connectionState.connectionID)
                         .accessibilityIdentifier("resources.confirmClear")
                 }
             }
@@ -258,7 +258,7 @@ struct PoolCacheClearSheet: View {
         Task {
             defer { working = false }
             do {
-                result = try await workspace.clearPoolCache(poolID: request.pool.id, connection: request.connection) { ids in
+                result = try await workspace.pools.clearPoolCache(poolID: request.pool.id, connection: request.connection) { ids in
                     for id in ids {
                         terminals?.closeBox(id, connection: request.connection)
                         forwards?.close(box: id); desktops?.close(box: id)

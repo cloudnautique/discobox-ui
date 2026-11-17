@@ -4,24 +4,27 @@ import Observation
 /// An explicit start keeps its original computer, box and connection even if
 /// the user changes selection while a prompt or request is open.
 @MainActor @Observable public final class BoxStartIntent {
-    public let workspace: Workspace
+    private let connectionState: ConnectionStore
+    private let inventory: BoxInventoryStore
+    private let pending: PendingBoxOperations
+    private let commands: BoxCommands
     public let box: Sandbox
     public let computer: String
     public let connection: UUID
     public private(set) var working = false
     public private(set) var failure: String?
 
-    public init(workspace: Workspace, box: Sandbox, computer: String) {
-        self.workspace = workspace; self.box = box; self.computer = computer
-        connection = workspace.connectionID
+    public init(connection: ConnectionStore, inventory: BoxInventoryStore, pending: PendingBoxOperations, commands: BoxCommands, box: Sandbox, computer: String) {
+        self.connectionState = connection; self.inventory = inventory; self.pending = pending; self.commands = commands
+        self.box = box; self.computer = computer; self.connection = connection.connectionID
     }
     public var isCurrent: Bool {
-        workspace.isConnected && workspace.connectionID == connection && currentBox != nil
+        connectionState.isConnected && connectionState.connectionID == connection && currentBox != nil
     }
-    public var currentBox: Sandbox? { workspace.sandboxes.first { $0.id == box.id && !$0.isArchived } }
+    public var currentBox: Sandbox? { inventory.sandboxes.first { $0.id == box.id && !$0.isArchived } }
     public var canStart: Bool {
-        isCurrent && !working && !workspace.pendingBoxActions.contains(box.id) &&
-        !workspace.clearingPools.contains(currentBox?.poolId ?? "") &&
+        isCurrent && !working && !pending.pendingBoxActions.contains(box.id) &&
+        !pending.clearingPools.contains(currentBox?.poolId ?? "") &&
         currentBox.map { $0.isRunning || BoxAction.start.isAvailable(for: $0) } == true
     }
     public var alreadyRunning: Bool { isCurrent && currentBox?.isRunning == true }
@@ -37,7 +40,7 @@ import Observation
         working = true; failure = nil
         defer { working = false }
         do {
-            try await workspace.performBoxAction(.start, boxID: box.id, connection: connection)
+            try await commands.performBoxAction(.start, boxID: box.id, connection: connection)
             guard isCurrent else { throw DiscoboxError("The computer’s connection changed while starting. Check the box’s current state before trying again.") }
             return true
         } catch {

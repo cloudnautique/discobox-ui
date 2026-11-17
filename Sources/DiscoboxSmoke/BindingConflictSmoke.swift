@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -12,10 +14,10 @@ import DiscoboxCore
         } catch { print("BINDING_CONFLICT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
     private static func verify() async throws {
-        let client = BindingConflictFixture(), workspace = Workspace()
+        let client = BindingConflictFixture(), workspace = ConnectionSession()
         await workspace.connect(client: client, label: "Offline binding fixture", demo: true)
-        await workspace.refreshApprovals()
-        guard let item = workspace.approvals.first else { throw DiscoboxError("Missing request fixture") }
+        await workspace.approvalStore.refreshApprovals()
+        guard let item = workspace.approvalStore.approvals.first else { throw DiscoboxError("Missing request fixture") }
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 720, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: ApprovalSheet(item: item).environment(workspace))
         window.makeKeyAndOrderFront(nil)
@@ -33,7 +35,7 @@ import DiscoboxCore
         let candidate = await client.candidate
         guard candidate["use"]["as"].string == "add", candidate["use"]["scope"].string == "routes",
               candidate["use"]["raw"] == .null, submit(window)?.isEnabled == true,
-              await client.writes == 0, workspace.approvals.count == 1 else {
+              await client.writes == 0, workspace.approvalStore.approvals.count == 1 else {
             throw DiscoboxError("Addition changed access, widened scope, lost fresh-preview validation or answered the request")
         }
         try capture(window, name: "binding-addition-review")
@@ -86,3 +88,5 @@ private actor BindingConflictFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

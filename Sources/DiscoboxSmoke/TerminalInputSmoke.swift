@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import GhosttyKit
 import DiscoboxCore
@@ -7,7 +9,7 @@ import DiscoboxCore
 @MainActor enum TerminalInputSmoke {
     static func run() async {
         let session = TerminalSession(arguments: ["--terminal-demo"])
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         let commands = WorkspaceCommands()
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1000, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -84,3 +86,5 @@ import DiscoboxCore
         throw DiscoboxError("Offline input did not reach the terminal screen within five seconds")
     }
 }
+
+#endif

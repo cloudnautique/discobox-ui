@@ -87,7 +87,7 @@ func runForward(endpoint string, req request, input io.Reader, output io.Writer)
 	if err := validID(req.SandboxID); err != nil {
 		return err
 	}
-	b, err := newBridge(endpoint, false)
+	b, err := newBridge(endpoint)
 	if err != nil {
 		return err
 	}

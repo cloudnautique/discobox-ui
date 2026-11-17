@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -15,7 +17,7 @@ import DiscoboxCore
     private static func verify() async throws {
         let hub = Connections(polling: false), client = ActivityDesktopFixture()
         let host = try await hub.connect(.localComputer(name: "Studio"), demo: true) { client }
-        await host.workspace.refreshApprovals()
+        await host.approvalStore.refreshApprovals()
         await hub.selectBox(.init(connection: host.id, box: "work"))
         let suite = "ai.discobox.smoke.activity." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
@@ -36,38 +38,38 @@ import DiscoboxCore
         try capture(window, name: "activity-needs-you")
         filterButtons(window)[1].performClick(nil)
         try await wait { hub.browser.activityFilter == .working && hub.browserBoxes.count == 1 }
-        await client.finish(); await host.workspace.refresh()
+        await client.finish(); await host.refresh()
         try await wait { hub.browserBoxes.isEmpty && hub.browserSelectionPin?.box.id == "work" }
-        guard host.workspace.sandboxID == "work" else { throw DiscoboxError("Completing work changed selection") }
+        guard host.selection.sandboxID == "work" else { throw DiscoboxError("Completing work changed selection") }
         filterButtons(window)[1].performClick(nil)
         try await wait { hub.browser.activityFilter == nil && hub.browserBoxes.count == 7 }
         // A single real row has one native action: Review. It must open this
         // host's two requests without answering either of them.
-        guard let box = host.workspace.sandboxes.first(where: { $0.id == "approval" }) else { throw DiscoboxError("Approval fixture missing") }
+        guard let box = host.inventory.sandboxes.first(where: { $0.id == "approval" }) else { throw DiscoboxError("Approval fixture missing") }
         let review = NSWindow(contentRect: .init(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
-        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host.workspace))
+        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host))
         review.makeKeyAndOrderFront(nil)
         defer { review.orderOut(nil) }
         try await wait { buttons(review).count == 1 && buttons(review)[0].isEnabled }
         buttons(review)[0].performClick(nil)
         try await wait { review.attachedSheet?.defaultButtonCell != nil }
-        guard host.workspace.approvals.count == 2, await client.writes == 0 else { throw DiscoboxError("Review sent an answer or used another inbox") }
+        guard host.approvalStore.approvals.count == 2, await client.writes == 0 else { throw DiscoboxError("Review sent an answer or used another inbox") }
         if let sheet = review.attachedSheet { review.endSheet(sheet) }
         // Open on a row from another computer must activate that computer and
         // its agent without changing the computer filter or the original box.
         let remote = try await hub.connect(.init(name: "Build server", endpoint: "https://activity.example.invalid"), demo: true, select: false) { ActivityDesktopFixture() }
         hub.browser.computerID = host.id
-        guard let question = remote.workspace.sandboxes.first(where: { $0.id == "question" }) else { throw DiscoboxError("Question fixture missing") }
+        guard let question = remote.inventory.sandboxes.first(where: { $0.id == "question" }) else { throw DiscoboxError("Question fixture missing") }
         let commands = WorkspaceCommands(defaults: defaults)
         let open = NSWindow(contentRect: .init(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
         open.contentView = NSHostingView(rootView: BoxRow(box: question).padding(12).frame(width: 380)
-            .environment(remote.workspace).environment(hub).environment(commands))
+            .environment(remote).environment(hub).environment(commands))
         open.makeKeyAndOrderFront(nil)
         defer { open.orderOut(nil) }
         try await wait { buttons(open).count == 1 && buttons(open)[0].isEnabled }
         buttons(open)[0].performClick(nil)
-        try await wait { hub.active === remote && remote.workspace.sandboxID == "question" }
-        guard hub.browser.computerID == host.id, host.workspace.sandboxID == "work", commands.currentLayout?.selected == "agent" else {
+        try await wait { hub.active === remote && remote.selection.sandboxID == "question" }
+        guard hub.browser.computerID == host.id, host.selection.sandboxID == "work", commands.currentLayout?.selected == "agent" else {
             throw DiscoboxError("Open retargeted the box/filter or failed to focus the remote agent")
         }
     }
@@ -112,7 +114,7 @@ private struct ActivitySmokeHost: View {
             Divider()
             ComputersSidebar(grouping: "repository", tagKey: "")
         }.background(DiscoboxAppearance.sidebar)
-            .environment(hub).environment(hub.active.workspace).environment(runtimes).environment(commands).environment(boxActions)
+            .environment(hub).environment(hub.active).environment(runtimes).environment(commands).environment(boxActions)
     }
 }
 
@@ -152,3 +154,5 @@ private actor ActivityDesktopFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -8,20 +10,28 @@ import UserNotifications
 @MainActor enum FeatureSmoke {
     static func run() async {
         do {
+            print("FEATURE: verifyAppearance"); fflush(stdout)
             try await verifyAppearance()
+            print("FEATURE: StudioModalSmoke.verify"); fflush(stdout)
             try await StudioModalSmoke.verify()
+            print("FEATURE: verifyNotifications"); fflush(stdout)
             try await verifyNotifications()
+            print("FEATURE: DialogReceiptSmoke.verify"); fflush(stdout)
             try await DialogReceiptSmoke.verify()
+            print("FEATURE: FilesSmoke.verify"); fflush(stdout)
             try await FilesSmoke.verify()
+            print("FEATURE: verifyNotificationPermissionRecovery"); fflush(stdout)
             try await verifyNotificationPermissionRecovery()
+            print("FEATURE: verifyBackgroundNotificationRecovery"); fflush(stdout)
             try await verifyBackgroundNotificationRecovery()
+            print("FEATURE: verifyComputerUsage"); fflush(stdout)
             try await verifyComputerUsage()
-            let workspace = Workspace()
+            let workspace = ConnectionSession()
             await workspace.connect(client: DemoClient(pendingRequests: true), label: "Offline panels", demo: true)
-            await workspace.selectBox("demo-ui")
-            await workspace.refreshApprovals()
-            guard let item = workspace.approvals.first else { throw DiscoboxError("Missing approval fixture") }
-            guard let box = workspace.selectedBox else { throw DiscoboxError("Missing box fixture") }
+            await workspace.selection.selectBox("demo-ui")
+            await workspace.approvalStore.refreshApprovals()
+            guard let item = workspace.approvalStore.approvals.first else { throw DiscoboxError("Missing approval fixture") }
+            guard let box = workspace.selection.selectedBox else { throw DiscoboxError("Missing box fixture") }
             // Retained forwarding sessions must follow A → B → A without
             // reusing another box's listener inventory.
             let forwards = ServiceForwards()
@@ -29,7 +39,7 @@ import UserNotifications
             let second = forwards.session(box: "demo-api", workspace: workspace)
             guard first !== second else { throw DiscoboxError("Boxes shared a forwarding session") }
             for id in ["demo-ui", "demo-api", "demo-ui", "demo-api", "demo-ui"] {
-                await workspace.selectBox(id)
+                await workspace.selection.selectBox(id)
                 let expected = id == "demo-ui" ? first : second
                 guard forwards.existingSession(box: id, workspace: workspace) === expected else {
                     throw DiscoboxError("Forwarding inventory did not follow box selection")
@@ -41,8 +51,8 @@ import UserNotifications
                 throw DiscoboxError("Closing one box affected another box's forwards")
             }
             forwards.closeAll()
-            let sidebarWorkspace = Workspace()
-            await sidebarWorkspace.connect(client: DemoClient(), label: "Offline sidebar", demo: true)
+            let sidebarFixture = try await WorkspaceFixture.make()
+            defer { sidebarFixture.close() }
             let settingsSuite = "ai.discobox.smoke.connections." + UUID().uuidString
             let settingsDefaults = UserDefaults(suiteName: settingsSuite)!
             defer { settingsDefaults.removePersistentDomain(forName: settingsSuite) }
@@ -50,32 +60,33 @@ import UserNotifications
                 .init(name: "Studio", endpoint: "discobox://d1-fixture"),
                 .init(name: "Build server", endpoint: "https://build.example.com")
             ]), forKey: "savedConnections")
-            let archivedWorkspace = Workspace()
-            await archivedWorkspace.connect(client: DemoClient(), label: "Offline archives", demo: true)
+            let archivedFixture = try await WorkspaceFixture.make()
+            defer { archivedFixture.close() }
+            let archivedWorkspace = archivedFixture.connections.active
             for id in ["demo-api", "demo-tests"] {
-                try await archivedWorkspace.performBoxAction(.archive, boxID: id, connection: archivedWorkspace.connectionID)
+                try await archivedWorkspace.commands.performBoxAction(.archive, boxID: id, connection: archivedWorkspace.connectionState.connectionID)
             }
-            archivedWorkspace.filter = .archived
-            let archives = archivedWorkspace.visibleBoxes
+            archivedFixture.connections.browser.filter = .archived
+            let archives = archivedFixture.connections.browserBoxes.map(\.box)
             let computers = Connections(polling: false)
             let localComputer = try await computers.connect(.thisComputer, demo: true) { DemoClient() }
             let studioComputer = try await computers.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { DemoClient(pendingRequests: true) }
-            await studioComputer.workspace.refreshApprovals()
+            await studioComputer.approvalStore.refreshApprovals()
             computers.activate(localComputer.id)
             let computerResources = ConnectionRuntimes()
-            await workspace.refreshResources()
-            await localComputer.workspace.refreshResources()
-            guard let resourcePool = workspace.resources.pools.first else { throw DiscoboxError("Resource fixture missing") }
-            guard let shell = workspace.execs.first(where: \.isShell) else { throw DiscoboxError("Shell fixture missing") }
-            guard let stoppedBox = workspace.sandboxes.first(where: { $0.id == "demo-api" }) else { throw DiscoboxError("Stopped-box fixture missing") }
+            await workspace.pools.refreshResources()
+            await localComputer.pools.refreshResources()
+            guard let resourcePool = workspace.pools.resources.pools.first else { throw DiscoboxError("Resource fixture missing") }
+            guard let shell = workspace.selection.execs.first(where: \.isShell) else { throw DiscoboxError("Shell fixture missing") }
+            guard let stoppedBox = workspace.inventory.sandboxes.first(where: { $0.id == "demo-api" }) else { throw DiscoboxError("Stopped-box fixture missing") }
             let credentialDraft = LaunchCredentialDraft(environment: "OBOT_MCP_TOKEN", host: "demo.on-obot.ai", token: "fixture-not-a-real-token")
-            let inboxWorkspace = Workspace()
+            let inboxWorkspace = ConnectionSession()
             await inboxWorkspace.connect(client: StudioInboxFixture(), label: "Offline approvals", demo: true)
-            await inboxWorkspace.refreshApprovals()
-            let toolsWorkspace = Workspace()
+            await inboxWorkspace.approvalStore.refreshApprovals()
+            let toolsWorkspace = ConnectionSession()
             await toolsWorkspace.connect(client: StudioInboxFixture(), label: "Offline tools", demo: true)
-            await toolsWorkspace.selectBox("demo-ui")
-            await localComputer.workspace.refreshUsage(); await studioComputer.workspace.refreshUsage()
+            await toolsWorkspace.selection.selectBox("demo-ui")
+            await localComputer.refreshUsage(); await studioComputer.refreshUsage()
             let notificationSettings = ApprovalNotifications(service: NotificationPermissionFixture(), defaults: settingsDefaults)
             let deniedService = NotificationPermissionFixture(); deniedService.status = .denied
             let deniedSettings = ApprovalNotifications(service: deniedService, defaults: settingsDefaults)
@@ -93,35 +104,35 @@ import UserNotifications
                 ("box-maintenance-dark", AnyView(List(maintenanceBoxes) { BoxRow(box: $0) }.listStyle(.sidebar).frame(width: 350, height: 420).environment(workspace).preferredColorScheme(.dark))),
                 ("launch-credentials-light", AnyView(NewBoxCredentialsSection(drafts: .constant([credentialDraft]), initiallyExpanded: true).padding(24).frame(width: 560).background(DiscoboxAppearance.surface).preferredColorScheme(.light))),
                 ("launch-credentials-dark", AnyView(NewBoxCredentialsSection(drafts: .constant([credentialDraft]), initiallyExpanded: true).padding(24).frame(width: 560).background(DiscoboxAppearance.surface).preferredColorScheme(.dark))),
-                ("start-box-light", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.light))),
-                ("start-box-dark", AnyView(BoxStartPrompt(intent: .init(workspace: workspace, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.dark))),
+                ("start-box-light", AnyView(BoxStartPrompt(intent: .init(connection: workspace.connectionState, inventory: workspace.inventory, pending: workspace.pending, commands: workspace.commands, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.light))),
+                ("start-box-dark", AnyView(BoxStartPrompt(intent: .init(connection: workspace.connectionState, inventory: workspace.inventory, pending: workspace.pending, commands: workspace.commands, box: stoppedBox, computer: "Studio"), cancel: {}, viewSaved: {}, open: {}).preferredColorScheme(.dark))),
                 ("studio-light", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).preferredColorScheme(.light))),
                 ("studio-dark", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).preferredColorScheme(.dark))),
-                ("shell-close", AnyView(TerminalCloseSheet(request: .init(terminal: shell, box: box.id, connection: workspace.connectionID), confirm: {}).defaultAppStorage(settingsDefaults))),
+                ("shell-close", AnyView(TerminalCloseSheet(request: .init(terminal: shell, box: box.id, connection: workspace.connectionState.connectionID), confirm: {}).defaultAppStorage(settingsDefaults))),
                 ("appearance", AnyView(AppearanceSettings().defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
                 ("notifications", AnyView(ApprovalNotificationSettings().frame(width: 640, height: 680))),
                 ("resources", AnyView(PoolResourcesView(computer: "Fixture computer").environment(workspace))),
-                ("cache-clear", AnyView(PoolCacheClearSheet(request: .init(pool: resourcePool, connection: workspace.connectionID), computer: "Fixture computer").environment(workspace))),
+                ("cache-clear", AnyView(PoolCacheClearSheet(request: .init(pool: resourcePool, connection: workspace.connectionState.connectionID), computer: "Fixture computer").environment(workspace))),
                 ("computers", AnyView(ConnectedWorkspace(connections: computers, runtimes: computerResources, commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults))),
-                ("new-box-computer", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers))),
-                ("new-box-light", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers).preferredColorScheme(.light))),
-                ("new-box-dark", AnyView(NewBoxSheet().environment(localComputer.workspace).environment(computers).preferredColorScheme(.dark))),
-                ("switch-box-light", AnyView(BoxChooser().environment(localComputer.workspace).environment(computers).preferredColorScheme(.light))),
-                ("switch-box-dark", AnyView(BoxChooser().environment(localComputer.workspace).environment(computers).preferredColorScheme(.dark))),
-                ("archived-sidebar", AnyView(WorkspaceView().environment(archivedWorkspace).environment(WorkspaceCommands()).defaultAppStorage(settingsDefaults))),
-                ("bulk-purge", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace))),
-                ("bulk-purge-light", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionID), completed: { _ in }).environment(archivedWorkspace).preferredColorScheme(.light))),
-                ("purge-light", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionID)).environment(archivedWorkspace).preferredColorScheme(.light))),
-                ("purge-dark", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionID)).environment(archivedWorkspace).preferredColorScheme(.dark))),
-                ("stop-light", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionID)).environment(workspace).preferredColorScheme(.light))),
-                ("stop-dark", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionID)).environment(workspace).preferredColorScheme(.dark))),
+                ("new-box-computer", AnyView(NewBoxSheet().environment(localComputer).environment(computers))),
+                ("new-box-light", AnyView(NewBoxSheet().environment(localComputer).environment(computers).preferredColorScheme(.light))),
+                ("new-box-dark", AnyView(NewBoxSheet().environment(localComputer).environment(computers).preferredColorScheme(.dark))),
+                ("switch-box-light", AnyView(BoxChooser().environment(localComputer).environment(computers).preferredColorScheme(.light))),
+                ("switch-box-dark", AnyView(BoxChooser().environment(localComputer).environment(computers).preferredColorScheme(.dark))),
+                ("archived-sidebar", AnyView(archivedFixture.view.defaultAppStorage(settingsDefaults))),
+                ("bulk-purge", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionState.connectionID), completed: { _ in }).environment(archivedWorkspace))),
+                ("bulk-purge-light", AnyView(BulkPurgeSheet(request: .init(boxes: archives, connection: archivedWorkspace.connectionState.connectionID), completed: { _ in }).environment(archivedWorkspace).preferredColorScheme(.light))),
+                ("purge-light", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionState.connectionID)).environment(archivedWorkspace).preferredColorScheme(.light))),
+                ("purge-dark", AnyView(BoxActionSheet(request: .init(box: archives[0], action: .purge, connection: archivedWorkspace.connectionState.connectionID)).environment(archivedWorkspace).preferredColorScheme(.dark))),
+                ("stop-light", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionState.connectionID)).environment(workspace).preferredColorScheme(.light))),
+                ("stop-dark", AnyView(BoxActionSheet(request: .init(box: box, action: .stop, connection: workspace.connectionState.connectionID)).environment(workspace).preferredColorScheme(.dark))),
                 ("connections", AnyView(ConnectionSettings().environment(workspace).defaultAppStorage(settingsDefaults).frame(width: 640, height: 680))),
                 ("connection-editor", AnyView(ConnectionEditor(profile: nil, save: { _ in }))),
                 ("connection-edit", AnyView(ConnectionEditor(profile: .init(name: "Studio", endpoint: "discobox://d1-0000000-1111111-2222222-3333333-4444444-5555555-6666666-7777777?addr=192.0.2.10:12345"), save: { _ in }))),
-                ("sidebar", AnyView(WorkspaceView().environment(sidebarWorkspace).environment(WorkspaceCommands()))),
-                ("box-list", AnyView(List(workspace.visibleBoxes) { BoxRow(box: $0) }.listStyle(.sidebar).environment(workspace))),
-                ("archive", AnyView(BoxActionSheet(request: .init(box: box, action: .archive, connection: workspace.connectionID)).environment(workspace))),
-                ("purge", AnyView(BoxActionSheet(request: .init(box: box, action: .purge, connection: workspace.connectionID)).environment(workspace))),
+                ("sidebar", AnyView(sidebarFixture.view)),
+                ("box-list", AnyView(List(workspace.inventory.sandboxes.filter { !$0.isArchived }) { BoxRow(box: $0) }.listStyle(.sidebar).environment(workspace))),
+                ("archive", AnyView(BoxActionSheet(request: .init(box: box, action: .archive, connection: workspace.connectionState.connectionID)).environment(workspace))),
+                ("purge", AnyView(BoxActionSheet(request: .init(box: box, action: .purge, connection: workspace.connectionState.connectionID)).environment(workspace))),
                 ("approval", AnyView(ApprovalSheet(item: item).environment(workspace))),
                 ("approval-light", AnyView(ApprovalSheet(item: item).environment(workspace).preferredColorScheme(.light))),
                 ("new-box", AnyView(NewBoxSheet().environment(workspace))),
@@ -131,14 +142,15 @@ import UserNotifications
                 ("files", AnyView(FilesView().environment(workspace)))
             ]
             let upstreamPanels = try await UpstreamIntegrationSmoke.panels()
+            let welcome = Connections(polling: false)
             let auditPanels: [(String, AnyView)] = upstreamPanels + [
                 ("audit-tools", AnyView(ToolsSheet().environment(toolsWorkspace))),
                 ("audit-tools-advanced", AnyView(ToolsSheet(initiallyExpanded: true).environment(toolsWorkspace))),
                 ("audit-tools-empty", AnyView(ToolsSheet().environment(workspace))),
-                ("audit-welcome", AnyView(WelcomeView().environment(Workspace()).defaultAppStorage(settingsDefaults).frame(width: 1000, height: 800))),
+                ("audit-welcome", AnyView(ConnectedWorkspace(connections: welcome, runtimes: ConnectionRuntimes(), commands: WorkspaceCommands(defaults: settingsDefaults)).defaultAppStorage(settingsDefaults).frame(width: 1000, height: 800))),
                 ("audit-commands", AnyView(CommandsSheet().environment(WorkspaceCommands(defaults: settingsDefaults)))),
                 ("audit-tags", AnyView(TagFilterSheet(choices: ["team=platform", "priority=high"], selected: .constant(["team=platform"]), matchAny: .constant(false)))),
-                ("audit-usage-details", AnyView(HarnessUsageDetails().environment(computers).environment(localComputer.workspace))),
+                ("audit-usage-details", AnyView(HarnessUsageDetails().environment(computers).environment(localComputer))),
                 ("audit-inbox-multiple", AnyView(ApprovalInboxView(boxID: nil).environment(inboxWorkspace))),
                 ("audit-inbox-empty", AnyView(ApprovalInboxView(boxID: nil).environment(archivedWorkspace))),
                 ("audit-file-conflict", AnyView(FileConflictSheet(directory: "/workspace/source", count: 3, resolve: { _ in }))),
@@ -163,6 +175,7 @@ import UserNotifications
                 [(name + "-light", AnyView(panel.preferredColorScheme(.light))), (name + "-dark", AnyView(panel.preferredColorScheme(.dark)))]
             }
             for (name, panel) in panels + themedPanels {
+                print("FEATURE PANEL: \(name)"); fflush(stdout)
                 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
                 let view = NSHostingView(rootView: panel.environment(TerminalStore()).environment(ServiceForwards()).environment(DesktopWindows()))
                 window.contentView = view
@@ -189,8 +202,8 @@ import UserNotifications
             inboxWorkspace.disconnect()
             toolsWorkspace.disconnect()
             print("STUDIO_THEME_AUDIT_OK: \(auditPanels.count) additional dialog/settings surfaces checked in both Light and Dark")
-            try await workspace.answer(item, action: "approve", payload: .object(["grantTTLSeconds": .number(900)]))
-            guard workspace.approvals.isEmpty else { throw DiscoboxError("Answer did not clear fixture inbox") }
+            try await workspace.approvalStore.answer(item, action: "approve", payload: .object(["grantTTLSeconds": .number(900)]))
+            guard workspace.approvalStore.approvals.isEmpty else { throw DiscoboxError("Answer did not clear fixture inbox") }
             print("FEATURE_SMOKE_OK: pool resources, cache confirmation, box rows, lifecycle confirmations, approval, new-box preflight, tools and file panel layout; fixture answer clears inbox")
             fflush(stdout); exit(0)
         } catch { print("FEATURE_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
@@ -200,11 +213,11 @@ import UserNotifications
         try await ApprovalDurationSmoke.verify()
         // Construct SDK content/categories only. Never contact Notification
         // Center, request permissions, or post a real banner during smoke runs.
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: DemoClient(pendingRequests: true), label: "fixture", demo: true)
-        await workspace.refreshApprovals()
+        await workspace.approvalStore.refreshApprovals()
         let inbox = ApprovalNoticeInbox()
-        guard let notice = inbox.update(computerID: "https://private-host.example.invalid", connection: workspace.connectionID, items: workspace.approvals).added.first else {
+        guard let notice = inbox.update(computerID: "https://private-host.example.invalid", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).added.first else {
             throw DiscoboxError("Missing notification fixture")
         }
         let content = ApprovalNotifications.content(for: notice, computer: "Fixture computer", box: "Fixture box")
@@ -235,11 +248,11 @@ import UserNotifications
         let remote = try await computers.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { remoteClient }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
         defer { window.orderOut(nil); computers.disconnectAll(); defaults.removePersistentDomain(forName: suite) }
-        await local.workspace.refreshUsage(); await remote.workspace.refreshUsage()
-        let groups = UsageComputer.connected(computers, fallback: local.workspace)
+        await local.refreshUsage(); await remote.refreshUsage()
+        let groups = UsageComputer.connected(computers)
         guard groups.map(\.id) == [local.id, remote.id], groups[1].name == "Studio",
-              groups[0].workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12,
-              groups[1].workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 83 else {
+              groups[0].usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12,
+              groups[1].usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 83 else {
             throw DiscoboxError("Computer usage merged hosts with identical harness IDs")
         }
         let localReads = await localClient.usageReads, remoteReads = await remoteClient.usageReads
@@ -248,12 +261,12 @@ import UserNotifications
             let panel = VStack {
                 HarnessUsageSection()
                 HarnessUsageDetails()
-            }.environment(computers).environment(host.workspace).defaultAppStorage(defaults)
+            }.environment(computers).environment(host).defaultAppStorage(defaults)
             let view = NSHostingView(rootView: panel)
             window.contentView = view; window.orderFront(nil)
             try await Task.sleep(for: .milliseconds(100))
             view.layoutSubtreeIfNeeded()
-            guard UsageComputer.connected(computers, fallback: host.workspace).map(\.id) == groups.map(\.id), view.bounds.width > 0 else {
+            guard UsageComputer.connected(computers).map(\.id) == groups.map(\.id), view.bounds.width > 0 else {
                 throw DiscoboxError("Computer usage changed scope when selecting another host")
             }
         }
@@ -261,8 +274,8 @@ import UserNotifications
             throw DiscoboxError("Rendering usage summaries or Details started extra usage reads")
         }
         computers.disconnect(remote.id)
-        guard UsageComputer.connected(computers, fallback: local.workspace).map(\.id) == [local.id],
-              local.workspace.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12 else {
+        guard UsageComputer.connected(computers).map(\.id) == [local.id],
+              local.usage.snapshots["demo-harness"]?.windows.first?.usedPercent == 12 else {
             throw DiscoboxError("Usage disconnect affected the wrong computer")
         }
         print("COMPUTER_USAGE_SMOKE_OK: per-computer names and separate readings for identical harness IDs, selection-independent scope, no extra UI usage reads, disconnected-host cleanup")
@@ -275,7 +288,7 @@ import UserNotifications
         let computers = Connections(polling: false)
         let host = try await computers.connect(.thisComputer, demo: true) { DemoClient(pendingRequests: true) }
         defer { computers.disconnectAll() }
-        await host.workspace.refreshApprovals()
+        await host.approvalStore.refreshApprovals()
         for scenario in ["denied", "request-error", "delivery-error", "refused-grant"] {
             let service = NotificationPermissionFixture()
             switch scenario {
@@ -326,7 +339,7 @@ import UserNotifications
         let computers = Connections(polling: false)
         let host = try await computers.connect(.thisComputer, demo: true) { DemoClient(pendingRequests: true) }
         defer { computers.disconnectAll() }
-        await host.workspace.refreshApprovals()
+        await host.approvalStore.refreshApprovals()
         let firstService = NotificationPermissionFixture(), secondService = NotificationPermissionFixture()
         firstService.transientDeliveryError = true
         let first = ApprovalNotifications(service: firstService, defaults: defaults, retryDelay: .milliseconds(20))
@@ -452,3 +465,5 @@ private struct AppearanceProbeView: View {
     let probe: AppearanceProbe
     var body: some View { Color.clear.onChange(of: scheme, initial: true) { probe.scheme = scheme } }
 }
+
+#endif

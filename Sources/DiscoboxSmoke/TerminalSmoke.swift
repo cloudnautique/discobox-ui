@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import GhosttyKit
 import DiscoboxCore
@@ -5,11 +7,11 @@ import DiscoboxCore
 /// Explicit offline integration check, launched with --terminal-smoke. Only a
 /// synthetic PTY child is used; this path cannot use saved connection settings.
 @MainActor enum TerminalSmoke {
-    static func run(workspace: Workspace, store: TerminalStore) async {
+    static func run(workspace: ConnectionSession, store: TerminalStore) async {
         do {
-            guard workspace.isDemo, let project = workspace.projectID,
-                  let box = workspace.sandboxID, let exec = workspace.execID else { throw Failure("Demo selection missing") }
-            let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: "offline", project: project, box: box, exec: exec, demo: true)
+            guard workspace.connectionState.isDemo, let project = workspace.connectionState.projectID,
+                  let box = workspace.selection.sandboxID, let exec = workspace.selection.execID else { throw Failure("Demo selection missing") }
+            let identity = TerminalIdentity(connection: workspace.connectionState.connectionID, endpoint: "offline", project: project, box: box, exec: exec, demo: true)
             let session = store.session(identity)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.title = "Discobox offline terminal check"
@@ -71,7 +73,7 @@ import DiscoboxCore
             guard ghostty_surface_has_selection(surface) else { throw Failure("Selection unavailable") }
             guard store.session(identity) === session else { throw Failure("Session identity was not retained") }
             guard session.view.layer != nil else { throw Failure("Renderer layer missing") }
-            guard let inventory = workspace.terminalInventory else { throw Failure("Missing live inventory") }
+            guard let inventory = workspace.selection.terminalInventory else { throw Failure("Missing live inventory") }
             let removedIdentity = TerminalIdentity(connection: identity.connection, endpoint: "offline", project: project, box: box, exec: "removed-fixture", demo: true)
             let otherIdentity = TerminalIdentity(connection: identity.connection, endpoint: "offline", project: project, box: "demo-api", exec: "other-fixture", demo: true)
             let removed = store.session(removedIdentity)
@@ -82,7 +84,7 @@ import DiscoboxCore
                   session.view.surface != nil, store.session(identity) === session else {
                 throw Failure("Inventory cleanup removed a valid surface or kept an obsolete surface")
             }
-            store.retainRunningBoxes(workspace.sandboxes, connection: identity.connection)
+            store.retainRunningBoxes(workspace.inventory.sandboxes, connection: identity.connection)
             guard other.view.surface == nil, session.view.surface != nil else { throw Failure("Stopped-box cleanup affected the live box") }
             print("SMOKE: obsolete surfaces freed; valid and other-box sessions preserved")
             "\u{3}".withCString { ghostty_surface_text(surface, $0, 1) }
@@ -141,3 +143,5 @@ import DiscoboxCore
         init(_ description: String) { self.description = description }
     }
 }
+
+#endif

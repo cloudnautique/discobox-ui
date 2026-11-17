@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -10,9 +12,9 @@ import DiscoboxCore
         catch { print("FILES_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
     static func verify() async throws {
-        let client = FilePromiseSmokeClient(), workspace = Workspace()
+        let client = FilePromiseSmokeClient(), workspace = ConnectionSession()
         await workspace.connect(client: client, label: "Files fixture", demo: true)
-        await workspace.selectBox("demo-ui")
+        await workspace.selection.selectBox("demo-ui")
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         let view = NSHostingView(rootView: FilesView().environment(workspace))
         window.contentView = view; window.orderFront(nil)
@@ -38,7 +40,7 @@ import DiscoboxCore
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: destination) }
         // Switching away must not retarget an accepted Finder drop.
-        await workspace.selectBox("demo-tests")
+        await workspace.selection.selectBox("demo-tests")
         for provider in providers {
             guard let writer = provider.delegate as? RemoteFilePromiseWriter, provider.userInfo as? RemoteFilePromiseWriter === writer else { throw DiscoboxError("Promise delegate not retained") }
             let name = writer.filePromiseProvider(provider, fileNameForType: provider.fileType)
@@ -90,3 +92,5 @@ private actor FilePromiseSmokeClient: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

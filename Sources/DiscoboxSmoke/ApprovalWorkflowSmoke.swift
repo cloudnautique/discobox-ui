@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -11,10 +13,10 @@ import DiscoboxCore
             try await ApprovalQueueSmoke.verify()
             try await ModernApprovalSmoke.verify()
             try await DialogReceiptSmoke.verify()
-            let workspace = Workspace()
+            let workspace = ConnectionSession()
             await workspace.connect(client: DemoClient(pendingRequests: true), label: "Offline workflow", demo: true)
-            await workspace.refreshApprovals()
-            guard let legacy = workspace.approvals.first else { throw DiscoboxError("Legacy fixture missing") }
+            await workspace.approvalStore.refreshApprovals()
+            guard let legacy = workspace.approvalStore.approvals.first else { throw DiscoboxError("Legacy fixture missing") }
             var panels: [(String, AnyView)] = [("legacy-approval", AnyView(ApprovalSheet(item: legacy).environment(workspace)))]
             panels += try await UpstreamIntegrationSmoke.panels()
             let settingsSuite = "ai.discobox.smoke.dropdown-settings." + UUID().uuidString
@@ -24,7 +26,7 @@ import DiscoboxCore
             panels.append(("settings-keybindings", AnyView(KeybindingSettings().environment(WorkspaceCommands(defaults: defaults)).frame(width: 640, height: 680))))
             panels.append(("settings-connection-editor", AnyView(ConnectionEditor(profile: nil, save: { _ in }).defaultAppStorage(defaults))))
             let secret: JSONValue = .object(["id": .string("fixture-secret"), "name": .string("Project API token"), "maxBindingTTLSeconds": .number(3600), "routes": .array([.object(["hosts": .array([.string("api.example.test")])])])])
-            panels.append(("credential-shared-limits", AnyView(CredentialDetailsView(request: .init(secret: secret, connection: workspace.connectionID), saved: { _ in }).environment(workspace))))
+            panels.append(("credential-shared-limits", AnyView(CredentialDetailsView(request: .init(secret: secret, connection: workspace.connectionState.connectionID), saved: { _ in }).environment(workspace))))
             for mode in [DiscoboxAppearance.Mode.light, .dark] {
                 DiscoboxAppearance.apply(mode)
                 for (name, panel) in panels {
@@ -74,3 +76,5 @@ import DiscoboxCore
     }
     private static func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
 }
+
+#endif

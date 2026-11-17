@@ -45,20 +45,18 @@ private actor HostFixture: DiscoboxClient {
     let localClient = HostFixture(), remoteClient = HostFixture()
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
     let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
-    local.workspace.filter = .archived
-    remote.workspace.filter = .archived
-    remote.workspace.searchText = "old query"
+    connections.browser.filter = .archived
+    connections.browser.searchText = "old query"
     connections.browser.filter = .archived
     connections.activate(local.id)
     try await connections.createBox(on: remote.id, harness: "demo-harness", repository: "", prompt: "Fixture task")
     #expect(connections.active === remote)
-    #expect(remote.workspace.filter == .archived)
-    #expect(remote.workspace.searchText == "old query")
-    #expect(remote.workspace.selectedBox?.displayName == "New demo box")
-    #expect(!remote.workspace.visibleBoxes.contains { $0.id == remote.workspace.sandboxID })
     #expect(connections.browser.filter == .archived)
-    #expect(connections.creationPins.contains { $0.id.connection == remote.id && $0.id.box == remote.workspace.sandboxID })
-    #expect(local.workspace.filter == .archived)
+    #expect(connections.browser.searchText == "old query")
+    #expect(remote.selection.selectedBox?.displayName == "New demo box")
+    #expect(!connections.browserBoxes.contains { $0.location.box == remote.selection.sandboxID })
+    #expect(connections.browser.filter == .archived)
+    #expect(connections.creationPins.contains { $0.id.connection == remote.id && $0.id.box == remote.selection.sandboxID })
     #expect(await remoteClient.count(.createBox) == 1)
     #expect(await localClient.count(.createBox) == 0)
     connections.disconnectAll()
@@ -68,16 +66,16 @@ private actor HostFixture: DiscoboxClient {
     let connections = Connections(polling: false)
     let local = try await connections.connect(.thisComputer, demo: true) { HostFixture() }
     let remote = try await connections.connect(studioProfile, demo: true) { HostFixture(failCreation: true) }
-    remote.workspace.filter = .archived
-    remote.workspace.searchText = "old query"
+    connections.browser.filter = .archived
+    connections.browser.searchText = "old query"
     connections.activate(local.id)
     do {
         try await connections.createBox(on: remote.id, harness: "demo-harness", repository: "")
         Issue.record("Creation should fail")
     } catch { }
     #expect(connections.active === local)
-    #expect(remote.workspace.filter == .archived)
-    #expect(remote.workspace.searchText == "old query")
+    #expect(connections.browser.filter == .archived)
+    #expect(connections.browser.searchText == "old query")
     connections.disconnectAll()
 }
 private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https://studio.example.invalid")
@@ -86,16 +84,16 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     let connections = Connections(polling: false)
     let localClient = HostFixture(), remoteClient = HostFixture()
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
-    await local.workspace.selectBox("demo-ui")
-    let localExec = local.workspace.execID
-    let generation = local.workspace.connectionID
+    await local.selection.selectBox("demo-ui")
+    let localExec = local.selection.execID
+    let generation = local.connectionState.connectionID
     let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
     await connections.selectBox(.init(connection: remote.id, box: "demo-api"))
-    #expect(local.workspace.isConnected && remote.workspace.isConnected)
-    #expect(local.workspace.sandboxID == "demo-ui")
-    #expect(remote.workspace.sandboxID == "demo-api")
-    #expect(local.workspace.execID == localExec)
-    #expect(local.workspace.connectionID == generation)
+    #expect(local.connectionState.isConnected && remote.connectionState.isConnected)
+    #expect(local.selection.sandboxID == "demo-ui")
+    #expect(remote.selection.sandboxID == "demo-api")
+    #expect(local.selection.execID == localExec)
+    #expect(local.connectionState.connectionID == generation)
     #expect(localClient.lifetime.closes == 0)
     #expect(remoteClient.lifetime.closes == 0)
     let sameIDs = connections.switcherBoxes.filter { $0.box.id == "demo-ui" }
@@ -104,7 +102,7 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     #expect(sameIDs.filter { $0.matches("Studio") }.count == 1)
     connections.activate(local.id)
     #expect(connections.active === local)
-    #expect(local.workspace.execID == localExec)
+    #expect(local.selection.execID == localExec)
     connections.disconnectAll()
 }
 
@@ -114,15 +112,15 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
     let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
     connections.disconnect(remote.id)
-    #expect(!remote.workspace.isConnected)
-    #expect(local.workspace.isConnected)
+    #expect(!remote.connectionState.isConnected)
+    #expect(local.connectionState.isConnected)
     #expect(remoteClient.lifetime.closes == 1)
     #expect(localClient.lifetime.closes == 0)
     connections.activate(local.id)
     let denied = HostFixture(fail: true)
     let failed = try await connections.connect(studioProfile, demo: true) { denied }
-    #expect(!failed.workspace.isConnected)
-    #expect(failed.workspace.connectionError != nil)
+    #expect(!failed.connectionState.isConnected)
+    #expect(failed.connectionState.connectionError != nil)
     #expect(connections.active === local)
     #expect(localClient.lifetime.closes == 0)
     connections.disconnectAll()
@@ -134,18 +132,18 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
     let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
     await connections.selectBox(.init(connection: local.id, box: "demo-ui"))
-    await connections.active.workspace.openShell()
+    await connections.active.selection.openShell()
     #expect(await localClient.count(.newShell) == 1)
     #expect(await remoteClient.count(.newShell) == 0)
     await connections.selectBox(.init(connection: remote.id, box: "demo-ui"))
-    await connections.active.workspace.openShell()
+    await connections.active.selection.openShell()
     #expect(await remoteClient.count(.newShell) == 1)
     #expect(await localClient.count(.newShell) == 1)
-    let localCount = local.workspace.sandboxes.count
-    try await remote.workspace.performBoxAction(.archive, boxID: "demo-api", connection: remote.workspace.connectionID)
-    try await remote.workspace.performBoxAction(.purge, boxID: "demo-api", connection: remote.workspace.connectionID)
-    #expect(local.workspace.sandboxes.count == localCount)
-    #expect(local.workspace.sandboxes.contains { $0.id == "demo-api" })
+    let localCount = local.inventory.sandboxes.count
+    try await remote.commands.performBoxAction(.archive, boxID: "demo-api", connection: remote.connectionState.connectionID)
+    try await remote.commands.performBoxAction(.purge, boxID: "demo-api", connection: remote.connectionState.connectionID)
+    #expect(local.inventory.sandboxes.count == localCount)
+    #expect(local.inventory.sandboxes.contains { $0.id == "demo-api" })
     connections.disconnectAll()
 }
 
@@ -153,14 +151,14 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     let connections = Connections(polling: false)
     let client = HostFixture()
     let local = try await connections.connect(.thisComputer, demo: true) { client }
-    let generation = local.workspace.connectionID
+    let generation = local.connectionState.connectionID
     let again = try await connections.connect(.thisComputer, demo: true) { throw DiscoboxError("Must not create another client") }
     #expect(again === local)
-    #expect(again.workspace.connectionID == generation)
+    #expect(again.connectionState.connectionID == generation)
     #expect(client.lifetime.closes == 0)
     connections.syncProfiles([.init(name: "Renamed Studio", endpoint: studioProfile.endpoint)])
     #expect(connections.session(studioProfile.id)?.profile.displayName == "Renamed Studio")
-    #expect(local.workspace.isConnected)
+    #expect(local.connectionState.isConnected)
     connections.disconnectAll()
 }
 
@@ -169,21 +167,21 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     let localClient = HostFixture(pending: true), remoteClient = HostFixture(pending: true)
     let local = try await connections.connect(.thisComputer, demo: true) { localClient }
     let remote = try await connections.connect(studioProfile, demo: true) { remoteClient }
-    await local.workspace.refreshApprovals()
-    await remote.workspace.refreshApprovals()
-    let request = try #require(remote.workspace.approvals.first)
-    #expect(local.workspace.approvals.first?.id == request.id)
-    let target = remote.workspace
-    let originalLocalBoxes = local.workspace.sandboxes.count
+    await local.approvalStore.refreshApprovals()
+    await remote.approvalStore.refreshApprovals()
+    let request = try #require(remote.approvalStore.approvals.first)
+    #expect(local.approvalStore.approvals.first?.id == request.id)
+    let target = remote
+    let originalLocalBoxes = local.inventory.sandboxes.count
     connections.activate(local.id)
-    try await target.createBox(harness: "demo-harness", repository: "", prompt: "Fixture task")
+    try await target.commands.createBox(harness: "demo-harness", repository: "", prompt: "Fixture task")
     #expect(await remoteClient.count(.createBox) == 1)
     #expect(await localClient.count(.createBox) == 0)
-    #expect(local.workspace.sandboxes.count == originalLocalBoxes)
-    try await target.answer(request, action: "deny", payload: .object([:]))
+    #expect(local.inventory.sandboxes.count == originalLocalBoxes)
+    try await target.approvalStore.answer(request, action: "deny", payload: .object([:]))
     #expect(await remoteClient.count(.answer) == 1)
     #expect(await localClient.count(.answer) == 0)
-    #expect(local.workspace.approvals.count == 1)
-    #expect(remote.workspace.approvals.isEmpty)
+    #expect(local.approvalStore.approvals.count == 1)
+    #expect(remote.approvalStore.approvals.isEmpty)
     connections.disconnectAll()
 }

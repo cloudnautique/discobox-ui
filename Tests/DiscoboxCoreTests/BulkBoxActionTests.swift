@@ -20,40 +20,40 @@ private actor BulkActionFixture: DiscoboxClient {
 }
 
 @MainActor @Test func bulkLifecycleUsesCapturedManifestAndReportsPartialFailures() async throws {
-    let client = BulkActionFixture(failing: "demo-tests"), workspace = Workspace()
+    let client = BulkActionFixture(failing: "demo-tests"), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
     await client.reset()
     var receipts: [String] = []
-    let result = try await workspace.performBoxActions(.archive, boxIDs: ["demo-api", "demo-tests", "demo-api"], connection: workspace.connectionID,
+    let result = try await workspace.commands.performBoxActions(.archive, boxIDs: ["demo-api", "demo-tests", "demo-api"], connection: workspace.connectionState.connectionID,
         onAccepted: { receipts.append($0) })
     #expect(result.accepted == ["demo-api"] && receipts == ["demo-api"])
     #expect(result.failures.map(\.boxID) == ["demo-tests"])
     #expect(await client.mutations == ["demo-api", "demo-tests"])
     #expect(await client.reads == 1)
-    #expect(workspace.sandboxes.first { $0.id == "demo-api" }?.isArchived == true)
+    #expect(workspace.inventory.sandboxes.first { $0.id == "demo-api" }?.isArchived == true)
     workspace.disconnect()
 }
 
 @MainActor @Test func bulkLifecycleRejectsMixedAvailabilityBeforeAnyWrite() async throws {
-    let client = BulkActionFixture(), workspace = Workspace()
+    let client = BulkActionFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
     await client.reset()
     await #expect(throws: DiscoboxError.self) {
-        _ = try await workspace.performBoxActions(.stop, boxIDs: ["demo-ui", "demo-api"], connection: workspace.connectionID)
+        _ = try await workspace.commands.performBoxActions(.stop, boxIDs: ["demo-ui", "demo-api"], connection: workspace.connectionState.connectionID)
     }
     await #expect(throws: DiscoboxError.self) {
-        _ = try await workspace.performBoxActions(.rename, boxIDs: ["demo-ui"], connection: workspace.connectionID)
+        _ = try await workspace.commands.performBoxActions(.rename, boxIDs: ["demo-ui"], connection: workspace.connectionState.connectionID)
     }
     #expect(await client.mutations.isEmpty)
     workspace.disconnect()
 }
 
 @MainActor @Test func bulkLifecycleSupportsStartStopArchiveRestoreUpgradeAndRepair() async throws {
-    let client = BulkActionFixture(), workspace = Workspace()
+    let client = BulkActionFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
     for action: BoxAction in [.repair, .stop, .archive, .unarchive, .start, .upgrade] {
         await client.reset()
-        let result = try await workspace.performBoxActions(action, boxIDs: ["demo-api", "demo-tests"], connection: workspace.connectionID)
+        let result = try await workspace.commands.performBoxActions(action, boxIDs: ["demo-api", "demo-tests"], connection: workspace.connectionState.connectionID)
         #expect(result.accepted == ["demo-api", "demo-tests"])
         #expect(result.failures.isEmpty)
         #expect(await client.mutations == ["demo-api", "demo-tests"])
@@ -63,11 +63,11 @@ private actor BulkActionFixture: DiscoboxClient {
 }
 
 @MainActor @Test func bulkLifecycleStopsAfterReconnectWithoutReportingAnUnconfirmedSuccess() async throws {
-    let client = BulkActionFixture(), workspace = Workspace()
+    let client = BulkActionFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture", demo: true)
     await client.reset()
-    let generation = workspace.connectionID
-    let result = try await workspace.performBoxActions(.archive, boxIDs: ["demo-api", "demo-tests"], connection: generation,
+    let generation = workspace.connectionState.connectionID
+    let result = try await workspace.commands.performBoxActions(.archive, boxIDs: ["demo-api", "demo-tests"], connection: generation,
         onAccepted: { _ in workspace.disconnect() })
     #expect(result.accepted == ["demo-api"])
     #expect(result.failures.map(\.boxID) == ["demo-tests"])

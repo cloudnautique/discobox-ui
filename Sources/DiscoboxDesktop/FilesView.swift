@@ -3,7 +3,7 @@ import AppKit
 import DiscoboxCore
 
 struct FilesView: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @State private var browser: FileBrowser?
     @State private var failure: String?
     @State private var selection: Set<String> = []
@@ -15,9 +15,9 @@ struct FilesView: View {
             else { ProgressView("Opening source folder…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .background(DiscoboxAppearance.canvas)
-        .task(id: workspace.connectionID) {
+        .task(id: workspace.connectionState.connectionID) {
             do {
-                let model = try FileBrowser(workspace: workspace)
+                let model = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
                 browser = model
                 await model.load()
             } catch { failure = error.localizedDescription }

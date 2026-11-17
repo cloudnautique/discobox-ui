@@ -9,7 +9,7 @@ import (
 )
 
 func TestPoolProxyPatchIsScopedAndNullResetsWithoutRestart(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	req := request{Operation: "updatePoolProxy", ProjectID: "p", PoolID: "pool", Payload: []byte(`{"proxy":null,"expectedProxy":{"mode":"direct"}}`)}
 	if _, err := b.execute(t.Context(), req); err == nil {
 		t.Fatal("unauthorized network update")
@@ -51,11 +51,11 @@ func TestPoolProxyPatchIsScopedAndNullResetsWithoutRestart(t *testing.T) {
 
 func TestConfiguredDefaultDoesNotOverrideExplicitEndpoints(t *testing.T) {
 	t.Setenv("DISCOBOX_SERVER_ADDRESS", "http://127.0.0.1:12345")
-	b, err := newBridge("unix://", false)
+	b, err := newBridge("unix://")
 	if err != nil || b.base != "http://127.0.0.1:12345" {
 		t.Fatalf("default %v %v", b, err)
 	}
-	b, err = newBridge("https://fixture.invalid", false)
+	b, err = newBridge("https://fixture.invalid")
 	if err != nil || b.base != "https://fixture.invalid" {
 		t.Fatalf("explicit %v %v", b, err)
 	}
@@ -64,11 +64,11 @@ func TestConfiguredDefaultDoesNotOverrideExplicitEndpoints(t *testing.T) {
 		t.Fatalf("setup doesn't share resolver %v %v", args, err)
 	}
 	t.Setenv("DISCOBOX_SERVER_ADDRESS", "unix://")
-	if _, err = newBridge("unix://", false); err == nil {
+	if _, err = newBridge("unix://"); err == nil {
 		t.Fatal("recursive default allowed")
 	}
 	// A pinned IPC endpoint is independent of the broken shorthand default.
-	if _, err = newBridge("unix:///tmp/fixture%20socket.sock", false); err != nil {
+	if _, err = newBridge("unix:///tmp/fixture%20socket.sock"); err != nil {
 		t.Fatal(err)
 	}
 }

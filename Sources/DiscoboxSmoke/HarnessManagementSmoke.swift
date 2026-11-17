@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -7,20 +9,19 @@ import DiscoboxCore
     static func run() async {
         do {
             let client = HarnessManagementFixture()
-            let workspace = Workspace()
+            let workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Harness fixture", demo: true)
             let harness = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"demo-harness","name":"Subscription agent"}"#.utf8))
-            let model = HarnessManagement(workspace: workspace, harnessID: harness.id)
+            let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: harness.id)
             await model.load(); model.selectBox("demo-ui")
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-            window.contentView = NSHostingView(rootView: HarnessManagementView(harness: harness, manager: model, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))
+            window.contentView = NSHostingView(rootView: HarnessManagementView(harness: harness, manager: model, catalog: workspace.catalog, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))
             window.makeKeyAndOrderFront(nil)
             try await Task.sleep(for: .milliseconds(350))
             try await wait { saveButton(window)?.isEnabled == true }
             saveButton(window)!.performClick(nil)
             try await wait { model.review != .null && !model.busy }
-            try await wait { saveButton(window) != nil && reviewButton(window) != nil }
-            guard saveButton(window)?.isEnabled == false else { throw DiscoboxError("Save enabled before review") }
+            try await wait { saveButton(window)?.isEnabled == false && reviewButton(window) != nil }
             try click(reviewButton(window)!, window: window)
             try await wait { saveButton(window)?.isEnabled == true }
             window.setContentSize(NSSize(width: 900, height: 760))
@@ -99,3 +100,5 @@ private actor HarnessManagementFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

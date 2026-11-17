@@ -80,14 +80,14 @@ struct WorkspaceInspector: View {
 
 struct ServiceRail: View {
     let box: Sandbox
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(ServiceForwards.self) private var forwards
     @Environment(DesktopWindows.self) private var desktops
     private var session: ServiceForwardSession? {
         live ? forwards.existingSession(box: box.id, workspace: workspace) : nil
     }
-    private var live: Bool { workspace.sandboxID == box.id && box.isRunning && !workspace.pendingBoxActions.contains(box.id) }
+    private var live: Bool { workspace.selection.sandboxID == box.id && box.isRunning && !workspace.pending.pendingBoxActions.contains(box.id) }
     var body: some View {
         HStack(spacing: 0) {
             Divider()
@@ -106,7 +106,7 @@ struct ServiceRail: View {
                                     if !port.isDesktop { Text(String(port.local)).font(.system(size: 9, design: .monospaced)) }
                                 }.frame(width: 44, height: 36).contentShape(Rectangle())
                             }
-                            .disabled(!live || workspace.isDemo)
+                            .disabled(!live || workspace.connectionState.isDemo)
                             .help("\(port.serviceName.isEmpty ? "Port \(port.port)" : port.serviceName)\nBox port: \(port.port) (\(port.protocol.uppercased()))\nOn this computer: \(port.address)")
                             .accessibilityLabel(port.isDesktop ? "Open desktop" : "Open \(port.serviceName), Mac port \(port.local), box port \(port.port)")
                             .contextMenu {
@@ -124,7 +124,7 @@ struct ServiceRail: View {
             }.frame(width: 52)
         }.background(DiscoboxAppearance.chrome)
         .buttonStyle(.borderless)
-        .task(id: "\(workspace.connectionID)-\(workspace.projectID ?? "")-\(box.id)-\(live)") {
+        .task(id: "\(workspace.connectionState.connectionID)-\(workspace.connectionState.projectID ?? "")-\(box.id)-\(live)") {
             if live { _ = forwards.session(box: box.id, workspace: workspace) }
         }
     }
@@ -133,7 +133,7 @@ struct ServiceRail: View {
         NSPasteboard.general.setString(port.browserURL?.absoluteString ?? port.address, forType: .string)
     }
     private func open(_ port: ServicePort, scheme: String? = nil) {
-        guard live, !workspace.isDemo else { return }
+        guard live, !workspace.connectionState.isDemo else { return }
         guard let url = scheme.flatMap({ port.browserURL(as: $0) }) ?? port.browserURL ?? port.browserURL(as: "http") else {
             copy(port); return
         }

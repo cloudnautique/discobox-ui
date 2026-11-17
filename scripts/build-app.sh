@@ -11,7 +11,7 @@ fi
 python3 scripts/generate-brand.py --check
 # Keep this local artifact independent of dsymutil's external cache writes.
 # Debug builds (including tests and Xcode runs) retain their normal symbols.
-swift build --disable-sandbox --cache-path .build/package-cache --configuration release -debug-info-format none
+swift build --product DiscoboxDesktop --disable-sandbox --cache-path .build/package-cache --configuration release -debug-info-format none
 (
     cd Companion
     go build -tags iroh_nolibs -ldflags "-X main.diagnosticBuild=$(git describe --always --dirty --exclude "*") -X main.diagnosticUpstream=$(git -C ../discobox rev-parse --short HEAD)" -trimpath -o ../.build/discobox-desktop-bridge .

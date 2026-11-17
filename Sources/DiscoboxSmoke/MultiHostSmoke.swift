@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -16,11 +18,11 @@ import GhosttyKit
         defer { hub.disconnectAll(); resources.closeAll(); defaults.removePersistentDomain(forName: suite) }
         do {
             let local = try await hub.connect(.thisComputer, demo: true) { DemoClient() }
-            await local.workspace.selectBox("demo-ui")
-            try await local.workspace.closeShell("shell-1")
+            await local.selection.selectBox("demo-ui")
+            try await local.selection.closeShell("shell-1")
             let studio = try await hub.connect(.init(name: "Studio", endpoint: "https://studio.example.invalid"), demo: true) { DemoClient() }
-            await studio.workspace.selectBox("demo-ui")
-            try await studio.workspace.closeShell("shell-1")
+            await studio.selection.selectBox("demo-ui")
+            try await studio.selection.closeShell("shell-1")
             hub.activate(local.id)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1320, height: 850), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.contentView = NSHostingView(rootView: ConnectedWorkspace(connections: hub, runtimes: resources, commands: commands).defaultAppStorage(defaults))
@@ -30,7 +32,7 @@ import GhosttyKit
             try await wait { descendants(window.contentView!).contains { $0 is NSTableView } }
             let sidebarTable = descendants(window.contentView!).compactMap { $0 as? NSTableView }.first!
             func identity(_ host: ConnectionSession) -> TerminalIdentity {
-                TerminalIdentity(connection: host.workspace.connectionID, endpoint: host.workspace.transportEndpoint, project: host.workspace.projectID!, box: "demo-ui", exec: host.workspace.execID!, demo: true)
+                TerminalIdentity(connection: host.connectionState.connectionID, endpoint: host.connectionState.transportEndpoint, project: host.connectionState.projectID!, box: "demo-ui", exec: host.selection.execID!, demo: true)
             }
             let localID = identity(local)
             let localTerminal = resources.runtime(local.id).terminals.session(localID)
@@ -67,12 +69,12 @@ import GhosttyKit
             }
             guard localTerminal !== remoteTerminal, localTerminal.view.surface != nil else { throw DiscoboxError("Host switch replaced the retained local terminal") }
             commands.perform(.newShell)
-            try await wait { studio.workspace.execs.contains(where: \.isShell) }
-            guard !local.workspace.execs.contains(where: \.isShell) else { throw DiscoboxError("Remote shell command reached the local server") }
+            try await wait { studio.selection.execs.contains(where: \.isShell) }
+            guard !local.selection.execs.contains(where: \.isShell) else { throw DiscoboxError("Remote shell command reached the local server") }
             hub.activate(local.id)
             do { try await wait { localTerminal.view.window === window } }
             catch {
-                print("RETURN DEBUG: active=\(hub.activeID) localBox=\(local.workspace.sandboxID ?? "nil") exec=\(local.workspace.execID ?? "nil") live=\(local.workspace.hasLiveTerminal) surface=\(localTerminal.view.surface != nil) ended=\(localTerminal.ended) parent=\(String(describing: localTerminal.view.superview)) localWindow=\(String(describing: localTerminal.view.window))")
+                print("RETURN DEBUG: active=\(hub.activeID) localBox=\(local.selection.sandboxID ?? "nil") exec=\(local.selection.execID ?? "nil") live=\(local.selection.hasLiveTerminal) surface=\(localTerminal.view.surface != nil) ended=\(localTerminal.ended) parent=\(String(describing: localTerminal.view.superview)) localWindow=\(String(describing: localTerminal.view.window))")
                 print("RETURN DEBUG: mounted terminals=\(descendants(window.contentView!).compactMap { $0 as? GhosttyTerminalView }.map { "surface=\($0.surface != nil) sameLocal=\($0 === localTerminal.view)" })")
                 print("RETURN DEBUG: containers=\(descendants(window.contentView!).filter { String(describing: type(of: $0)).contains("TerminalContainer") }.map { "\(type(of: $0)) children=\($0.subviews.count)" }) layout=\(commands.currentLayout?.selected ?? "nil") split=\(commands.currentLayout?.isSplit ?? false) frame=\(window.contentView!.frame)")
                 throw error
@@ -86,8 +88,6 @@ import GhosttyKit
             // the actual New Box sheet. Success must reveal the remote box.
             hub.browser.filter = .archived
             hub.browser.searchText = "does not match the new box"
-            local.workspace.filter = .archived
-            studio.workspace.filter = .archived
             try await Task.sleep(for: .milliseconds(150))
             commands.performAppShortcut(.newBox)
             try await wait { window.attachedSheet?.contentView != nil }
@@ -96,7 +96,7 @@ import GhosttyKit
             let computer = descendants(creation.contentView!).compactMap { $0 as? NSPopUpButton }.first { $0.itemTitles.contains("Studio") }!
             let studioIndex = computer.indexOfItem(withTitle: "Studio")
             computer.menu?.performActionForItem(at: studioIndex)
-            try await wait { computer.titleOfSelectedItem == "Studio" && !studio.workspace.cachedHarnesses.isEmpty }
+            try await wait { computer.titleOfSelectedItem == "Studio" && !studio.catalog.cachedHarnesses.isEmpty }
             func createButton() -> NSButton? {
                 // SwiftUI hosts these button labels instead of NSButton.title.
                 descendants(creation.contentView!).compactMap { $0 as? NSButton }.first { $0.cell === creation.defaultButtonCell && $0.isEnabled }
@@ -104,27 +104,26 @@ import GhosttyKit
             try await wait { createButton() != nil }
             let create = createButton()!
             create.performClick(nil)
-            do { try await wait { window.attachedSheet == nil && hub.activeID == studio.id && studio.workspace.selectedBox?.displayName == "New demo box" } }
+            do { try await wait { window.attachedSheet == nil && hub.activeID == studio.id && studio.selection.selectedBox?.displayName == "New demo box" } }
             catch {
-                print("CREATE DEBUG: sheet=\(window.attachedSheet != nil) activeRemote=\(hub.activeID == studio.id) remoteSelection=\(studio.workspace.sandboxID ?? "nil") remoteNew=\(studio.workspace.sandboxes.filter { $0.displayName == "New demo box" }.count) localNew=\(local.workspace.sandboxes.filter { $0.displayName == "New demo box" }.count) filters=\(local.workspace.filter),\(studio.workspace.filter)")
+                print("CREATE DEBUG: sheet=\(window.attachedSheet != nil) activeRemote=\(hub.activeID == studio.id) remoteSelection=\(studio.selection.sandboxID ?? "nil") remoteNew=\(studio.inventory.sandboxes.filter { $0.displayName == "New demo box" }.count) localNew=\(local.inventory.sandboxes.filter { $0.displayName == "New demo box" }.count) filter=\(hub.browser.filter)")
                 throw error
             }
             try await Task.sleep(for: .milliseconds(300))
-            guard hub.activeID == studio.id, studio.workspace.filter == .archived, local.workspace.filter == .archived,
+            guard hub.activeID == studio.id,
                   hub.browser.filter == .archived, hub.browser.searchText == "does not match the new box",
-                  hub.creationPins.contains(where: { $0.id.connection == studio.id && $0.id.box == studio.workspace.sandboxID }) else {
+                  hub.creationPins.contains(where: { $0.id.connection == studio.id && $0.id.box == studio.selection.sandboxID }) else {
                 throw DiscoboxError("Remote creation changed filters or lost the new box reminder")
             }
-            guard let newBox = studio.workspace.sandboxID, let newExec = studio.workspace.execID else { throw DiscoboxError("Created workspace has no agent fixture") }
-            let newIdentity = TerminalIdentity(connection: studio.workspace.connectionID, endpoint: studio.workspace.transportEndpoint,
-                                               project: studio.workspace.projectID!, box: newBox, exec: newExec, demo: true)
+            guard let newBox = studio.selection.sandboxID, let newExec = studio.selection.execID else { throw DiscoboxError("Created workspace has no agent fixture") }
+            let newIdentity = TerminalIdentity(connection: studio.connectionState.connectionID, endpoint: studio.connectionState.transportEndpoint,
+                                               project: studio.connectionState.projectID!, box: newBox, exec: newExec, demo: true)
             let createdTerminal = resources.runtime(studio.id).terminals.session(newIdentity)
             try await wait { createdTerminal.view.window === window }
             await hub.revealCreatedBox(.init(connection: studio.id, box: newBox))
             guard hub.browser.filter == .running, hub.browser.searchText.isEmpty, hub.creationPins.isEmpty else {
                 throw DiscoboxError("Reveal did not move the created box into the filtered list")
             }
-            local.workspace.filter = .all
             await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
             try await wait { localTerminal.view.window === window }
             // Opening a stopped remote box asks first, then starts only that
@@ -138,18 +137,18 @@ import GhosttyKit
             stoppedSearch.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: stoppedSearch))
             _ = stoppedSearch.delegate?.control?(stoppedSearch, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
             try await wait { stoppedChooser.defaultButtonCell != nil && descendants(stoppedChooser.contentView!).compactMap { $0 as? NSButton }.contains { $0.cell === stoppedChooser.defaultButtonCell && $0.isEnabled } }
-            guard hub.activeID == local.id, studio.workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw DiscoboxError("Stopped-box prompt changed computer or started without consent") }
+            guard hub.activeID == local.id, studio.inventory.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false else { throw DiscoboxError("Stopped-box prompt changed computer or started without consent") }
             let start = descendants(stoppedChooser.contentView!).compactMap { $0 as? NSButton }.first { $0.cell === stoppedChooser.defaultButtonCell && $0.isEnabled }!
             start.performClick(nil)
-            try await wait { window.attachedSheet == nil && hub.activeID == studio.id && studio.workspace.sandboxID == "demo-api" && studio.workspace.hasLiveTerminal }
-            guard local.workspace.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false, hub.browser.filter == .running else { throw DiscoboxError("Start & Open targeted the wrong computer or changed filters") }
+            try await wait { window.attachedSheet == nil && hub.activeID == studio.id && studio.selection.sandboxID == "demo-api" && studio.selection.hasLiveTerminal }
+            guard local.inventory.sandboxes.first(where: { $0.id == "demo-api" })?.isRunning == false, hub.browser.filter == .running else { throw DiscoboxError("Start & Open targeted the wrong computer or changed filters") }
             await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
             try await wait { localTerminal.view.window === window }
-            let localForward = resources.runtime(local.id).forwards.session(box: "demo-ui", workspace: local.workspace)
-            _ = resources.runtime(studio.id).forwards.session(box: "demo-ui", workspace: studio.workspace)
+            let localForward = resources.runtime(local.id).forwards.session(box: "demo-ui", workspace: local)
+            _ = resources.runtime(studio.id).forwards.session(box: "demo-ui", workspace: studio)
             hub.disconnect(studio.id)
             try await wait { remoteTerminal.view.surface == nil }
-            guard localTerminal.view.surface != nil, local.workspace.isConnected, !localForward.ports.isEmpty else { throw DiscoboxError("Remote disconnect affected local resources") }
+            guard localTerminal.view.surface != nil, local.connectionState.isConnected, !localForward.ports.isEmpty else { throw DiscoboxError("Remote disconnect affected local resources") }
             // An offline selected computer must not block Cmd-K recovery to
             // another live computer.
             hub.activate(studio.id)
@@ -190,3 +189,5 @@ import GhosttyKit
         throw DiscoboxError("Multi-host check timed out at line \(line)")
     }
 }
+
+#endif

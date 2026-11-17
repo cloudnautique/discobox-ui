@@ -6,7 +6,7 @@ import Observation
 /// that filter or loses the user's search, grouping, and tag choices.
 @MainActor @Observable public final class BoxBrowser {
     public var computerID: String?
-    public var filter: Workspace.BoxFilter = .all
+    public var filter: BoxFilter = .all
     public var searchText = ""
     public var selectedTags: Set<String> = []
     public var matchAnyTag = false
@@ -39,44 +39,77 @@ import Observation
 }
 
 public extension Connections {
-    /// Counts use this set, before the quick filter, so selecting a filter does
-    /// not change its own count or the other filter's count.
-    var browserCandidates: [ConnectedBox] {
-        sessions.filter { $0.workspace.isConnected && (browser.computerID == nil || browser.computerID == $0.id) }.flatMap { host in
-            return host.workspace.sandboxes.compactMap { box -> ConnectedBox? in
-                let activity = host.workspace.activity(for: box)
-                let attention = box.matchesAttention || activity.needsYou
-                let include: Bool
-                switch browser.filter {
-                case .all: include = !box.isArchived
-                case .running: include = host.workspace.powerStatus(for: box).isRunning
-                case .attention: include = !box.isArchived && attention
-                case .archived: include = box.isArchived
-                }
-                guard include, BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) else { return nil }
-                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity, power: host.workspace.powerStatus(for: box))
-                return item.matches(browser.searchText) ? item : nil
-            }
-        }.sorted {
-            let names = $0.box.sidebarTitle.localizedStandardCompare($1.box.sidebarTitle)
-            if names != .orderedSame { return names == .orderedAscending }
-            if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-            if $0.location.box != $1.location.box { return $0.location.box < $1.location.box }
-            return $0.location.connection < $1.location.connection
-        }
-    }
-    var browserBoxes: [ConnectedBox] {
-        browserCandidates.filter { item in
-            browser.filter == .archived || browser.activityFilter.map { $0.matches(item.activity ?? AgentActivity(box: item.box), box: item.box) } != false
-        }
-    }
-    /// Keep a selected box that stops matching activity visible as context,
-    /// without adding it to the filter results or inflating either count.
+    var browserCandidates: [ConnectedBox] { browser.candidates(in: qualifiedBoxes) }
+    var browserBoxes: [ConnectedBox] { browser.results(in: browserCandidates) }
     var browserSelectionPin: ConnectedBox? {
-        guard browser.filter != .archived, let filter = browser.activityFilter, let selected = active.workspace.sandboxID else { return nil }
-        return browserCandidates.first { item in
-            item.location.connection == activeID && item.box.id == selected &&
-                !filter.matches(item.activity ?? AgentActivity(box: item.box), box: item.box)
+        browser.selectionPin(in: browserCandidates, selected: active.selection.sandboxID.map { BoxLocation(connection: activeID, box: $0) })
+    }
+}
+
+public enum BoxFilter: String, CaseIterable, Identifiable {
+    case all = "All boxes", running = "Running", attention = "Needs attention", archived = "Archived"
+    public var id: Self { self }
+}
+
+public struct BoxSwitcherGroup: Hashable {
+    public let title: String
+    public let rank: Int
+    public func precedes(_ other: Self) -> Bool {
+        rank == other.rank ? title.localizedStandardCompare(other.title) == .orderedAscending : rank < other.rank
+    }
+}
+
+public extension BoxBrowser {
+    func activityCounts(in candidates: [ConnectedBox]) -> (needsYou: Int, working: Int) {
+        candidates.reduce(into: (needsYou: 0, working: 0)) { counts, item in
+            if item.needsAttention { counts.needsYou += 1 }
+            if item.activity?.isWorking == true { counts.working += 1 }
         }
+    }
+    func selectionPin(in candidates: [ConnectedBox], selected: BoxLocation?) -> ConnectedBox? {
+        guard filter != .archived, let activityFilter, let selected else { return nil }
+        return candidates.first { item in
+            item.location == selected && !activityFilter.matches(item.activity ?? AgentActivity(box: item.box), box: item.box)
+        }
+    }
+    func candidates(in items: [ConnectedBox]) -> [ConnectedBox] {
+        items.filter { item in
+            guard computerID == nil || computerID == item.location.connection, !item.box.isDeleted else { return false }
+            let include: Bool
+            switch filter {
+            case .all: include = !item.box.isArchived
+            case .running: include = item.power.isRunning
+            case .attention: include = !item.box.isArchived && item.needsAttention
+            case .archived: include = item.box.isArchived
+            }
+            return include && item.matches(searchText) && BoxOrganization.matches(tags: item.box.meta?.tags ?? [:], selectors: selectedTags, matchAny: matchAnyTag)
+        }.sorted { Self.precedes($0, $1, sidebar: true) }
+    }
+    func results(in candidates: [ConnectedBox]) -> [ConnectedBox] {
+        candidates.filter { item in
+            filter == .archived || activityFilter.map { $0.matches(item.activity ?? AgentActivity(box: item.box), box: item.box) } != false
+        }
+    }
+    func switcherBoxes(in items: [ConnectedBox]) -> [ConnectedBox] {
+        items.filter { !$0.box.isArchived && !$0.box.isDeleted }.sorted {
+            let lhs = Self.switcherGroup($0), rhs = Self.switcherGroup($1)
+            if lhs != rhs { return lhs.precedes(rhs) }
+            return Self.precedes($0, $1, sidebar: false)
+        }
+    }
+    static func switcherGroup(_ item: ConnectedBox) -> BoxSwitcherGroup {
+        if !item.power.isCurrent { return .init(title: "Status unknown", rank: 2) }
+        if item.needsAttention { return .init(title: "Needs attention", rank: 0) }
+        if item.power.isRunning { return .init(title: "Running", rank: 1) }
+        if item.box.status == "Stopped" { return .init(title: "Stopped", rank: 3) }
+        return .init(title: item.box.status, rank: 2)
+    }
+    private static func precedes(_ lhs: ConnectedBox, _ rhs: ConnectedBox, sidebar: Bool) -> Bool {
+        let name = (sidebar ? lhs.box.sidebarTitle : lhs.box.displayName).localizedStandardCompare(sidebar ? rhs.box.sidebarTitle : rhs.box.displayName)
+        if name != .orderedSame { return name == .orderedAscending }
+        let computer = lhs.computer.localizedStandardCompare(rhs.computer)
+        if computer != .orderedSame { return computer == .orderedAscending }
+        if lhs.location.connection != rhs.location.connection { return lhs.location.connection < rhs.location.connection }
+        return lhs.location.box < rhs.location.box
     }
 }

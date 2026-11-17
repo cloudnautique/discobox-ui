@@ -65,7 +65,7 @@ func TestBoxLinkRejectsMalformedOrCredentialBearingLinks(t *testing.T) {
 			t.Errorf("accepted %q", raw)
 		}
 	}
-	method, path, body, err := route(request{Operation: "serverPeer"}, false)
+	method, path, body, err := route(request{Operation: "serverPeer"})
 	if err != nil || method != "GET" || path != "/peer" || body != nil {
 		t.Fatalf("identity lookup is not a fixed read: %s %s %v", method, path, err)
 	}

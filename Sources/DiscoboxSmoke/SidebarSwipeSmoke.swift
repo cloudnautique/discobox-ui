@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -43,10 +45,10 @@ import DiscoboxCore
             } else {
                 let remote = try await hub.connect(.init(name: "Remote fixture", endpoint: "https://remote.example.invalid"), demo: true) { DemoClient() }
                 try await wait { table(in: window) === original && actions(original, edge: .leading).filter { $0 == "Start" }.count == 2 }
-                await local.workspace.refresh()
+                await local.refresh()
                 hub.activate(local.id)
                 try await wait { table(in: window) === original && actions(original, edge: .leading).filter { $0 == "Start" }.count == 2 }
-                try await remote.workspace.performBoxAction(.start, boxID: "demo-api", connection: remote.workspace.connectionID)
+                try await remote.commands.performBoxAction(.start, boxID: "demo-api", connection: remote.connectionState.connectionID)
                 try await wait { actions(original, edge: .leading).filter { $0 == "Start" }.count == 1 && actions(original, edge: .leading).filter { $0 == "Stop" }.count == 3 }
                 print("SIDEBAR_SWIPE_SMOKE_OK: native Start/Stop/Archive registration, same table across host switches, updated actions after state changes; physical gesture not simulated")
             }
@@ -70,3 +72,5 @@ import DiscoboxCore
         throw DiscoboxError("Native sidebar check timed out")
     }
 }
+
+#endif

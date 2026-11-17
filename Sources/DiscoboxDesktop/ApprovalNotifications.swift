@@ -16,7 +16,7 @@ final class DiscoboxApplicationDelegate: NSObject, NSApplicationDelegate {
 
 struct NotificationApprovalPresentation: Identifiable {
     let id = UUID()
-    let workspace: Workspace
+    let workspace: ConnectionSession
     let item: ApprovalItem
 }
 
@@ -126,9 +126,9 @@ struct ApprovalNotificationConfiguration {
 
     func synchronize(_ session: ConnectionSession) {
         guard center != nil, connections != nil, enabled else { return }
-        let workspace = session.workspace
-        let changes = inbox.update(computerID: session.id, connection: workspace.connectionID,
-                                   items: workspace.isConnected ? workspace.approvals : [])
+        let workspace = session
+        let changes = inbox.update(computerID: session.id, connection: workspace.connectionState.connectionID,
+                                   items: workspace.connectionState.isConnected ? workspace.approvalStore.approvals : [])
         remove(changes.removed)
         for notice in changes.added { enqueue(notice, session: session) }
     }
@@ -210,8 +210,8 @@ struct ApprovalNotificationConfiguration {
         guard enabled, canDeliver, !permissionRejected, let connections else { return }
         for id in waitingForPermission {
             guard let notice = inbox.notice(id), let session = connections.session(notice.computerID),
-                  session.workspace.isConnected, session.workspace.connectionID == notice.connection,
-                  session.workspace.approvals.contains(notice.item) else { waitingForPermission.remove(id); continue }
+                  session.connectionState.isConnected, session.connectionState.connectionID == notice.connection,
+                  session.approvalStore.approvals.contains(notice.item) else { waitingForPermission.remove(id); continue }
             enqueue(notice, session: session)
         }
     }
@@ -252,9 +252,9 @@ struct ApprovalNotificationConfiguration {
     private func deliver(_ notice: ApprovalNotice, session: ConnectionSession) async {
         let allowed = await allowDelivery()
         guard enabled, !Task.isCancelled, inbox.notice(notice.id) == notice,
-              session.workspace.connectionID == notice.connection else { return }
+              session.connectionState.connectionID == notice.connection else { return }
         guard allowed else { waitingForPermission.insert(notice.id); scheduleRetry(); return }
-        let box = session.workspace.sandboxes.first { $0.id == notice.item.boxID }?.displayName ?? "Box"
+        let box = session.inventory.sandboxes.first { $0.id == notice.item.boxID }?.displayName ?? "Box"
         let content = Self.content(for: notice, computer: session.profile.displayName, box: box)
         do {
             try await center?.add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
@@ -334,12 +334,12 @@ struct ApprovalNotificationConfiguration {
         default: return
         }
         do {
-            let answered = try await notice.respond(selected, workspace: host.workspace, onAccepted: { remove([id]) })
+            let answered = try await notice.respond(selected, approvals: host.approvalStore, onAccepted: { remove([id]) })
             if answered { remove([id]) }
             else {
                 connections.activate(host.id)
                 showApp()
-                presentation = .init(workspace: host.workspace, item: notice.item)
+                presentation = .init(workspace: host, item: notice.item)
             }
         } catch {
             showApp()
@@ -355,27 +355,6 @@ struct ApprovalNotificationConfiguration {
 
     private static func computerKey(_ id: String) -> String {
         SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Read-only support command: no authorization prompt, banner, inbox reset,
-    /// Keychain access, or server connection.
-    static func printSystemStatus() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        let status: String
-        switch settings.authorizationStatus {
-        case .authorized: status = "authorized"
-        case .denied: status = "denied"
-        case .notDetermined: status = "not determined"
-        case .provisional: status = "provisional (quiet delivery)"
-        default: status = "unknown"
-        }
-        print("Approval notifications enabled: \(UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true)")
-        print("macOS authorization: \(status)")
-        print("Alerts enabled: \(settings.alertSetting == .enabled)")
-        print("Banner or alert style selected: \(settings.alertStyle != .none)")
-        print("Notification Center enabled: \(settings.notificationCenterSetting == .enabled)")
-        print("Sound enabled: \(settings.soundSetting == .enabled)")
-        print("Bundle identifier: \(Bundle.main.bundleIdentifier ?? "unknown")")
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {

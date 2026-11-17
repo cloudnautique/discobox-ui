@@ -80,10 +80,10 @@ private func session(_ state: String?, kind: String = "", primary: Bool = true, 
     let local = try await hub.connect(.thisComputer, demo: true) { a }
     let remote = try await hub.connect(.init(name: "Remote", endpoint: "https://remote.example.invalid"), demo: true) { b }
     defer { hub.disconnectAll() }
-    await local.workspace.refreshApprovals(); await remote.workspace.refreshApprovals()
-    _ = try await local.workspace.harnesses(); _ = try await remote.workspace.harnesses()
+    await local.approvalStore.refreshApprovals(); await remote.approvalStore.refreshApprovals()
+    _ = try await local.catalog.harnesses(); _ = try await remote.catalog.harnesses()
     #expect(hub.browserCandidates.filter(\.needsAttention).count == 4)
-    #expect(hub.browserCandidates.filter { $0.activity?.isWorking == true }.count == 2)
+    #expect(hub.browser.activityCounts(in: hub.browserCandidates).working == 2)
     let reads = await a.reads + b.reads
     hub.browser.activityFilter = .needsYou
     #expect(hub.browserBoxes.count == 4)
@@ -95,7 +95,7 @@ private func session(_ state: String?, kind: String = "", primary: Bool = true, 
     hub.browser.activityFilter = .needsYou
     hub.browser.selectedTags = ["team=api"]
     #expect(hub.browserBoxes.map(\.box.id) == ["approval"])
-    #expect(hub.browserCandidates.filter(\.needsAttention).count == 1) // two requests, one box
+    #expect(hub.browser.activityCounts(in: hub.browserCandidates).needsYou == 1) // two requests, one box
     hub.browser.searchText = "nonexistent"
     #expect(hub.browserBoxes.isEmpty && hub.browserCandidates.isEmpty)
     #expect(await a.reads + b.reads == reads)
@@ -110,10 +110,10 @@ private func session(_ state: String?, kind: String = "", primary: Bool = true, 
     let order = hub.browserCandidates.map(\.location)
     hub.browser.activityFilter = .working
     #expect(hub.browserSelectionPin == nil && hub.browserBoxes.map(\.box.id) == ["work"])
-    await client.finishWork(); await host.workspace.refresh()
+    await client.finishWork(); await host.refresh()
     #expect(hub.browserBoxes.isEmpty)
     #expect(hub.browserSelectionPin?.location == location)
-    #expect(host.workspace.sandboxID == "work" && hub.browser.activityFilter == .working)
+    #expect(host.selection.sandboxID == "work" && hub.browser.activityFilter == .working)
     #expect(hub.browserCandidates.map(\.location) == order)
     hub.browser.searchText = "Answer"
     #expect(hub.browserSelectionPin == nil) // explicit search still owns the scope
@@ -125,7 +125,7 @@ private func session(_ state: String?, kind: String = "", primary: Bool = true, 
     let hub = Connections(polling: false)
     let host = try await hub.connect(.thisComputer, demo: true) { DemoClient() }
     defer { hub.disconnectAll() }
-    try await host.workspace.performBoxAction(.archive, boxID: "demo-api", connection: host.workspace.connectionID)
+    try await host.commands.performBoxAction(.archive, boxID: "demo-api", connection: host.connectionState.connectionID)
     hub.browser.activityFilter = .working; hub.browser.filter = .archived
     #expect(hub.browserBoxes.map(\.box.id) == ["demo-api"] && hub.browserSelectionPin == nil)
     hub.browser.filter = .all
@@ -134,7 +134,7 @@ private func session(_ state: String?, kind: String = "", primary: Bool = true, 
     #expect(hub.browser.activityFilter == .working)
     await hub.revealCreatedBox(creation.id)
     #expect(hub.browser.activityFilter == nil)
-    #expect(host.workspace.sandboxID == creation.id.box)
+    #expect(host.selection.sandboxID == creation.id.box)
 }
 
 private actor ActivityBrowserFixture: DiscoboxClient {

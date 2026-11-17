@@ -4,14 +4,14 @@ import DiscoboxCore
 
 struct ServicesView: View {
     let box: Sandbox
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(ServiceForwards.self) private var forwards
     @Environment(DesktopWindows.self) private var desktops
     private var session: ServiceForwardSession? {
         live ? forwards.existingSession(box: box.id, workspace: workspace) : nil
     }
-    private var live: Bool { workspace.sandboxID == box.id && box.isRunning && !workspace.pendingBoxActions.contains(box.id) }
-    private var services: [Service] { workspace.sandboxID == box.id ? workspace.services : [] }
+    private var live: Bool { workspace.selection.sandboxID == box.id && box.isRunning && !workspace.pending.pendingBoxActions.contains(box.id) }
+    private var services: [Service] { workspace.selection.sandboxID == box.id ? workspace.selection.services : [] }
     private var declaredServices: [Service] {
         services.filter { service in
             service.id != "ai.discobox.desktop" || session?.ports.contains(where: \.isDesktop) != true
@@ -71,7 +71,7 @@ struct ServicesView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task(id: "\(workspace.connectionID)-\(workspace.projectID ?? "")-\(box.id)-\(live)") {
+        .task(id: "\(workspace.connectionState.connectionID)-\(workspace.connectionState.projectID ?? "")-\(box.id)-\(live)") {
             if live { _ = forwards.session(box: box.id, workspace: workspace) }
         }
     }
@@ -92,7 +92,7 @@ struct ServicesView: View {
                         else { NSWorkspace.shared.open(url) }
                     } label: {
                         Label(port.isDesktop ? "Open Desktop" : "Open", systemImage: "arrow.up.right.square")
-                    }.disabled(!live || workspace.isDemo)
+                    }.disabled(!live || workspace.connectionState.isDemo)
                 }
                 if port.protocol == "tcp" {
                     Menu {
@@ -107,7 +107,7 @@ struct ServicesView: View {
                         if let url = port.browserURL(as: "http") { NSWorkspace.shared.open(url) }
                     }
                     .menuIndicator(.visible)
-                    .fixedSize().disabled(!live || workspace.isDemo)
+                    .fixedSize().disabled(!live || workspace.connectionState.isDemo)
                     .help("Open using HTTP, or choose a protocol from the menu")
                 }
                 Button {

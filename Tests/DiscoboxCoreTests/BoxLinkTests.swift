@@ -39,13 +39,13 @@ private actor BoxLinkFixture: DiscoboxClient {
     hub.activate(local.id)
     hub.browser.filter = .running; hub.browser.searchText = "current search"; hub.browser.computerID = local.id
     await second.result(box: "demo-api") // The same stopped ID exists on both hosts.
-    let target = try await hub.resolveBoxLink("discobox:///demo-api", readerID: remote.id, generation: remote.workspace.connectionID)
+    let target = try await hub.resolveBoxLink("discobox:///demo-api", readerID: remote.id, generation: remote.connectionState.connectionID)
     #expect(target.location.connection == remote.id)
     try await hub.openBoxLink(target)
     #expect(hub.active === remote)
-    #expect(remote.workspace.sandboxID == "demo-api")
-    #expect(remote.workspace.selectedBox?.isRunning == false)
-    #expect(local.workspace.sandboxID == nil)
+    #expect(remote.selection.sandboxID == "demo-api")
+    #expect(remote.selection.selectedBox?.isRunning == false)
+    #expect(local.selection.sandboxID == nil)
     #expect(hub.browser.filter == .running && hub.browser.computerID == local.id && hub.browser.searchText == "current search")
     #expect(await first.count(.boxAction) == 0)
     #expect(await second.count(.boxAction) == 0)
@@ -55,15 +55,15 @@ private actor BoxLinkFixture: DiscoboxClient {
 @MainActor @Test func lateBoxLinkDetailsDoNotRevealOrRefocusAfterAnotherSelection() async throws {
     let hub = Connections(polling: false), client = BoxLinkFixture()
     let host = try await hub.connect(.thisComputer, demo: true) { client }
-    let target = try await hub.resolveBoxLink("discobox:///demo-ui", readerID: host.id, generation: host.workspace.connectionID)
+    let target = try await hub.resolveBoxLink("discobox:///demo-ui", readerID: host.id, generation: host.connectionState.connectionID)
     await client.holdDetails()
     let opening = Task { try await hub.openBoxLink(target) }
     for _ in 0..<200 { if await client.blocked() { break }; try await Task.sleep(for: .milliseconds(5)) }
     #expect(await client.blocked())
-    await host.workspace.selectBox("demo-api")
+    await host.selection.selectBox("demo-api")
     await client.release()
     do { try await opening.value; Issue.record("Late link details refocused an old box") } catch { }
-    #expect(host.workspace.sandboxID == "demo-api")
+    #expect(host.selection.sandboxID == "demo-api")
     #expect(hub.browser.revealLocation == nil)
     hub.disconnectAll()
 }
@@ -73,20 +73,20 @@ private actor BoxLinkFixture: DiscoboxClient {
     let local = try await hub.connect(.thisComputer, demo: true) { first }
     let remote = try await hub.connect(.init(name: "Remote", endpoint: "https://remote.test"), demo: true) { second }
     await first.result(local: false, matches: [remote.id])
-    let direct = try await hub.resolveBoxLink("discobox+https://remote.test/demo-ui", readerID: local.id, generation: local.workspace.connectionID)
+    let direct = try await hub.resolveBoxLink("discobox+https://remote.test/demo-ui", readerID: local.id, generation: local.connectionState.connectionID)
     #expect(direct.location.connection == remote.id)
     #expect(await second.count(.serverPeer) == 0)
     await first.result(local: false, peer: "peer-fixture")
     await second.identity("peer-fixture")
-    let byPeer = try await hub.resolveBoxLink("discobox://peer-fixture/demo-ui", readerID: local.id, generation: local.workspace.connectionID)
+    let byPeer = try await hub.resolveBoxLink("discobox://peer-fixture/demo-ui", readerID: local.id, generation: local.connectionState.connectionID)
     #expect(byPeer.location == direct.location)
     await first.identity("peer-fixture")
     await #expect(throws: DiscoboxError.self) {
-        try await hub.resolveBoxLink("discobox://peer-fixture/demo-ui", readerID: local.id, generation: local.workspace.connectionID)
+        try await hub.resolveBoxLink("discobox://peer-fixture/demo-ui", readerID: local.id, generation: local.connectionState.connectionID)
     }
     await first.result(local: false)
     await #expect(throws: DiscoboxError.self) {
-        try await hub.resolveBoxLink("discobox://unknown.test/demo-ui", readerID: local.id, generation: local.workspace.connectionID)
+        try await hub.resolveBoxLink("discobox://unknown.test/demo-ui", readerID: local.id, generation: local.connectionState.connectionID)
     }
     #expect(hub.sessions.count == 2 && hub.active === remote)
     #expect(await first.count(.boxAction) == 0)
@@ -98,13 +98,13 @@ private actor BoxLinkFixture: DiscoboxClient {
     let hub = Connections(polling: false), client = BoxLinkFixture()
     let host = try await hub.connect(.thisComputer, demo: true) { client }
     await client.result(box: "demo-")
-    await #expect(throws: DiscoboxError.self) { try await hub.resolveBoxLink("discobox:///demo-", readerID: host.id, generation: host.workspace.connectionID) }
+    await #expect(throws: DiscoboxError.self) { try await hub.resolveBoxLink("discobox:///demo-", readerID: host.id, generation: host.connectionState.connectionID) }
     await client.result(box: "demo-u")
-    let unique = try await hub.resolveBoxLink("discobox:///demo-u", readerID: host.id, generation: host.workspace.connectionID)
+    let unique = try await hub.resolveBoxLink("discobox:///demo-u", readerID: host.id, generation: host.connectionState.connectionID)
     #expect(unique.location.box == "demo-ui")
     await client.result(box: "purged")
     let reads = await client.count(.sandboxes)
-    await #expect(throws: DiscoboxError.self) { try await hub.resolveBoxLink("discobox:///purged", readerID: host.id, generation: host.workspace.connectionID) }
+    await #expect(throws: DiscoboxError.self) { try await hub.resolveBoxLink("discobox:///purged", readerID: host.id, generation: host.connectionState.connectionID) }
     #expect(await client.count(.sandboxes) == reads + 1)
     #expect(await client.count(.boxAction) == 0)
     hub.disconnectAll()
@@ -113,16 +113,16 @@ private actor BoxLinkFixture: DiscoboxClient {
 @MainActor @Test func boxLinkLookupAndResolvedTargetsCannotCrossReconnects() async throws {
     let hub = Connections(polling: false), client = BoxLinkFixture()
     let host = try await hub.connect(.thisComputer, demo: true) { client }
-    let target = try await hub.resolveBoxLink("discobox:///demo-ui", readerID: host.id, generation: host.workspace.connectionID)
+    let target = try await hub.resolveBoxLink("discobox:///demo-ui", readerID: host.id, generation: host.connectionState.connectionID)
     await client.holdParse()
-    let generation = host.workspace.connectionID
+    let generation = host.connectionState.connectionID
     let pending = Task { try await hub.resolveBoxLink("discobox:///demo-ui", readerID: host.id, generation: generation) }
     for _ in 0..<200 { if await client.blocked() { break }; try await Task.sleep(for: .milliseconds(5)) }
     #expect(await client.blocked())
-    await host.workspace.connect(client: DemoClient(), label: host.id, demo: true)
+    await host.connect(client: DemoClient(), label: host.id, demo: true)
     await client.release()
     do { _ = try await pending.value; Issue.record("A stale link lookup survived a reconnect") } catch { }
     await #expect(throws: DiscoboxError.self) { try await hub.openBoxLink(target) }
-    #expect(host.workspace.sandboxID == nil)
+    #expect(host.selection.sandboxID == nil)
     hub.disconnectAll()
 }

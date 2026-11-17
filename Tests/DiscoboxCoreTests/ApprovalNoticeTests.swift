@@ -39,30 +39,30 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
 }
 
 @MainActor @Test func resolvedNoticesDisappearAndLaterDoesNotAnswerOrRepeat() async throws {
-    let workspace = Workspace(), client = NoticeFixture(), inbox = ApprovalNoticeInbox()
+    let workspace = ConnectionSession(), client = NoticeFixture(), inbox = ApprovalNoticeInbox()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.refreshApprovals()
-    let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionID, items: workspace.approvals).added.first)
-    #expect(try await !notice.respond(.later, workspace: workspace))
+    await workspace.approvalStore.refreshApprovals()
+    let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).added.first)
+    #expect(try await !notice.respond(.later, approvals: workspace.approvalStore))
     #expect(await client.answers.isEmpty)
-    #expect(workspace.approvals.count == 1)
-    #expect(inbox.update(computerID: "local", connection: workspace.connectionID, items: workspace.approvals).added.isEmpty)
+    #expect(workspace.approvalStore.approvals.count == 1)
+    #expect(inbox.update(computerID: "local", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).added.isEmpty)
     await client.resolve()
-    await workspace.refreshApprovals()
-    #expect(inbox.update(computerID: "local", connection: workspace.connectionID, items: workspace.approvals).removed == [notice.id])
+    await workspace.approvalStore.refreshApprovals()
+    #expect(inbox.update(computerID: "local", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).removed == [notice.id])
 }
 
 @MainActor @Test func notificationAnswerTargetsOriginalHostWithRequestedPolicy() async throws {
     let connections = Connections(polling: false), localClient = NoticeFixture(), remoteClient = NoticeFixture()
     let local = try await connections.connect(.thisComputer) { localClient }
     let remote = try await connections.connect(.init(name: "Other", endpoint: "https://other.example.invalid")) { remoteClient }
-    await local.workspace.refreshApprovals(); await remote.workspace.refreshApprovals()
+    await local.approvalStore.refreshApprovals(); await remote.approvalStore.refreshApprovals()
     let inbox = ApprovalNoticeInbox()
-    let notice = try #require(inbox.update(computerID: local.id, connection: local.workspace.connectionID, items: local.workspace.approvals).added.first)
+    let notice = try #require(inbox.update(computerID: local.id, connection: local.connectionState.connectionID, items: local.approvalStore.approvals).added.first)
     #expect(connections.activeID == remote.id)
-    #expect(try await !notice.respond(.approve, workspace: local.workspace))
+    #expect(try await !notice.respond(.approve, approvals: local.approvalStore))
     #expect(await localClient.answers.isEmpty)
-    #expect(try await notice.respond(.deny, workspace: local.workspace))
+    #expect(try await notice.respond(.deny, approvals: local.approvalStore))
     let answer = try #require(await localClient.answers.first)
     #expect(answer.action == "deny")
     #expect(answer.requestID == notice.item.id)
@@ -74,10 +74,10 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
 
 @MainActor @Test func staleOrUnreachableNotificationNeverSubmits() async throws {
     for failure in ["changed", "resolved", "refresh-failed", "reconnected", "disconnected", "wrong-host"] {
-        let workspace = Workspace(), client = NoticeFixture(), inbox = ApprovalNoticeInbox()
+        let workspace = ConnectionSession(), client = NoticeFixture(), inbox = ApprovalNoticeInbox()
         await workspace.connect(client: client, label: "fixture")
-        await workspace.refreshApprovals()
-        let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionID, items: workspace.approvals).added.first)
+        await workspace.approvalStore.refreshApprovals()
+        let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).added.first)
         switch failure {
         case "changed": await client.change()
         case "resolved": await client.resolve()
@@ -86,9 +86,9 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
         case "disconnected": workspace.disconnect()
         default: break
         }
-        let other = Workspace()
+        let other = ConnectionSession()
         if failure == "wrong-host" { await other.connect(client: NoticeFixture(), label: "other") }
-        await #expect(throws: (any Error).self) { try await notice.respond(.approve, workspace: failure == "wrong-host" ? other : workspace) }
+        await #expect(throws: (any Error).self) { try await notice.respond(.approve, approvals: failure == "wrong-host" ? other.approvalStore : workspace.approvalStore) }
         #expect(await client.answers.isEmpty)
         workspace.disconnect(); other.disconnect()
     }
@@ -96,14 +96,14 @@ private func noticeItem(_ changes: [String: JSONValue] = [:], kind: String = "cr
 
 @MainActor @Test func notificationsOpenFormForChoicesAndDenyWithoutGranting() async throws {
     for item in [noticeItem(kind: "trust"), noticeItem(["reason": .string("refresh")]), noticeItem(["purpose": .string("delegate")])] {
-        let workspace = Workspace(), client = NoticeFixture(item: item), inbox = ApprovalNoticeInbox()
+        let workspace = ConnectionSession(), client = NoticeFixture(item: item), inbox = ApprovalNoticeInbox()
         await workspace.connect(client: client, label: "fixture")
-        await workspace.refreshApprovals()
-        let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionID, items: workspace.approvals).added.first)
-        #expect(try await !notice.respond(.open, workspace: workspace))
-        #expect(try await !notice.respond(.approve, workspace: workspace))
+        await workspace.approvalStore.refreshApprovals()
+        let notice = try #require(inbox.update(computerID: "local", connection: workspace.connectionState.connectionID, items: workspace.approvalStore.approvals).added.first)
+        #expect(try await !notice.respond(.open, approvals: workspace.approvalStore))
+        #expect(try await !notice.respond(.approve, approvals: workspace.approvalStore))
         #expect(await client.answers.isEmpty)
-        #expect(try await notice.respond(.deny, workspace: workspace))
+        #expect(try await notice.respond(.deny, approvals: workspace.approvalStore))
         let answer = try #require(await client.answers.first)
         #expect(answer.action == "deny")
         #expect(answer.kind == item.kind)

@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -6,24 +8,24 @@ import DiscoboxCore
 /// real notification services, or an operator's Discobox backend.
 @MainActor enum ConnectionRecoverySmoke {
     static func run(includeTerminal: Bool = false) async {
-        let workspace = Workspace(), client = RecoveryDesktopFixture(), terminals = TerminalStore()
+        let workspace = ConnectionSession(), client = RecoveryDesktopFixture(), terminals = TerminalStore()
         defer { workspace.disconnect(); terminals.closeAll() }
         do {
             await workspace.connect(client: client, label: "Recovery fixture", demo: true)
-            await workspace.selectBox("demo-ui")
-            let cached = workspace.sandboxes
+            await workspace.selection.selectBox("demo-ui")
+            let cached = workspace.inventory.sandboxes
             await client.setOnline(false); await workspace.refresh()
-            guard workspace.recovery.nextRetryAt != nil, workspace.sandboxes == cached else { throw DiscoboxError("Recovery dropped the cached inventory") }
+            guard workspace.connectionState.recovery.nextRetryAt != nil, workspace.inventory.sandboxes == cached else { throw DiscoboxError("Recovery dropped the cached inventory") }
             for (name, scheme) in [("recovery-waiting-light", ColorScheme.light), ("recovery-waiting-dark", .dark)] {
                 try await panel(name: name, workspace: workspace, scheme: scheme)
             }
             await client.setOnline(true); await workspace.retryConnection()
-            guard workspace.connectionError == nil, workspace.sandboxID == "demo-ui", let inventory = workspace.terminalInventory else {
+            guard workspace.connectionState.connectionError == nil, workspace.selection.sandboxID == "demo-ui", let inventory = workspace.selection.terminalInventory else {
                 throw DiscoboxError("Recovery did not restore the selected box")
             }
             if includeTerminal { try verifyTerminalRecovery(workspace: workspace, inventory: inventory, terminals: terminals) }
             await client.denyAccess(); await workspace.refresh()
-            guard workspace.recovery.requiresAction else { throw DiscoboxError("Authorization failure kept retrying") }
+            guard workspace.connectionState.recovery.requiresAction else { throw DiscoboxError("Authorization failure kept retrying") }
             try await panel(name: "recovery-attention-light", workspace: workspace, scheme: .light)
             try await panel(name: "recovery-attention-dark", workspace: workspace, scheme: .dark)
             workspace.disconnect(); terminals.closeAll()
@@ -31,30 +33,30 @@ import DiscoboxCore
             fflush(stdout); exit(0)
         } catch { print("CONNECTION_RECOVERY_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
-    private static func verifyTerminalRecovery(workspace: Workspace, inventory: Workspace.TerminalInventory, terminals: TerminalStore) throws {
-        let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: "offline", project: inventory.project, box: inventory.box, exec: "agent-1", demo: true)
+    private static func verifyTerminalRecovery(workspace: ConnectionSession, inventory: BoxSelectionStore.TerminalInventory, terminals: TerminalStore) throws {
+        let identity = TerminalIdentity(connection: workspace.connectionState.connectionID, endpoint: "offline", project: inventory.project, box: inventory.box, exec: "agent-1", demo: true)
         let live = terminals.session(identity)
         guard live.view.surface != nil, live.error == nil else { throw DiscoboxError("Offline terminal fixture did not create a surface: " + (live.error ?? GhosttyRuntime.shared.error ?? "unknown renderer error")) }
         // Simulate only the child stream ending; the server-side exec is
         // still in the newly confirmed live inventory.
         live.ended = true
-        terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+        terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         let replacement = terminals.session(identity)
         guard replacement !== live, live.view.surface == nil, replacement.view.surface != nil else {
             throw DiscoboxError("Confirmed live exec did not get a new attachment")
         }
-        terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+        terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         guard terminals.session(identity) === replacement else { throw DiscoboxError("Healthy terminal was unnecessarily restarted") }
         replacement.ended = true
-        terminals.recoverInterrupted(inventory, connection: workspace.connectionID)
+        terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         guard terminals.session(identity) === replacement else { throw DiscoboxError("Repeated attachment failure bypassed cooldown") }
         print("CONNECTION_RECOVERY_TERMINAL_SMOKE_OK: ended live PTY reattaches once; healthy streams stay intact; cooldown prevents loops")
     }
-    private static func panel(name: String, workspace: Workspace, scheme: ColorScheme) async throws {
+    private static func panel(name: String, workspace: ConnectionSession, scheme: ColorScheme) async throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 230), styleMask: [.titled], backing: .buffered, defer: false)
         let view = NSHostingView(rootView: VStack(alignment: .leading, spacing: 18) {
             ConnectionRecoveryBanner(workspace: workspace, computer: "Studio computer", disconnect: {})
-            HStack { Text("Last-known boxes: \(workspace.sandboxes.count)"); Spacer(); ConnectionStatusBadge(workspace: workspace) }.font(.caption).padding(.horizontal, 16)
+            HStack { Text("Last-known boxes: \(workspace.inventory.sandboxes.count)"); Spacer(); ConnectionStatusBadge(workspace: workspace) }.font(.caption).padding(.horizontal, 16)
             Spacer()
         }.frame(width: 680, height: 230).background(DiscoboxAppearance.surface).preferredColorScheme(scheme))
         window.contentView = view; window.orderFront(nil)
@@ -87,3 +89,5 @@ private actor RecoveryDesktopFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

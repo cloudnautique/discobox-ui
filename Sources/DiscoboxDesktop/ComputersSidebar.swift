@@ -4,7 +4,7 @@ import DiscoboxCore
 struct ComputersSidebar: View {
     @Environment(Connections.self) private var connections
     @Environment(ConnectionRuntimes.self) private var runtimes
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(BoxActionPresentation.self) private var boxActions
     let grouping: String
@@ -30,7 +30,7 @@ struct ComputersSidebar: View {
             browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
         }, set: { ids in
             // Ignore callbacks carrying an obsolete workspace environment.
-            guard connections.active.workspace === workspace else { return }
+            guard connections.active === workspace else { return }
             if browser.filter == .archived {
                 let archives = Set(items.filter { $0.box.isArchived }.map(\.location))
                 browser.selectArchives(ids.intersection(archives))
@@ -59,14 +59,14 @@ struct ComputersSidebar: View {
         guard !selectedItems.isEmpty, Set(selectedItems.map { $0.location.connection }).count == 1 else { return [] }
         return BoxAction.bulkActions.filter { action in
             selectedItems.allSatisfy { item in
-                action.isAvailable(for: item.box) && connections.session(item.location.connection)?.workspace.pendingBoxActions.contains(item.box.id) == false
+                action.isAvailable(for: item.box) && connections.session(item.location.connection)?.pending.pendingBoxActions.contains(item.box.id) == false
             }
         }
     }
     private var selectedArchives: [ConnectedBox] { items.filter { browser.archivedSelection.contains($0.location) } }
     private var canPurge: Bool {
         !selectedArchives.isEmpty && Set(selectedArchives.map { $0.location.connection }).count == 1 && selectedArchives.allSatisfy { item in
-            BoxAction.purge.isAvailable(for: item.box) && connections.session(item.location.connection)?.workspace.pendingBoxActions.contains(item.box.id) == false
+            BoxAction.purge.isAvailable(for: item.box) && connections.session(item.location.connection)?.pending.pendingBoxActions.contains(item.box.id) == false
         }
     }
     var body: some View {
@@ -97,7 +97,7 @@ struct ComputersSidebar: View {
                             let seed = grouping == "repository" ? groupItems.sorted { left, right in
                                 let preferred = browser.computerID ?? connections.activeID
                                 return left.location.connection == preferred && right.location.connection != preferred
-                            }.first(where: { connections.session($0.location.connection)?.workspace.isConnected == true && RepositoryChoice(box: $0.box) != nil }) : nil
+                            }.first(where: { connections.session($0.location.connection)?.connectionState.isConnected == true && RepositoryChoice(box: $0.box) != nil }) : nil
                             RepositoryGroupHeader(repository: group, count: groupItems.count,
                                 symbol: grouping == "repository" ? "folder" : grouping == "harness" ? "terminal" : grouping == "tag" ? "tag" : "circle",
                                 expanded: !collapsed.contains(key), toggle: {
@@ -117,16 +117,16 @@ struct ComputersSidebar: View {
                     .onChange(of: connections.browserBoxes.map(\.location)) { connections.reconcileCreations() }
                     .onChange(of: browser.revealRevision, initial: true) {
                         guard let location = browser.revealLocation,
-                              connections.activeID == location.connection, workspace.sandboxID == location.box else { return }
+                              connections.activeID == location.connection, workspace.selection.sandboxID == location.box else { return }
                         if let item = items.first(where: { $0.location == location }) {
                             let group = BoxOrganization.group(item.box, by: grouping, tagKey: tagKey)
                             collapsed.remove(collapseKey(group))
                         } else if !pins.contains(where: { $0.id == location }) { return }
-                        let generation = workspace.connectionID
+                        let generation = workspace.connectionState.connectionID
                         Task { @MainActor in
                             await Task.yield()
-                            guard workspace.connectionID == generation, connections.active.workspace === workspace,
-                                  workspace.sandboxID == location.box else { return }
+                            guard workspace.connectionState.connectionID == generation, connections.active === workspace,
+                                  workspace.selection.sandboxID == location.box else { return }
                             reader.scrollTo(location, anchor: .center)
                         }
                     }
@@ -136,7 +136,7 @@ struct ComputersSidebar: View {
         .background(DiscoboxAppearance.sidebar)
         .sheet(item: $resourceHost) { host in
             PoolResourcesView(computer: host.profile.displayName)
-                .environment(host.workspace)
+                .environment(host)
                 .environment(runtimes.runtime(host.id).terminals)
                 .environment(runtimes.runtime(host.id).forwards)
                 .environment(runtimes.runtime(host.id).desktops)
@@ -146,7 +146,7 @@ struct ComputersSidebar: View {
                 browser.selectedBoxes = Set(browser.selectedBoxes.filter { $0.connection != target.host.id || !accepted.contains($0.box) })
                 browser.archivedSelection = Set(browser.archivedSelection.filter { $0.connection != target.host.id || !accepted.contains($0.box) })
             }
-            .environment(target.host.workspace)
+            .environment(target.host)
             .environment(runtimes.runtime(target.host.id).terminals)
             .environment(runtimes.runtime(target.host.id).forwards)
             .environment(runtimes.runtime(target.host.id).desktops)
@@ -154,7 +154,7 @@ struct ComputersSidebar: View {
         .sheet(item: $purge) { target in
             BulkPurgeSheet(request: target.request) { purged in
                 browser.archivedSelection = Set(browser.archivedSelection.filter { $0.connection != target.host.id || !purged.contains($0.box) })
-            }.environment(target.host.workspace)
+            }.environment(target.host)
         }
         .onChange(of: browser.archivedSelection) { _, ids in
             guard browser.filter == .archived, ids.count == 1, let location = ids.first else { return }
@@ -200,25 +200,25 @@ struct ComputersSidebar: View {
                                 Image(systemName: host.profile.endpoint.hasPrefix("unix:") ? "desktopcomputer" : "laptopcomputer").frame(width: 16).foregroundStyle(.secondary)
                                 Text(host.profile.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
-                                if !host.workspace.approvals.isEmpty { Text("\(host.workspace.approvals.count)").font(.caption2).foregroundStyle(.orange) }
+                                if !host.approvalStore.approvals.isEmpty { Text("\(host.approvalStore.approvals.count)").font(.caption2).foregroundStyle(.orange) }
                             }.font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Filter boxes on " + host.profile.displayName + ". Click again to show all computers.")
                             .accessibilityIdentifier("computers.filter." + host.id)
                             .accessibilityAddTraits(browser.computerID == host.id ? .isSelected : [])
-                        ComputerConnectionStatus(workspace: host.workspace, computer: host.profile.displayName) {
+                        ComputerConnectionStatus(workspace: host, computer: host.profile.displayName) {
                             connections.disconnect(host.id)
                         }
-                        ComputerResourceButton(workspace: host.workspace) { resourceHost = host }
-                            .disabled(!host.workspace.isConnected).padding(.trailing, 6)
+                        ComputerResourceButton(workspace: host) { resourceHost = host }
+                            .disabled(!host.connectionState.isConnected).padding(.trailing, 6)
                     }.background(browser.computerID == host.id ? DiscoboxAppearance.selection : .clear, in: RoundedRectangle(cornerRadius: 6))
                         .contextMenu {
                             Button("Show All Computers") { browser.computerID = nil }
                             Button("Show Workspace") { connections.activate(host.id) }
-                            Button("Manage Resources…") { resourceHost = host }.disabled(!host.workspace.isConnected)
-                            if host.workspace.connectionError != nil {
-                                Button("Retry now") { Task { await host.workspace.retryConnection() } }.disabled(host.workspace.recovery.isAttempting)
+                            Button("Manage Resources…") { resourceHost = host }.disabled(!host.connectionState.isConnected)
+                            if host.connectionState.connectionError != nil {
+                                Button("Retry now") { Task { await host.retryConnection() } }.disabled(host.connectionState.recovery.isAttempting)
                             }
-                            if host.workspace.canReconnect || host.workspace.isConnecting {
+                            if host.connectionState.canReconnect || host.connectionState.isConnecting {
                                 Button("Disconnect") { connections.disconnect(host.id) }
                             } else { Button("Connect") { connect(host) } }
                         }
@@ -235,10 +235,10 @@ struct ComputersSidebar: View {
             if browser.computerID != nil {
                 Button("Show all computers") { browser.computerID = nil }.font(.caption)
             }
-            if let host = connections.sessions.first(where: { $0.id == browser.computerID }), !host.workspace.isConnected {
-                Button(host.workspace.recovery.isAttempting ? "Reconnecting…" : host.workspace.canReconnect ? "Retry now" : "Connect to " + host.profile.displayName) { connect(host) }
-                    .disabled(host.workspace.isConnecting || host.workspace.recovery.isAttempting)
-                if let error = host.workspace.connectionError { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+            if let host = connections.sessions.first(where: { $0.id == browser.computerID }), !host.connectionState.isConnected {
+                Button(host.connectionState.recovery.isAttempting ? "Reconnecting…" : host.connectionState.canReconnect ? "Retry now" : "Connect to " + host.profile.displayName) { connect(host) }
+                    .disabled(host.connectionState.isConnecting || host.connectionState.recovery.isAttempting)
+                if let error = host.connectionState.connectionError { Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
             }
         }.padding(16)
     }
@@ -274,11 +274,11 @@ struct ComputersSidebar: View {
         guard availableBulkActions.contains(action), let first = selectedItems.first,
               let host = connections.session(first.location.connection) else { return }
         bulkAction = .init(host: host, request: .init(boxes: selectedItems.map(\.box), action: action,
-            connection: host.workspace.connectionID, computer: host.profile.displayName))
+            connection: host.connectionState.connectionID, computer: host.profile.displayName))
     }
     private func confirmPurge() {
         guard canPurge, let first = selectedArchives.first, let host = connections.session(first.location.connection) else { return }
-        purge = .init(host: host, request: .init(boxes: selectedArchives.map(\.box), connection: host.workspace.connectionID))
+        purge = .init(host: host, request: .init(boxes: selectedArchives.map(\.box), connection: host.connectionState.connectionID))
     }
     private func row(_ item: ConnectedBox) -> some View {
         Group {
@@ -288,7 +288,7 @@ struct ComputersSidebar: View {
                     chooseAction: { action, connection in
                         boxActions.present(action, box: item.box, on: host, connection: connection)
                     })
-                    .environment(host.workspace)
+                    .environment(host)
                     .environment(runtimes.runtime(host.id).terminals)
                     .environment(runtimes.runtime(host.id).forwards)
                     .environment(runtimes.runtime(host.id).desktops)
@@ -298,14 +298,14 @@ struct ComputersSidebar: View {
     }
     private func connect(_ host: ConnectionSession) {
         Task { do { _ = try await connections.connect(host.profile) { try ConnectionClients.make(host.profile) } }
-            catch { host.workspace.commandError = error.localizedDescription } }
+            catch { host.selection.commandError = error.localizedDescription } }
     }
 }
 
 private struct CreatedBoxRow: View {
     let creation: BoxCreation
     @Environment(Connections.self) private var connections
-    private var selected: Bool { connections.activeID == creation.id.connection && connections.active.workspace.sandboxID == creation.id.box }
+    private var selected: Bool { connections.activeID == creation.id.connection && connections.active.selection.sandboxID == creation.id.box }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button { Task { await connections.selectBox(creation.id) } } label: {
@@ -348,12 +348,12 @@ private struct SidebarPurgeRequest: Identifiable {
 }
 
 private struct ComputerResourceButton: View {
-    let workspace: Workspace
+    let workspace: ConnectionSession
     let open: () -> Void
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let warning = workspace.resources.pools.contains { pool in
-                let health = workspace.resources.health(pool.id, now: context.date)
+            let warning = workspace.pools.resources.pools.contains { pool in
+                let health = workspace.pools.resources.health(pool.id, now: context.date)
                 return health.level == .warning || health.level == .blocked
             }
             Button(action: open) {
@@ -384,8 +384,8 @@ private struct ComputerBoxRow: View {
         connections.browser.filter == .archived ? connections.browser.archivedSelection : connections.browser.selectedBoxes
     }
     var body: some View {
-        let connection = host.workspace.connectionID
-        let pending = host.workspace.pendingBoxActions.contains(box.id)
+        let connection = host.connectionState.connectionID
+        let pending = host.pending.pendingBoxActions.contains(box.id)
         BoxRow(box: box, computer: showComputer ? host.profile.displayName : nil)
             .contextMenu {
                 if bulkSelection {
@@ -398,10 +398,10 @@ private struct ComputerBoxRow: View {
                 } else {
                 Button("Open Workspace") { Task { await connections.selectBox(.init(connection: host.id, box: box.id)) } }
                 Button("Open Shell") {
-                    let generation = host.workspace.connectionID
+                    let generation = host.connectionState.connectionID
                     Task {
                         await connections.selectBox(.init(connection: host.id, box: box.id))
-                        if host.workspace.connectionID == generation, host.workspace.sandboxID == box.id { await host.workspace.openShell() }
+                        if host.connectionState.connectionID == generation, host.selection.sandboxID == box.id { await host.selection.openShell() }
                     }
                 }.disabled(!box.isRunning)
                 Divider()

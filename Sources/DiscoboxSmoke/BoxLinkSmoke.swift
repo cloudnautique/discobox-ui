@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import GhosttyKit
 import DiscoboxCore
@@ -65,3 +67,5 @@ import DiscoboxCore
         return result.text.map { String(cString: $0) } ?? ""
     }
 }
+
+#endif

@@ -74,15 +74,15 @@ import DiscoboxCore
         return layout
     }
     var currentLayout: WorkspaceTabs? {
-        guard let workspace, let box = workspace.sandboxID else { return nil }
-        return layout(for: workspace.connectionID.uuidString + box)
+        guard let workspace, let box = workspace.selection.sandboxID else { return nil }
+        return layout(for: workspace.connectionState.connectionID.uuidString + box)
     }
     func resetLayouts() { restoreAgentLayout(); layouts.removeAll(); cancelPrefix() }
     func moveTab(_ delta: Int) { cancelPrefix(); restoreAgentLayout(); currentLayout?.moveTab(delta) }
     func movePane(_ delta: Int = 1) { cancelPrefix(); currentLayout?.movePane(delta) }
 
     weak var window: NSWindow?
-    private var workspace: Workspace?
+    private var workspace: ConnectionSession?
     private weak var connections: Connections?
     private var router = LeaderRouter()
     private var monitor: Any?
@@ -118,7 +118,7 @@ import DiscoboxCore
     }
     func performAppShortcut(_ action: AppShortcutAction) {
         guard window?.attachedSheet == nil,
-              workspace?.isConnected == true || (action == .switchBox && connections?.sessions.contains(where: { $0.workspace.isConnected }) == true) else { return }
+              workspace?.connectionState.isConnected == true || (action == .switchBox && connections?.sessions.contains(where: { $0.connectionState.isConnected }) == true) else { return }
         cancelPrefix()
         switch action {
         case .newBox: newBox()
@@ -132,7 +132,7 @@ import DiscoboxCore
         case .help: showCommands = true
         }
     }
-    func install(workspace: Workspace, connections: Connections? = nil) {
+    func install(workspace: ConnectionSession, connections: Connections? = nil) {
         self.workspace = workspace
         self.connections = connections
         guard monitor == nil else { return }
@@ -158,7 +158,7 @@ import DiscoboxCore
                 return nil
             }
         }
-        guard workspace?.isConnected == true, !(window.firstResponder is NSTextView) else { return event }
+        guard workspace?.connectionState.isConnected == true, !(window.firstResponder is NSTextView) else { return event }
         let token = Self.token(event)
         if event.isARepeat, swallowed.contains(event.keyCode) { return nil }
         let result = router.key(token, bindings: bindings)
@@ -178,10 +178,10 @@ import DiscoboxCore
         case .command(let command): hint = nil; perform(command)
         case .terminal(let number):
             hint = nil
-            if let workspace, workspace.execs.indices.contains(number) {
-                let terminal = workspace.execs[number]
+            if let workspace, workspace.selection.execs.indices.contains(number) {
+                let terminal = workspace.selection.execs[number]
                 selectTerminalPane(terminal)
-                tab = .terminal; Task { await workspace.selectExec(terminal.id) }
+                tab = .terminal; Task { await workspace.selection.selectExec(terminal.id) }
             } else { message("No terminal \(number)") }
         case .unknown: message("No command for that sequence · \(bindings.leader) ? shows commands")
         default: hint = nil
@@ -200,18 +200,18 @@ import DiscoboxCore
         guard let workspace else { return }
         switch command {
         case .tools: showTools = true
-        case .changes: Task { do { try await workspace.openSession(tool: "ai.discobox.diff") } catch { workspace.commandError = error.localizedDescription } }
+        case .changes: Task { do { try await workspace.selection.openSession(tool: "ai.discobox.diff") } catch { workspace.selection.commandError = error.localizedDescription } }
         case .files: restoreAgentLayout(); showFiles = true; currentLayout?.open("files")
         case .approvals: showApprovals = true
         case .agent:
             if let layout = currentLayout, layout.isSplit { layout.agentFocused = true }
             else { currentLayout?.open("agent") }
             tab = .terminal
-            if let exec = (workspace.execs.first(where: { $0.primary == true }) ?? workspace.execs.first) {
-                let generation = workspace.connectionID, box = workspace.sandboxID
+            if let exec = (workspace.selection.execs.first(where: { $0.primary == true }) ?? workspace.selection.execs.first) {
+                let generation = workspace.connectionState.connectionID, box = workspace.selection.sandboxID
                 Task {
-                    await workspace.selectExec(exec.id)
-                    guard workspace.connectionID == generation, workspace.sandboxID == box else { return }
+                    await workspace.selection.selectExec(exec.id)
+                    guard workspace.connectionState.connectionID == generation, workspace.selection.sandboxID == box else { return }
                     // An already-selected agent still needs keyboard ownership
                     // after a text field, inspector, or dialog had focus.
                     agentFocusRequest = UUID()
@@ -219,7 +219,7 @@ import DiscoboxCore
             }
         case .previousTerminal: moveTerminal(-1)
         case .nextTerminal: moveTerminal(1)
-        case .newShell: restoreAgentLayout(); tab = .terminal; Task { await workspace.openShell() }
+        case .newShell: restoreAgentLayout(); tab = .terminal; Task { await workspace.selection.openShell() }
         case .services: openServices()
         case .audit: restoreAgentLayout(); showFiles = false; showAudit = true; currentLayout?.open("audit")
         case .boxes: focusMode = false; choosingBox = true
@@ -240,30 +240,26 @@ import DiscoboxCore
         else { currentLayout?.open(terminal.primary == true ? "agent" : "exec:" + terminal.id) }
     }
     private func moveTerminal(_ delta: Int) {
-        guard let workspace, !workspace.execs.isEmpty else { return }
-        let index = workspace.execs.firstIndex { $0.id == workspace.execID } ?? 0
+        guard let workspace, !workspace.selection.execs.isEmpty else { return }
+        let index = workspace.selection.execs.firstIndex { $0.id == workspace.selection.execID } ?? 0
         tab = .terminal
-        let terminal = workspace.execs[(index + delta + workspace.execs.count) % workspace.execs.count]
+        let terminal = workspace.selection.execs[(index + delta + workspace.selection.execs.count) % workspace.selection.execs.count]
         selectTerminalPane(terminal)
-        Task { await workspace.selectExec(terminal.id) }
+        Task { await workspace.selection.selectExec(terminal.id) }
     }
     private func moveBox(_ delta: Int) {
         if let connections {
             let boxes = connections.browserBoxes
             guard !boxes.isEmpty else { return }
-            let current = workspace?.sandboxID.map { BoxLocation(connection: connections.activeID, box: $0) }
+            let current = workspace?.selection.sandboxID.map { BoxLocation(connection: connections.activeID, box: $0) }
             let index = boxes.firstIndex { $0.location == current } ?? 0
             let location = boxes[(index + delta + boxes.count) % boxes.count].location
             tab = .terminal
             Task { await connections.selectBox(location) }
             return
         }
-        guard let workspace, !workspace.visibleBoxes.isEmpty else { return }
-        let boxes = workspace.visibleBoxes
-        let index = boxes.firstIndex { $0.id == workspace.sandboxID } ?? 0
-        tab = .terminal
-        Task { await workspace.selectBox(boxes[(index + delta + boxes.count) % boxes.count].id) }
     }
+
     private func message(_ text: String) {
         hint = text
         timeout = Task { [weak self] in

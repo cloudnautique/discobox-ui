@@ -1,24 +1,26 @@
+#if DEBUG
+@testable import DiscoboxUI
 import SwiftUI
 import DiscoboxCore
 
 @MainActor enum UpstreamIntegrationSmoke {
     static func panels() async throws -> [(String, AnyView)] {
-        let workspace = Workspace()
+        let workspace = ConnectionSession()
         await workspace.connect(client: UpstreamApprovalFixture(), label: "Integration fixture", demo: true)
-        await workspace.refreshApprovals()
-        var panels: [(String, AnyView)] = workspace.approvals.map { item in
+        await workspace.approvalStore.refreshApprovals()
+        var panels: [(String, AnyView)] = workspace.approvalStore.approvals.map { item in
             ("upstream-" + item.kind, AnyView(ApprovalSheet(item: item).environment(workspace)))
         }
-        panels.append(("pool-network", AnyView(PoolNetworkView(poolID: "local", computer: "Fixture computer", connection: workspace.connectionID).environment(workspace))))
-        let harnessWorkspace = Workspace()
+        panels.append(("pool-network", AnyView(PoolNetworkView(poolID: "local", computer: "Fixture computer", connection: workspace.connectionState.connectionID).environment(workspace))))
+        let harnessWorkspace = ConnectionSession()
         await harnessWorkspace.connect(client: DemoClient(), label: "Harness fixture", demo: true)
         let harness = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"demo-harness","name":"Agent subscription"}"#.utf8))
-        let saved = HarnessManagement(workspace: harnessWorkspace, harnessID: harness.id)
+        let saved = HarnessManagement(connection: harnessWorkspace.connectionState, inventory: harnessWorkspace.inventory, service: harnessWorkspace.harnessService, sourceBoxID: harnessWorkspace.selection.sandboxID, harnessID: harness.id)
         await saved.load()
-        let pending = HarnessManagement(workspace: harnessWorkspace, harnessID: harness.id)
+        let pending = HarnessManagement(connection: harnessWorkspace.connectionState, inventory: harnessWorkspace.inventory, service: harnessWorkspace.harnessService, sourceBoxID: harnessWorkspace.selection.sandboxID, harnessID: harness.id)
         await pending.load(); pending.selectBox("demo-ui"); await pending.refreshPreview()
         for (name, model) in [("harness-saved", saved), ("harness-review", pending)] {
-            panels.append((name, AnyView(HarnessManagementView(harness: harness, manager: model, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))))
+            panels.append((name, AnyView(HarnessManagementView(harness: harness, manager: model, catalog: harnessWorkspace.catalog, computer: "Fixture computer", openBox: { _ in }, newBox: {}, console: {}, close: {}))))
         }
         let file: JSONValue = .object([
             "path": .string("~/.config/agent/settings.json"),
@@ -59,3 +61,5 @@ private actor UpstreamApprovalFixture: DiscoboxClient {
         return try await base.perform(request)
     }
 }
+
+#endif

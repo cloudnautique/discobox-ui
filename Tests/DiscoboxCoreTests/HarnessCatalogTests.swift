@@ -11,20 +11,20 @@ import Testing
 
 @MainActor @Test func harnessPrefetchDoesNotBlockConnectionAndSharesOneRequest() async throws {
     let client = CatalogFixture()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    #expect(workspace.isConnected)
+    #expect(workspace.connectionState.isConnected)
     await client.waitUntilBlocked()
-    let first = Task { try await workspace.harnesses() }
-    let second = Task { try await workspace.harnesses() }
+    let first = Task { try await workspace.catalog.harnesses() }
+    let second = Task { try await workspace.catalog.harnesses() }
     await client.release()
     #expect(try await first.value.count == 1)
     #expect(try await second.value.count == 1)
-    _ = try await workspace.harnesses()
+    _ = try await workspace.catalog.harnesses()
     #expect(await client.calls == 1)
-    #expect(workspace.cachedHarnesses.count == 1)
+    #expect(workspace.catalog.cachedHarnesses.count == 1)
     workspace.disconnect()
-    #expect(workspace.cachedHarnesses.isEmpty)
+    #expect(workspace.catalog.cachedHarnesses.isEmpty)
 }
 
 private actor CatalogFixture: DiscoboxClient {
@@ -44,15 +44,15 @@ private actor CatalogFixture: DiscoboxClient {
 
 @MainActor @Test func harnessSettingsRefreshBypassesWarmCatalog() async throws {
     let client = RefreshCatalogFixture()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    _ = try await workspace.harnesses()
-    #expect(workspace.cachedHarnesses.first?.configured == false)
+    _ = try await workspace.catalog.harnesses()
+    #expect(workspace.catalog.cachedHarnesses.first?.configured == false)
     await client.configured()
-    _ = try await workspace.harnesses()
-    #expect(workspace.cachedHarnesses.first?.configured == false)
-    _ = try await workspace.harnesses(force: true)
-    #expect(workspace.cachedHarnesses.first?.configured == true)
+    _ = try await workspace.catalog.harnesses()
+    #expect(workspace.catalog.cachedHarnesses.first?.configured == false)
+    _ = try await workspace.catalog.harnesses(force: true)
+    #expect(workspace.catalog.cachedHarnesses.first?.configured == true)
     workspace.disconnect()
 }
 

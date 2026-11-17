@@ -2,7 +2,7 @@ import SwiftUI
 import DiscoboxCore
 
 struct ToolsSheet: View {
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var tools: [JSONValue] = []
     @State private var busy = false
@@ -23,7 +23,7 @@ struct ToolsSheet: View {
 
     var body: some View {
         StudioConfirmation(title: "Tools & review", symbol: "wrench.and.screwdriver",
-                           subtitle: workspace.selectedBox?.displayName, width: 620) {
+                           subtitle: workspace.selection.selectedBox?.displayName, width: 620) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -52,7 +52,7 @@ struct ToolsSheet: View {
         }.frame(height: 640).interactiveDismissDisabled(busy)
         .task {
             defer { loading = false }
-            do { tools = try await workspace.operation(.tools)["tools"].array }
+            do { tools = try await workspace.tools.list(box: workspace.selection.sandboxID)["tools"].array }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -134,7 +134,7 @@ struct ToolsSheet: View {
         busy = true; error = nil
         Task {
             do {
-                try await workspace.openSession(tool: tool,
+                try await workspace.selection.openSession(tool: tool,
                     base: refs ? base.trimmingCharacters(in: .whitespacesAndNewlines) : "",
                     head: refs ? head.trimmingCharacters(in: .whitespacesAndNewlines) : "")
                 dismiss()

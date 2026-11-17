@@ -48,16 +48,16 @@ private func powerBox(display: String = "running", reported: String? = nil) thro
     hub.browser.filter = .running
     #expect(!hub.browserBoxes.isEmpty)
     await client.setReport(Date.now.addingTimeInterval(-180).ISO8601Format())
-    await host.workspace.refresh()
+    await host.refresh()
     #expect(hub.browserBoxes.isEmpty)
     #expect(hub.switcherBoxes.allSatisfy { !$0.power.isCurrent })
     hub.browser.filter = .all
     #expect(!hub.browserBoxes.isEmpty) // Retain unknown boxes for inspection.
     await client.setReport(Date.now.ISO8601Format())
-    await host.workspace.refresh()
+    await host.refresh()
     #expect(hub.switcherBoxes.allSatisfy { $0.power.isCurrent })
     await client.goOffline()
-    await host.workspace.refresh()
+    await host.refresh()
     #expect(hub.switcherBoxes.allSatisfy { !$0.power.isCurrent })
     #expect(hub.switcherBoxes.allSatisfy { BoxIndicator(box: $0.box, activity: $0.activity!, power: $0.power).state == .unavailable })
     hub.browser.filter = .running
@@ -65,16 +65,16 @@ private func powerBox(display: String = "running", reported: String? = nil) thro
 }
 
 @MainActor @Test func retainedTerminalCannotAttachToADifferentWorkspacesInventory() async throws {
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: DemoClient(), label: "Fixture", demo: true)
     defer { workspace.disconnect() }
-    await workspace.selectBox("demo-ui")
-    let live = try #require(workspace.execs.first { $0.acceptsInput })
-    #expect(workspace.canAttachTerminal(live))
+    await workspace.selection.selectBox("demo-ui")
+    let live = try #require(workspace.selection.execs.first { $0.acceptsInput })
+    #expect(workspace.selection.canAttachTerminal(live))
     let foreign = try JSONDecoder().decode(Exec.self, from: Data(#"{"id":"other-host-exec","status":"running","command":["sh"],"workdir":"/","tty":true}"#.utf8))
-    #expect(!workspace.canAttachTerminal(foreign))
-    await workspace.selectBox("demo-api")
-    #expect(!workspace.canAttachTerminal(live))
+    #expect(!workspace.selection.canAttachTerminal(foreign))
+    await workspace.selection.selectBox("demo-api")
+    #expect(!workspace.selection.canAttachTerminal(live))
 }
 
 private actor PowerInventoryFixture: DiscoboxClient {

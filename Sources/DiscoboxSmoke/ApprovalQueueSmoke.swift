@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -14,9 +16,9 @@ import DiscoboxCore
         } catch { print("APPROVAL_QUEUE_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
     static func verify() async throws {
-        let workspace = Workspace(), client = ApprovalQueueDesktopFixture()
+        let workspace = ConnectionSession(), client = ApprovalQueueDesktopFixture()
         await workspace.connect(client: client, label: "Offline approval queue", demo: true)
-        await workspace.refreshApprovals()
+        await workspace.approvalStore.refreshApprovals()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: ApprovalInboxView(boxID: "demo-ui").environment(workspace))
         NSApp.activate()
@@ -33,18 +35,18 @@ import DiscoboxCore
         try capture(window, name: "approval-review-dark")
         footerButtons(window).first?.performClick(nil)
         try await wait { footerButtons(window).count == 3 && defaultButton(window)?.isEnabled == true }
-        guard workspace.approvals.filter({ $0.boxID == "demo-ui" }).count == 3, await client.answers.isEmpty else {
+        guard workspace.approvalStore.approvals.filter({ $0.boxID == "demo-ui" }).count == 3, await client.answers.isEmpty else {
             throw DiscoboxError("Later answered a request")
         }
         for remaining in [2, 1, 0] {
             defaultButton(window)?.performClick(nil)
             try await wait { footerButtons(window).count == 4 && footerButtons(window)[2].isEnabled }
             footerButtons(window)[2].performClick(nil)
-            try await wait { workspace.approvals.filter { $0.boxID == "demo-ui" }.count == remaining }
+            try await wait { workspace.approvalStore.approvals.filter { $0.boxID == "demo-ui" }.count == remaining }
             if remaining > 0 { try await wait { footerButtons(window).count == 3 && defaultButton(window)?.isEnabled == true } }
         }
         try await wait { window.defaultButtonCell == nil }
-        guard workspace.approvals.map(\.id) == ["other"], await client.answers == ["one", "two", "three"] else {
+        guard workspace.approvalStore.approvals.map(\.id) == ["other"], await client.answers == ["one", "two", "three"] else {
             throw DiscoboxError("Queue answered the wrong requests or submitted twice")
         }
         try capture(window, name: "approval-queue-empty")
@@ -111,3 +113,5 @@ private actor ApprovalQueueDesktopFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

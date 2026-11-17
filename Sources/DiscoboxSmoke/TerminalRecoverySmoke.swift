@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import GhosttyKit
 import DiscoboxCore
@@ -76,12 +78,12 @@ import DiscoboxCore
     }
 
     private static func preservedOutput() async throws {
-        let workspace = Workspace(), store = TerminalStore()
+        let workspace = ConnectionSession(), store = TerminalStore()
         defer { store.closeAll(); workspace.disconnect() }
         await workspace.connect(client: DemoClient(), label: "Offline recovery", demo: true)
-        await workspace.selectBox("demo-ui")
-        guard let inventory = workspace.terminalInventory else { throw DiscoboxError("Missing terminal inventory") }
-        let identity = TerminalIdentity(connection: workspace.connectionID, endpoint: "offline", project: inventory.project, box: inventory.box, exec: "agent-1", demo: true)
+        await workspace.selection.selectBox("demo-ui")
+        guard let inventory = workspace.selection.terminalInventory else { throw DiscoboxError("Missing terminal inventory") }
+        let identity = TerminalIdentity(connection: workspace.connectionState.connectionID, endpoint: "offline", project: inventory.project, box: inventory.box, exec: "agent-1", demo: true)
         let old = store.session(identity)
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 850, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = old.view; window.makeKeyAndOrderFront(nil)
@@ -89,15 +91,15 @@ import DiscoboxCore
         try await wait { old.view.outputText().contains("Unicode: café 日本語") }
         old.view.processEnded()
         old.connectionState = "output-stalled"
-        store.recoverInterrupted(inventory, connection: workspace.connectionID)
+        store.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         guard store.session(identity) === old, old.view.surface != nil else { throw DiscoboxError("Inventory refresh bypassed the output-stall retry limit") }
         old.connectionState = "connected"
-        store.recoverInterrupted(inventory, connection: workspace.connectionID)
+        store.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         let replacement = store.session(identity)
         guard replacement !== old, old.view.surface == nil,
               replacement.previousOutput?.contains("Unicode: café 日本語") == true else { throw DiscoboxError("Reconnect discarded useful text") }
         replacement.ended = true
-        store.recoverInterrupted(inventory, connection: workspace.connectionID)
+        store.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         guard store.session(identity) === replacement else { throw DiscoboxError("Recovery ignored its cooldown") }
         store.reconnect(identity)
         let retry = store.session(identity)
@@ -111,3 +113,5 @@ import DiscoboxCore
         throw DiscoboxError("Terminal recovery check timed out")
     }
 }
+
+#endif

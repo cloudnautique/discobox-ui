@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import Observation
@@ -8,14 +10,14 @@ import DiscoboxCore
 @MainActor enum DialogReceiptSmoke {
     static func verify() async throws {
         for approval in [false, true] {
-            let client = DialogReceiptClient(), workspace = Workspace()
+            let client = DialogReceiptClient(), workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Dialog receipt fixture", demo: true)
-            await workspace.selectBox("demo-api")
-            await workspace.refreshApprovals()
-            guard let box = workspace.selectedBox, let item = workspace.approvals.first,
-                  let other = workspace.sandboxes.first(where: { $0.id == "demo-ui" }) else { throw DiscoboxError("Dialog receipt fixtures missing") }
+            await workspace.selection.selectBox("demo-api")
+            await workspace.approvalStore.refreshApprovals()
+            guard let box = workspace.selection.selectedBox, let item = workspace.approvalStore.approvals.first,
+                  let other = workspace.inventory.sandboxes.first(where: { $0.id == "demo-ui" }) else { throw DiscoboxError("Dialog receipt fixtures missing") }
             let model = DialogReceiptModel()
-            let first: DialogReceiptPresentation = approval ? .approval(UUID(), item) : .action(.init(box: box, action: .archive, connection: workspace.connectionID))
+            let first: DialogReceiptPresentation = approval ? .approval(UUID(), item) : .action(.init(box: box, action: .archive, connection: workspace.connectionState.connectionID))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = NSHostingView(rootView: DialogReceiptHost(model: model).environment(workspace).environment(TerminalStore()).environment(ServiceForwards()))
             window.makeKeyAndOrderFront(nil)
@@ -34,14 +36,14 @@ import DiscoboxCore
             button.performClick(nil)
             try await wait { await client.waiting }
             if approval {
-                try await wait { workspace.approvals.isEmpty }
+                try await wait { workspace.approvalStore.approvals.isEmpty }
                 // The acknowledged decision has a receipt even while the next
                 // read stalls; its Close action must remain usable.
                 try await wait { views(sheet.contentView!).compactMap { $0 as? NSButton }.contains { $0.cell === sheet.defaultButtonCell && $0.isEnabled } }
                 views(sheet.contentView!).compactMap { $0 as? NSButton }.first { $0.cell === sheet.defaultButtonCell }?.performClick(nil)
             }
             try await wait { window.attachedSheet == nil && model.dialog == nil }
-            let next = DialogReceiptPresentation.action(.init(box: other, action: .rename, connection: workspace.connectionID))
+            let next = DialogReceiptPresentation.action(.init(box: other, action: .rename, connection: workspace.connectionState.connectionID))
             model.dialog = next
             try await wait { window.attachedSheet?.contentView != nil }
             let nextSheet = window.attachedSheet
@@ -58,19 +60,19 @@ import DiscoboxCore
 
     private static func verifyPurgeConfirmations() async throws {
         for bulk in [false, true] {
-            let client = StudioPurgeClient(), workspace = Workspace()
+            let client = StudioPurgeClient(), workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Studio purge fixture", demo: true)
             for id in ["demo-api", "demo-tests"] {
-                try await workspace.performBoxAction(.archive, boxID: id, connection: workspace.connectionID)
+                try await workspace.commands.performBoxAction(.archive, boxID: id, connection: workspace.connectionState.connectionID)
             }
-            let boxes = workspace.sandboxes.filter(\.isArchived)
+            let boxes = workspace.inventory.sandboxes.filter(\.isArchived)
             guard let first = boxes.first, boxes.count == 2 else { throw DiscoboxError("Purge fixtures missing") }
             let model = DialogReceiptModel()
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = NSHostingView(rootView: DialogReceiptHost(model: model).environment(workspace).environment(TerminalStore()).environment(ServiceForwards()))
             window.makeKeyAndOrderFront(nil)
             defer { model.dialog = nil; window.orderOut(nil); workspace.disconnect() }
-            model.dialog = bulk ? .bulk(.init(boxes: boxes, connection: workspace.connectionID)) : .action(.init(box: first, action: .purge, connection: workspace.connectionID))
+            model.dialog = bulk ? .bulk(.init(boxes: boxes, connection: workspace.connectionState.connectionID)) : .action(.init(box: first, action: .purge, connection: workspace.connectionState.connectionID))
             try await wait { window.attachedSheet?.contentView != nil }
             guard let root = window.attachedSheet?.contentView else { throw DiscoboxError("Purge sheet missing") }
             try await wait { views(root).compactMap { $0 as? NSTextField }.contains { $0.placeholderString == "DELETE" } }
@@ -91,7 +93,7 @@ import DiscoboxCore
             }
             button.performClick(nil)
             try await wait { window.attachedSheet == nil }
-            guard await client.purges == (bulk ? 2 : 1), workspace.sandboxes.filter(\.isArchived).count == (bulk ? 0 : 1) else {
+            guard await client.purges == (bulk ? 2 : 1), workspace.inventory.sandboxes.filter(\.isArchived).count == (bulk ? 0 : 1) else {
                 throw DiscoboxError("Studio purge confirmation did not target exactly the confirmed fixture boxes")
             }
         }
@@ -162,3 +164,5 @@ private actor DialogReceiptClient: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+#endif

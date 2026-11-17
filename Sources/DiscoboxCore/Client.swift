@@ -61,7 +61,7 @@ public actor CompanionClient: DiscoboxClient {
         let deadline: TimeInterval? = request.operation == .serverPeer ? 5 : (isApproval ? approvalTimeout : nil)
         let job = ProcessRequest(executable: executable, endpoint: destination, timeout: deadline,
                                  timeoutMessage: request.operation == .serverPeer ? "The computer did not report its identity in time." : timeoutMessage,
-                                 interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
+                                 newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await BlockingThread.run(name: "Discobox companion request") { try job.run() }
@@ -119,12 +119,12 @@ private final class ProcessRequest: @unchecked Sendable {
     private let payload: Data
     private let progress: (@Sendable (Int64) -> Void)?
 
-    init(executable: URL, endpoint: String, timeout: TimeInterval?, timeoutMessage: String, interactive: Bool, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
+    init(executable: URL, endpoint: String, timeout: TimeInterval?, timeoutMessage: String, newShell: Bool, manage: Bool, payload: Data, progress: (@Sendable (Int64) -> Void)? = nil) {
         self.progress = progress
         self.timeout = timeout; self.timeoutMessage = timeoutMessage
         process.executableURL = executable
         if Task.currentPriority.rawValue <= TaskPriority.utility.rawValue { process.qualityOfService = .utility }
-        process.arguments = ["--endpoint", endpoint] + (interactive ? ["--allow-input"] : []) + (newShell ? ["--allow-shell"] : []) + (manage ? ["--allow-manage"] : [])
+        process.arguments = ["--endpoint", endpoint] + (newShell ? ["--allow-shell"] : []) + (manage ? ["--allow-manage"] : [])
         self.payload = payload
     }
 

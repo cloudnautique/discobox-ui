@@ -19,13 +19,13 @@ func reply(body string) *http.Response {
 
 func TestPassiveOperationsCannotReachLifecycleOrActiveReads(t *testing.T) {
 	for _, op := range []string{"start", "stop", "restart", "delete", "shutdown", "attach", "logs", "files", "resources", "create", "approve"} {
-		_, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"}, true)
+		_, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"})
 		if err == nil {
 			t.Errorf("accepted forbidden operation %q", op)
 		}
 	}
 	for _, op := range []string{"defaultProject", "sandboxes", "execs", "services", "screen"} {
-		method, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"}, false)
+		method, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"})
 		if err != nil || method != "GET" {
 			t.Errorf("passive %s: method=%q error=%v", op, method, err)
 		}
@@ -34,7 +34,7 @@ func TestPassiveOperationsCannotReachLifecycleOrActiveReads(t *testing.T) {
 
 func TestRejectPathInjectionAndVirtualPrimary(t *testing.T) {
 	for _, id := range []string{"../shutdown", "a/b", "a%2fb", "?x", "", "primary"} {
-		_, _, _, err := route(request{Operation: "screen", ProjectID: "p", SandboxID: "s", ExecID: id}, false)
+		_, _, _, err := route(request{Operation: "screen", ProjectID: "p", SandboxID: "s", ExecID: id})
 		if err == nil {
 			t.Errorf("accepted unsafe exec %q", id)
 		}
@@ -42,81 +42,22 @@ func TestRejectPathInjectionAndVirtualPrimary(t *testing.T) {
 }
 
 func TestDefaultProjectAlwaysUsesServerAlias(t *testing.T) {
-	method, path, _, err := route(request{Operation: "defaultProject", ProjectID: "other"}, false)
+	method, path, _, err := route(request{Operation: "defaultProject", ProjectID: "other"})
 	if err != nil || method != "GET" || path != "/projects/default" {
 		t.Fatalf("wrong default resolution: %s %s %v", method, path, err)
 	}
-	if _, _, _, err := route(request{Operation: "projects"}, false); err == nil {
+	if _, _, _, err := route(request{Operation: "projects"}); err == nil {
 		t.Fatal("project enumeration is still exposed")
 	}
 }
 
-func TestInputRequiresOptInAndExactWireShape(t *testing.T) {
-	text, key := "hello", "Enter"
-	req := request{Operation: "input", ProjectID: "p", SandboxID: "s", ExecID: "e", Input: []inputPart{{Text: &text}, {Key: &key}}}
-	if _, _, _, err := route(req, false); err == nil {
-		t.Fatal("input accepted without opt-in")
-	}
-	method, path, body, err := route(req, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if method != "POST" || path != "/api/projects/p/sandboxes/s/execs/e/input" {
-		t.Fatalf("wrong route: %s %s", method, path)
-	}
-	if string(body) != `{"input":[{"text":"hello"},{"key":"Enter"}]}` {
-		t.Fatalf("wrong body: %s", body)
-	}
-	req.Input = []inputPart{{Text: &text, Key: &key}}
-	if _, _, _, err := route(req, true); err == nil {
-		t.Fatal("accepted ambiguous input part")
-	}
-}
-
-func TestInputPreflightRefusesStoppedOrCachedTerminal(t *testing.T) {
-	for _, scenario := range []struct{ name, box, exec string }{
-		{"stopped", `{"runtime":{"runtimeState":"stopped"}}`, `{"status":"running","tty":true}`},
-		{"cached", `{"runtime":{"runtimeState":"running"}}`, `{"status":"running","tty":true,"observedAt":"2026-10-26T10:00:00Z"}`},
-		{"exited", `{"runtime":{"runtimeState":"running"}}`, `{"status":"exited","tty":true}`},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			b := &bridge{base: "http://fixture", allowInput: true, client: &http.Client{Transport: fakeTransport(func(r *http.Request) (*http.Response, error) {
-				if r.Method != "GET" {
-					t.Fatal("sent a write after failed preflight")
-				}
-				if strings.HasPrefix(r.URL.Path, "/api/") {
-					return reply(scenario.exec), nil
-				}
-				return reply(scenario.box), nil
-			})}}
-			text := "hello"
-			_, err := b.execute(context.Background(), request{Operation: "input", ProjectID: "p", SandboxID: "s", ExecID: "e", Input: []inputPart{{Text: &text}}})
-			if err == nil {
-				t.Fatal("input accepted")
-			}
-		})
-	}
-}
-
-func TestExplicitInputIsSentOnce(t *testing.T) {
-	writes := 0
-	b := &bridge{base: "http://fixture", allowInput: true, client: &http.Client{Transport: fakeTransport(func(r *http.Request) (*http.Response, error) {
-		if r.Method == "POST" {
-			writes++
-			if r.Header.Get("Content-Type") != "application/json" {
-				t.Fatal("missing content type")
-			}
-			return reply(`{"resumeAfter":"position"}`), nil
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			return reply(`{"status":"running","tty":true}`), nil
-		}
-		return reply(`{"runtime":{"runtimeState":"running"}}`), nil
+func TestLegacyInputIsRejectedWithoutAnHTTPRequest(t *testing.T) {
+	b := &bridge{client: &http.Client{Transport: fakeTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("removed input operation made an HTTP request")
+		return nil, nil
 	})}}
-	text := "hello"
-	result, err := b.execute(context.Background(), request{Operation: "input", ProjectID: "p", SandboxID: "s", ExecID: "e", Input: []inputPart{{Text: &text}}})
-	if err != nil || result.Status != 200 || writes != 1 {
-		t.Fatalf("writes=%d result=%+v err=%v", writes, result, err)
+	if _, err := b.execute(context.Background(), request{Operation: "input", ProjectID: "p", SandboxID: "s", ExecID: "e"}); err == nil {
+		t.Fatal("accepted removed input operation")
 	}
 }
 
@@ -137,11 +78,11 @@ func TestPassiveScreenDoesNotPreflightOrWrite(t *testing.T) {
 
 func TestEndpointValidationAndRedirectPolicy(t *testing.T) {
 	for _, endpoint := range []string{"iroh://peer", "https://user:pass@host", "http://host?x=y", "unix://host/path", "http://"} {
-		if _, err := newBridge(endpoint, false); err == nil {
+		if _, err := newBridge(endpoint); err == nil {
 			t.Errorf("accepted %q", endpoint)
 		}
 	}
-	b, err := newBridge("unix://", false)
+	b, err := newBridge("unix://")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,10 +3,10 @@ import Testing
 @testable import DiscoboxCore
 
 @MainActor @Test func fileUploadsUseTheLoadedFolderInsteadOfAnUnsubmittedPath() async throws {
-    let client = FilesFixture(), workspace = Workspace()
+    let client = FilesFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     #expect(browser.directory == "/workspace/discobox" && browser.canTransfer)
     browser.path = "/not-submitted"
@@ -20,10 +20,10 @@ import Testing
 }
 
 @MainActor @Test func folderDropChecksItsOwnConflictsAndSkipPreservesExistingFiles() async throws {
-    let client = FilesFixture(), workspace = Workspace()
+    let client = FilesFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     browser.upload([URL(fileURLWithPath: "/tmp/existing.txt"), URL(fileURLWithPath: "/tmp/new.txt")], to: "/workspace/source/assets")
     try await waitForFiles { browser.conflict != nil }
@@ -38,10 +38,10 @@ import Testing
 }
 
 @MainActor @Test func replacementRequiresConfirmationAndCannotRetargetAfterBoxSwitch() async throws {
-    let client = FilesFixture(), workspace = Workspace()
+    let client = FilesFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     browser.upload([URL(fileURLWithPath: "/tmp/existing.txt")])
     try await waitForFiles { browser.conflict != nil }
@@ -50,17 +50,17 @@ import Testing
     #expect(await client.writes.first?.action == "replace")
     browser.upload([URL(fileURLWithPath: "/tmp/existing.txt")])
     try await waitForFiles { browser.conflict != nil }
-    await workspace.selectBox("demo-tests")
+    await workspace.selection.selectBox("demo-tests")
     browser.resolveConflict(.replace)
     #expect(await client.writes.count == 1)
     #expect(!browser.canTransfer)
 }
 
 @MainActor @Test func slowFileListingCannotReplaceANewerFolderOrEnablePrematureDrops() async throws {
-    let client = FilesFixture(), workspace = Workspace()
+    let client = FilesFixture(), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     let slow = Task { await browser.load("/slow") }
     try await waitForFiles { await client.waiting }
@@ -74,10 +74,10 @@ import Testing
 }
 
 @MainActor @Test func fileTransferFailureClearsBusyAndClosingAPanelPreventsFurtherWrites() async throws {
-    let client = FilesFixture(failTransfers: true), workspace = Workspace()
+    let client = FilesFixture(failTransfers: true), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     browser.upload([URL(fileURLWithPath: "/tmp/new.txt")])
     // Failure is followed by a directory refresh; the transfer flag alone
@@ -90,10 +90,10 @@ import Testing
 }
 
 @MainActor @Test func filesRejectUnsafeRemoteNamesBeforeTheyCanBecomeLocalPaths() async throws {
-    let client = FilesFixture(unsafeNames: true), workspace = Workspace()
+    let client = FilesFixture(unsafeNames: true), workspace = ConnectionSession()
     await workspace.connect(client: client, label: "Files", demo: true)
-    await workspace.selectBox("demo-ui")
-    let browser = try FileBrowser(workspace: workspace)
+    await workspace.selection.selectBox("demo-ui")
+    let browser = try FileBrowser(connection: workspace.connectionState, selection: workspace.selection)
     await browser.load()
     #expect(browser.error?.contains("unsafe file name") == true)
     #expect(!browser.canTransfer && browser.entries.isEmpty)

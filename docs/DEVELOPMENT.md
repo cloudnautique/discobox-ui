@@ -54,8 +54,9 @@ handled by the app. To check links and recovery using offline terminal fixtures
 (requires an unlocked desktop):
 
 ```sh
-dist/Discobox.app/Contents/MacOS/DiscoboxDesktop --box-link-smoke
-dist/Discobox.app/Contents/MacOS/DiscoboxDesktop --terminal-recovery-smoke
+make smoke
+.build/DiscoboxSmoke.app/Contents/MacOS/DiscoboxSmoke --box-link-smoke
+.build/DiscoboxSmoke.app/Contents/MacOS/DiscoboxSmoke --terminal-recovery-smoke
 ```
 
 The bridge reports attachment state through a private, nonblocking FIFO, separate
@@ -138,12 +139,22 @@ Update the runner/Xcode selection and cache keys together when changing toolchai
 For an additional interactive-session check, run the demo UI smoke test:
 
 ```sh
-dist/Discobox.app/Contents/MacOS/DiscoboxDesktop \
+make smoke
+.build/DiscoboxSmoke.app/Contents/MacOS/DiscoboxSmoke \
   --dialog-smoke -ApplePersistenceIgnoreState YES -NSQuitAlwaysKeepsWindows NO
 ```
 
-This opens an isolated demo window, checks dialogs and inspector behavior, and
-exits with a pass/fail result. It requires a logged-in macOS desktop session.
+The separate debug executable imports the same `DiscoboxUI` module used by the
+release app and mounts `ConnectedWorkspace` with fixture clients. It checks dialogs
+and inspector behavior, then exits with a pass/fail result. It requires an unlocked,
+logged-in macOS desktop. Run it with `--help` to list checks. Smoke flags are not
+handled by the shipping app. The fixture bundle has its own identifier and no box
+URL registration; it is not copied into `dist` or release archives.
+
+`swift build --product DiscoboxDesktop --configuration release` builds only the
+shipping dependency graph. `make verify` also checks its binary for leaked smoke
+runners/flags. The smoke target requires a debug build for `@testable` access to UI
+internals; a release build of that target only prints the debug build instruction.
 
 ## Xcode
 

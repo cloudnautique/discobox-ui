@@ -1,3 +1,5 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import SwiftUI
 import DiscoboxCore
@@ -7,10 +9,10 @@ import DiscoboxCore
 @MainActor enum ApprovalDurationSmoke {
     static func verify() async throws {
         for mode in ["automatic", "too-long", "shorter", "deny", "external"] {
-            let client = CappedApprovalClient(), workspace = Workspace()
+            let client = CappedApprovalClient(), workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Capped fixture", demo: true)
-            await workspace.refreshApprovals()
-            guard let item = workspace.approvals.first else { throw DiscoboxError("Approval fixture missing") }
+            await workspace.approvalStore.refreshApprovals()
+            guard let item = workspace.approvalStore.approvals.first else { throw DiscoboxError("Approval fixture missing") }
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
             let initial: String? = mode == "too-long" ? "7200" : mode == "shorter" ? "900" : nil
             window.contentView = NSHostingView(rootView: ApprovalSheet(item: item, initialDuration: initial).environment(workspace))
@@ -31,7 +33,7 @@ import DiscoboxCore
             }
             if mode == "external" {
                 await client.resolve()
-                await workspace.refreshApprovals()
+                await workspace.approvalStore.refreshApprovals()
                 try await wait {
                     let controls = views(window.contentView!).compactMap { $0 as? NSButton }
                     return controls.count == 2 && controls.contains { $0.cell === window.defaultButtonCell && $0.isEnabled }
@@ -50,7 +52,7 @@ import DiscoboxCore
             }
             if mode == "deny" || mode == "too-long" { buttons()!.deny.performClick(nil) }
             else { buttons()!.approve.performClick(nil) }
-            try await wait { workspace.approvals.isEmpty }
+            try await wait { workspace.approvalStore.approvals.isEmpty }
             guard let answer = await client.answers.first else { throw DiscoboxError("Approval form sent no answer") }
             if mode == "deny" || mode == "too-long" {
                 guard answer.action == "deny", await client.granted == nil else { throw DiscoboxError("Deny action granted access") }
@@ -94,3 +96,5 @@ private actor CappedApprovalClient: DiscoboxClient {
         }
     }
 }
+
+#endif

@@ -10,7 +10,7 @@ struct CredentialDetailsRequest: Identifiable {
 struct CredentialDetailsView: View {
     let request: CredentialDetailsRequest
     let saved: (JSONValue) -> Void
-    @Environment(Workspace.self) private var workspace
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
     @State private var maximum = ""
@@ -21,10 +21,10 @@ struct CredentialDetailsView: View {
     @State private var completed = false
     @State private var verifiedSecret: JSONValue?
     private var secret: JSONValue { request.secret }
-    private var valid: Bool { workspace.isConnected && workspace.connectionID == request.connection }
+    private var valid: Bool { workspace.connectionState.isConnected && workspace.connectionState.connectionID == request.connection }
     private var payload: JSONValue? { try? CredentialLimits.payload(secret: secret, seconds: maximum, host: host) }
     var body: some View {
-        StudioConfirmation(title: "Credential details", symbol: "key", subtitle: connections?.sessions.first { $0.workspace === workspace }?.profile.displayName, width: 640) {
+        StudioConfirmation(title: "Credential details", symbol: "key", subtitle: connections?.sessions.first { $0 === workspace }?.profile.displayName, width: 640) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(secret["name"].string).font(.headline)
@@ -73,7 +73,7 @@ struct CredentialDetailsView: View {
         Task {
             defer { busy = false }
             do {
-                let confirmed = try await workspace.operation(.updateSecretLimits, requestID: secret["id"].string, payload: payload)
+                let confirmed = try await workspace.credentials.updateLimits(id: secret["id"].string, payload: payload)
                 guard valid else { return }
                 guard confirmed["id"] == secret["id"], CredentialLimits.maximum(confirmed) == Double(maximum) else {
                     throw DiscoboxError("Discobox did not confirm the saved lifetime. Reopen the credential details before trying again.")

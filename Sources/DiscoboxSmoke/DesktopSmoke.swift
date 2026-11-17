@@ -1,9 +1,11 @@
+#if DEBUG
+@testable import DiscoboxUI
 import AppKit
 import WebKit
 import DiscoboxCore
 
 /// Uses a dedicated loopback fixture and a private pasteboard. Never connects
-/// through Workspace or opens a real Discobox desktop.
+/// through ConnectionSession or opens a real Discobox desktop.
 @MainActor enum DesktopSmoke {
     static func run() async {
         do {
@@ -36,3 +38,5 @@ import DiscoboxCore
         } catch { print("DESKTOP_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
 }
+
+#endif

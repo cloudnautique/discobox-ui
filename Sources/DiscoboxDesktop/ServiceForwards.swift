@@ -11,33 +11,33 @@ import DiscoboxCore
         let box: String
     }
     private var sessions: [Key: ServiceForwardSession] = [:]
-    private func key(box: String, workspace: Workspace) -> Key {
-        Key(connection: workspace.connectionID, project: workspace.projectID ?? "", box: box)
+    private func key(box: String, workspace: ConnectionSession) -> Key {
+        Key(connection: workspace.connectionState.connectionID, project: workspace.connectionState.projectID ?? "", box: box)
     }
-    func existingSession(box: String, workspace: Workspace) -> ServiceForwardSession? {
+    func existingSession(box: String, workspace: ConnectionSession) -> ServiceForwardSession? {
         sessions[key(box: box, workspace: workspace)]
     }
     private var openingLink: Task<Void, Never>?
-    func session(box: String, workspace: Workspace) -> ServiceForwardSession {
+    func session(box: String, workspace: ConnectionSession) -> ServiceForwardSession {
         let key = key(box: box, workspace: workspace)
         if let session = sessions[key] { return session }
-        let session = ServiceForwardSession(endpoint: workspace.transportEndpoint, project: workspace.projectID ?? "", box: box, demo: workspace.isDemo)
+        let session = ServiceForwardSession(endpoint: workspace.connectionState.transportEndpoint, project: workspace.connectionState.projectID ?? "", box: box, demo: workspace.connectionState.isDemo)
         sessions[key] = session
         return session
     }
-    func openTerminalURL(_ url: URL, identity: TerminalIdentity, workspace: Workspace, window: NSWindow?) {
+    func openTerminalURL(_ url: URL, identity: TerminalIdentity, workspace: ConnectionSession, window: NSWindow?) {
         openingLink?.cancel()
-        guard !workspace.isDemo, workspace.connectionID == identity.connection else { return }
+        guard !workspace.connectionState.isDemo, workspace.connectionState.connectionID == identity.connection else { return }
         guard ForwardedServiceURL.sandboxPort(url) != nil else { NSWorkspace.shared.open(url); return }
-        guard workspace.sandboxes.contains(where: { $0.id == identity.box && $0.isRunning }),
-              !workspace.pendingBoxActions.contains(identity.box) else { return }
+        guard workspace.inventory.sandboxes.contains(where: { $0.id == identity.box && $0.isRunning }),
+              !workspace.pending.pendingBoxActions.contains(identity.box) else { return }
         let forward = session(box: identity.box, workspace: workspace)
         openingLink = Task { @MainActor [weak workspace, weak window] in
             for _ in 0..<100 {
                 guard forward.loading else { break }
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             }
-            guard !Task.isCancelled, let workspace, workspace.connectionID == identity.connection else { return }
+            guard !Task.isCancelled, let workspace, workspace.connectionState.connectionID == identity.connection else { return }
             if let local = ForwardedServiceURL.resolve(url, ports: forward.ports) {
                 NSWorkspace.shared.open(local)
             } else if let window, window.attachedSheet == nil {

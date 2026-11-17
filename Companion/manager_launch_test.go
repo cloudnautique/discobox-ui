@@ -10,7 +10,7 @@ import (
 func TestManagerLaunchUsesExplicitAtomicCreateFlagAndRejectsLegacyHosts(t *testing.T) {
 	for _, mode := range []string{"enabled", "default-off", "explicit-off", "legacy-refused"} {
 		t.Run(mode, func(t *testing.T) {
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			b.allowManage = true
 			writes := 0
 			enabled := true

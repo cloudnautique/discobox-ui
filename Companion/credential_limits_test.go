@@ -16,7 +16,7 @@ func TestSharedCredentialLimitsRequireFreshMetadataAndExactProtocol(t *testing.T
 		metadata, _ := json.Marshal(map[string]any{"id": "s", field: 3600})
 		for _, mode := range []string{"save", "stale", "value", "wrong-protocol", "unauthorized"} {
 			t.Run(field+"/"+mode, func(t *testing.T) {
-				b, _ := newBridge("http://fixture", false)
+				b, _ := newBridge("http://fixture")
 				b.allowManage = mode != "unauthorized"
 				writes := 0
 				serverMetadata := metadata
@@ -72,7 +72,7 @@ func TestCredentialLimitSaveReadsBackWithoutReplayingTheWrite(t *testing.T) {
 	for _, field := range []string{"maxBindingTTLSeconds", "maxGrantTTLSeconds"} {
 		for _, mode := range []string{"saved", "zero", "noop", "wrong-id", "verification-error", "missing-field", "rejected"} {
 			t.Run(field+"/"+mode, func(t *testing.T) {
-				b, _ := newBridge("http://fixture", false)
+				b, _ := newBridge("http://fixture")
 				b.allowManage = true
 				current := map[string]any{"id": "s", field: 1800, "name": "Fixture", "routes": []any{}}
 				expected, _ := json.Marshal(current)

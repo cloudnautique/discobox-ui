@@ -3,6 +3,7 @@ import AppKit
 import DiscoboxCore
 
 struct HarnessManagementView: View {
+    let catalog: HarnessCatalogStore
     let harness: Harness
     let manager: HarnessManagement
     let computer: String
@@ -17,15 +18,15 @@ struct HarnessManagementView: View {
     @State private var failedActivity: Activity = .load
     private enum Activity { case load, review, save, discard }
 
-    init(harness: Harness, manager: HarnessManagement, computer: String, openBox: @escaping (String) -> Void,
+    init(harness: Harness, manager: HarnessManagement, catalog: HarnessCatalogStore, computer: String, openBox: @escaping (String) -> Void,
          newBox: @escaping () -> Void, console: @escaping () -> Void, close: @escaping () -> Void) {
-        self.harness = harness; self.manager = manager; self.computer = computer
+        self.harness = harness; self.manager = manager; self.catalog = catalog; self.computer = computer
         self.openBox = openBox; self.newBox = newBox; self.console = console; self.close = close
         _showingReview = State(initialValue: manager.review != .null)
     }
     private var config: JSONValue { manager.details["harness"] }
     private var legacySetup: Bool { manager.details == .null ? harness.usesLegacySetup : config["configured"] != .null }
-    private var sourceName: String { manager.workspace.sandboxes.first { $0.id == manager.boxID }?.displayName ?? "Selected box" }
+    private var sourceName: String { manager.inventory.sandboxes.first { $0.id == manager.boxID }?.displayName ?? "Selected box" }
     private var handoffPending: Bool { manager.changes["state"].string == "saved-handoff-pending" }
     private var blocked: Bool { manager.busy || !manager.validConnection }
 
@@ -135,13 +136,13 @@ struct HarnessManagementView: View {
             } else if manager.busy {
                 ProgressView("Loading saved login and settings…").controlSize(.small).padding(.vertical, 12)
             }
-            HarnessLaunchSettings(harness: harness, workspace: manager.workspace)
+            HarnessLaunchSettings(harness: harness, connection: manager.connectionState)
             sourceChooser
         }
     }
     private var parentName: String {
         let id = config["extends"].string
-        return manager.workspace.cachedHarnesses.first { $0.id == id }?.name ?? id
+        return catalog.cachedHarnesses.first { $0.id == id }?.name ?? id
     }
     private var sourceChooser: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -210,7 +211,7 @@ struct HarnessManagementView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(reviewTitle).font(.system(size: 16, weight: .semibold))
-                Text("Save for \(harness.name) · \(computer) · project \(manager.workspace.projectID ?? "").")
+                Text("Save for \(harness.name) · \(computer) · project \(manager.connectionState.projectID ?? "").")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Button("Open source box") { openBox(manager.boxID) }.disabled(manager.boxID.isEmpty || blocked)
@@ -389,26 +390,26 @@ struct HarnessManagementView: View {
         windows.removeAll(); HarnessConsoleWindows.shared.closeAll()
     }
     @discardableResult
-    func open(_ harness: Harness, workspace: Workspace, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil, automatically: Bool = false) -> Bool {
-        guard workspace.isConnected, !workspace.isDemo else { return false }
+    func open(_ harness: Harness, workspace: ConnectionSession, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil, automatically: Bool = false) -> Bool {
+        guard workspace.connectionState.isConnected, !workspace.connectionState.isDemo else { return false }
         // Never interrupt another sheet, management review, or inactive app.
         if automatically, !NSApp.isActive || NSApp.keyWindow?.attachedSheet != nil || !windows.isEmpty { return false }
-        let generation = workspace.connectionID
+        let generation = workspace.connectionState.connectionID
         let key = generation.uuidString + ":" + harness.id
         if let existing = windows[key] {
             if let sourceBoxID { existing.selectSource(sourceBoxID) }
             existing.window.makeKeyAndOrderFront(nil); return true
         }
-        let host = connections?.sessions.first { $0.workspace === workspace }
-        let manager = HarnessManagement(workspace: workspace, harnessID: harness.id)
+        let host = connections?.sessions.first { $0 === workspace }
+        let manager = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: harness.id)
         if let sourceBoxID { manager.requestReview(box: sourceBoxID) }
-        let controller = HarnessManagementWindow(harness: harness, manager: manager, computer: host?.profile.displayName ?? workspace.endpointLabel,
+        let controller = HarnessManagementWindow(workspace: workspace, harness: harness, manager: manager, computer: host?.profile.displayName ?? workspace.connectionState.endpointLabel,
             computerID: host?.id, connections: connections, commands: commands, openBox: { boxID in
                 Task {
-                    guard workspace.connectionID == generation, workspace.isConnected else { return }
+                    guard workspace.connectionState.connectionID == generation, workspace.connectionState.isConnected else { return }
                     if let connections, let host { await connections.selectBox(.init(connection: host.id, box: boxID)) }
-                    else { await workspace.selectBox(boxID) }
-                    guard workspace.connectionID == generation else { return }
+                    else { await workspace.selection.selectBox(boxID) }
+                    guard workspace.connectionState.connectionID == generation else { return }
                     commands?.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 }
             }, console: { HarnessConsoleWindows.shared.open(harness, workspace: workspace) }, onClose: { [weak self] in self?.windows.removeValue(forKey: key) })
@@ -421,13 +422,13 @@ struct HarnessManagementView: View {
     let window: NSWindow
     private let manager: HarnessManagement
     private let onClose: () -> Void
-    init(harness: Harness, manager: HarnessManagement, computer: String, computerID: String?, connections: Connections?, commands: WorkspaceCommands?, openBox: @escaping (String) -> Void, console: @escaping () -> Void, onClose: @escaping () -> Void) {
+    init(workspace: ConnectionSession, harness: Harness, manager: HarnessManagement, computer: String, computerID: String?, connections: Connections?, commands: WorkspaceCommands?, openBox: @escaping (String) -> Void, console: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.manager = manager; self.onClose = onClose
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
         window.title = harness.name + " · Shared login and settings"; window.isReleasedWhenClosed = false; window.delegate = self
         window.contentMinSize = NSSize(width: 620, height: 560)
-        var root = AnyView(HarnessManagementHost(harness: harness, manager: manager, computer: computer, computerID: computerID, openBox: openBox, console: console, close: { [weak self] in self?.window.close() }).environment(manager.workspace))
+        var root = AnyView(HarnessManagementHost(harness: harness, manager: manager, computer: computer, computerID: computerID, openBox: openBox, console: console, close: { [weak self] in self?.window.close() }).environment(workspace))
         if let connections { root = AnyView(root.environment(connections)) }
         if let commands { root = AnyView(root.environment(commands)) }
         window.contentView = NSHostingView(rootView: root); window.center()
@@ -437,6 +438,7 @@ struct HarnessManagementView: View {
 }
 
 private struct HarnessManagementHost: View {
+    @Environment(ConnectionSession.self) private var workspace
     let harness: Harness
     let manager: HarnessManagement
     let computer: String
@@ -446,10 +448,10 @@ private struct HarnessManagementHost: View {
     let close: () -> Void
     @State private var showNewBox = false
     var body: some View {
-        HarnessManagementView(harness: harness, manager: manager, computer: computer, openBox: openBox, newBox: { showNewBox = true }, console: console, close: close)
+        HarnessManagementView(harness: harness, manager: manager, catalog: workspace.catalog, computer: computer, openBox: openBox, newBox: { showNewBox = true }, console: console, close: close)
             .sheet(isPresented: $showNewBox) { NewBoxSheet(computer: computerID, harnessID: harness.id, onCreated: { box in
-                guard manager.validConnection, box.projectId == manager.workspace.projectID, box.config.harnessConfigId == harness.id else { return }
+                guard manager.validConnection, box.projectId == manager.connectionState.projectID, box.config.harnessConfigId == harness.id else { return }
                 manager.requestReview(box: box.id)
-            }).environment(manager.workspace) }
+            }).environment(workspace) }
     }
 }

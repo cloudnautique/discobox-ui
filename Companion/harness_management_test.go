@@ -44,7 +44,7 @@ func TestHarnessManagementWireEnvelopes(t *testing.T) {
 			payload, _ := json.Marshal(map[string]string{"candidateId": "login-one", "fingerprint": harnessReviewFingerprint([]byte(preview))})
 			input, _ := json.Marshal(request{Operation: operation, ProjectID: "p", HarnessID: "h", SandboxID: "source", Payload: payload})
 			out := response{Version: 1}
-			if err := runManaged(server.URL, false, false, true, strings.NewReader(string(input)), &out); err != nil {
+			if err := runManaged(server.URL, false, true, strings.NewReader(string(input)), &out); err != nil {
 				t.Fatal(err)
 			}
 			// Exercise the process boundary, not only the internal operation DTO:
@@ -69,7 +69,7 @@ func TestHarnessManagementWireEnvelopes(t *testing.T) {
 }
 
 func TestHarnessSaveIsAnExplicitReviewedCandidateOnItsOriginalBox(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	req := request{Operation: "saveHarnessChanges", ProjectID: "p", HarnessID: "h", SandboxID: "source"}
 	if _, err := b.execute(t.Context(), req); err == nil {
 		t.Fatal("unapproved save accepted")
@@ -140,7 +140,7 @@ func TestHarnessSaveIsAnExplicitReviewedCandidateOnItsOriginalBox(t *testing.T) 
 }
 
 func TestHarnessDetailsLoadLegacyFieldsWithoutConsoleOrPrivateCapture(t *testing.T) {
-	b, _ := newBridge("http://fixture", false)
+	b, _ := newBridge("http://fixture")
 	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "GET" {
 			t.Fatalf("read mutated %s", r.URL)
@@ -182,7 +182,7 @@ func TestHarnessSaveBackHasTimeForTheServerHandoff(t *testing.T) {
 func TestHarnessCaptureUnsupportedAndTransientStatesDoNotBecomeSaveable(t *testing.T) {
 	for _, state := range []string{"unsupported", "initializing", "unavailable", "wrong-owner", "missing-owner", "old-route"} {
 		t.Run(state, func(t *testing.T) {
-			b, _ := newBridge("http://fixture", false)
+			b, _ := newBridge("http://fixture")
 			writes := 0
 			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
 				if r.Method != "GET" {

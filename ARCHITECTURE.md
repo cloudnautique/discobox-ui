@@ -157,13 +157,63 @@ virtual primary and concrete ended terminals can be revived by the backend's
 attach handler; the client refuses these states, but cannot make its checks
 atomic with the backend attach. Development checks use only local fixtures.
 
+## Session ownership and executable boundaries
+
+```mermaid
+flowchart TD
+    App[DiscoboxDesktop launcher] --> UI[DiscoboxUI: ConnectedWorkspace]
+    Smoke[DiscoboxSmoke: debug fixtures] --> UI
+    UI --> Connections
+    Connections --> BoxBrowser
+    Connections --> Session[ConnectionSession per computer]
+    Session --> ConnectionStore
+    Session --> BoxInventoryStore
+    Session --> BoxSelectionStore
+    Session --> ApprovalStore
+    Session --> HarnessCatalogStore
+    Session --> BoxCommands
+    Session --> PoolCommands
+    Session --> Usage[HarnessUsage]
+```
+
+`BoxBrowser` owns filters, search, tags, bulk selection, sidebar results, and
+switcher ranking. `Connections` supplies qualified rows from connected computers;
+it does not maintain another inventory or ranking. One computer is the same
+composition as multiple computers. There is no optional-connections workspace UI.
+
+`ConnectionStore` owns the client, resolved project, connection generation and
+recovery state. `BoxInventoryStore` owns list request ordering, observation times,
+and purge tombstones. `BoxSelectionStore` owns selected exec/service reads and
+the warm cache. `ApprovalStore` owns inbox revisions and acknowledged answers;
+`HarnessCatalogStore` owns coalesced catalog reads and the shared default.
+
+`BoxCommands` coordinates creation/lifecycle actions; `PoolCommands` coordinates
+resource reads and cache cleanup. They share `PendingBoxOperations` to exclude
+competing mutations. Accepted answers and purges publish receipts/local removal
+before reconciliation reads. Neither services nor stores discover the active
+computer. `SessionAccess` captures an exact client/project/generation and rejects
+late responses after replacement. Feature models capture narrow stores/services
+rather than retaining a session. Native terminal surfaces, forwards and desktop
+windows remain owned by `ConnectionRuntimes`.
+
+`DiscoboxUI` is the shared presentation module in `Sources/DiscoboxDesktop`.
+The shipping executable in `Sources/DiscoboxLauncher` only invokes its application
+scene. Smoke runners and fixture startup live in `Sources/DiscoboxSmoke` and use
+`@testable import DiscoboxUI` in debug builds. This keeps test instrumentation out
+of the optimized UI module. Release packaging explicitly builds `DiscoboxDesktop`;
+`make verify` checks the packaged binary for smoke names and flags. `make smoke`
+builds a separate `.build/DiscoboxSmoke.app` with an isolated bundle identity and
+no registered Discobox URL schemes. Its startup never connects saved/live hosts.
+
 ## Swift conventions
 
 - Swift Package Manager, Swift 6 strict concurrency, macOS 14 minimum.
 - SwiftUI scenes, NavigationSplitView, system toolbar, inspector, Settings,
   semantic colors, keyboard shortcuts, accessibility labels, and native text.
-- A small `@MainActor @Observable` workspace model owns presentation state.
-  Views describe that state; they do not launch processes or construct API URLs.
+- Main-actor observable stores own connection, inventory, selection, approvals,
+  and harness catalog state. `ConnectionSession` composes them and owns polling
+  and lifecycle ordering. Views observe the relevant stores; typed services
+  build feature requests without exposing an arbitrary operation gateway.
 - A `Sendable` client protocol separates UI from transport. Actors isolate
   transport; structured tasks handle polling and cancellation. Stale replies
   cannot replace the state of a newly selected server, project, or box.
@@ -210,9 +260,9 @@ HTTP/S is supported when the existing server already exposes it. TLS validation
 stays enabled. Redirects are rejected. Current single-user auth is supported;
 Iroh enrollment uses an app-owned Keychain identity and the persistent transport described below. Discobot assertions are not implemented.
 
-Reads are an allowlist of operations, not an arbitrary HTTP proxy. The bounded
-legacy input operation still requires an explicit flag. The GUI now uses a
-separate `--attach` mode for live terminal input and output.
+Reads are an allowlist of operations, not an arbitrary HTTP proxy. The legacy
+`input` request and `--allow-input` flag are removed. Live keyboard input and
+output use the separate `--attach` PTY/WebSocket transport.
 
 ## Terminal strategy
 
@@ -235,7 +285,9 @@ Reconnect action. Successful live terminal inventories evict obsolete execs only
 for their own box; loading transitions and cached inventories do not evict warm
 sessions. Stopped/removed boxes release their local terminal resources when the
 sandbox list changes. Cached/stopped sessions retain the read-only saved-screen view.
-Live sessions no longer poll screen endpoints. Metadata polling remains bounded.
+Inventory polling never reads screen endpoints. A saved-output pane explicitly
+loads a snapshot; cancellation and generation/selection checks reject stale
+results. Live Ghostty attachments and their replay mechanism remain separate.
 
 Reconnections reuse acknowledged action positions, replay and retained dimensions.
 Live-state checks fail closed, ending retries when the server cannot establish
@@ -340,7 +392,7 @@ Successful purge receipts remove each box immediately and suppress its ID for th
 current connection generation, so an older list response cannot resurrect it.
 Deleted records are not archives. Archived previews preserve bulk selection;
 row context menus use the same captured bulk manifest as the sidebar action.
-A confirmation captures the box ID and connection generation. Workspace rejects
+A confirmation captures the box ID and connection generation. BoxCommands rejects
 stale connections and duplicate in-flight actions without retargeting the request.
 The companion accepts only start, stop, archive (DELETE), unarchive, upgrade, repair,
 purge, and rename (PATCH meta); it never retries mutations. Purge additionally reads
@@ -435,7 +487,7 @@ random 0700 directory. Its upstream peer is fixed at startup, it forwards only
 and port-forward helper retains its existing authorization/cancellation behavior
 and connects to that socket. No public control-plane listener is created.
 
-Workspace separates the display address (`endpointLabel`) from the effective
+ConnectionStore separates the display address (`endpointLabel`) from the effective
 `transportEndpoint`. Disconnect closes the client transport and resets per-host
 state. Reconnect preserves a healthy transport while rebuilding workspace state.
 The endpoint library redials lost QUIC connections; no custom retry of mutation
@@ -451,8 +503,9 @@ Save persists the name, address and options without network access. Optional
 Test Connection probes with a separate client using only the default-project read,
 then closes that client. Connect creates or selects that computer’s session without
 replacing another computer’s transport.
-Successful creation clears the destination's list/search filters, selects the
-new box and activates its owning computer. Failed creation preserves navigation.
+Successful creation preserves filters, selects the new box, activates its owning
+computer, and pins the box when it falls outside the current results. Failed
+creation preserves navigation.
 The original saved-profile JSON format is preserved. Migration consolidates the
 current default socket aliases while retaining custom sockets and relay options.
 Removing a profile does not disconnect an active workspace or revoke enrollment.
@@ -465,14 +518,14 @@ also checks its signed native library and stdin startup/lifetime protocol.
 
 ## Fast box switching
 
-Ghostty sessions already outlive SwiftUI views. Workspace now also keeps a bounded
+Ghostty sessions outlive SwiftUI views. BoxSelectionStore keeps a bounded
 recent-box inventory cache (12 running boxes, 30 seconds from the last successful
 inventory read), including the selected terminal. A warm selection can mount the
 existing surface immediately and revalidate its inventory asynchronously. Cached
 or stopped backend snapshots do not qualify. Connection changes, lifecycle
 actions, observed stopped/removed boxes, and completed terminal closes invalidate
 relevant entries. Closing a terminal while switching away also invalidates that
-box's cached entry. Legacy input opt-in and drafts are never restored.
+box's cached entry. There is no legacy draft or input-opt-in model.
 
 Selection-owned refresh tasks are cancelled on switching away; CompanionClient's
 existing cancellation closes only those request processes. Revision guards still
@@ -494,8 +547,10 @@ budget, sequential bounded recording reads, and at most one attempt per minute.
 Parsing and sorting stay outside MainActor. A single batch of changed results is
 published on MainActor; existing readings remain visible during collection.
 Companion request processes inherit utility QoS for this background workload.
-The section's view task owns cancellation, so collapsing it cancels active usage
-work. Catalog prefetch is shared with the creation UI and has connection lifetime.
+The session owns usage polling, including while another computer is selected.
+Usage views only render observations; collapsing the shelf does not create or
+cancel a collector. Catalog prefetch is shared with creation and has connection
+lifetime.
 
 The dialog smoke test uses only DemoClient, opens both dialogs twice, edits and
 submits the switcher search through its keyboard delegate, and reports readiness
@@ -504,7 +559,7 @@ timings. It never creates a box or accesses Keychain/backend data.
 ## Multiple computers
 
 Connections owns a ConnectionSession per normalized server address, each with its
-own Workspace and independent inventory, approval, and usage polling tasks.
+own stores and independent inventory, approval, resource, and usage polling tasks.
 Active selection is an address plus box ID. Equal project, box, harness, or exec
 IDs on two computers never identify the same UI object. Already-connected hosts
 reuse their clients when selected; failed connection attempts leave the active

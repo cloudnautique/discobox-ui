@@ -4,21 +4,19 @@ import Testing
 
 @MainActor @Test func returningToRecentBoxDoesNotWaitForInventory() async throws {
     let client = SwitchingClient()
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    await workspace.openShell()
-    let shell = workspace.execID
-    await workspace.selectBox(nil)
+    await workspace.selection.selectBox("demo-ui")
+    await workspace.selection.openShell()
+    let shell = workspace.selection.execID
+    await workspace.selection.selectBox(nil)
     await client.holdNextInventory()
-    let returning = Task { await workspace.selectBox("demo-ui") }
+    let returning = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
     // The API deliberately cannot respond yet. The retained terminal can mount
     // and take focus anyway, including the previously selected shell.
-    #expect(workspace.hasLiveTerminal)
-    #expect(workspace.execID == shell)
-    #expect(!workspace.inputEnabled)
+    #expect(workspace.selection.hasLiveTerminal)
+    #expect(workspace.selection.execID == shell)
     await client.release()
     await returning.value
 }
@@ -26,71 +24,68 @@ import Testing
 @MainActor @Test func expiredInventoryWaitsForFreshState() async {
     var clock = Date()
     let client = SwitchingClient()
-    let workspace = Workspace(now: { clock })
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession(now: { clock })
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    await workspace.selectBox(nil)
+    await workspace.selection.selectBox("demo-ui")
+    await workspace.selection.selectBox(nil)
     clock = clock.addingTimeInterval(31)
     await client.holdNextInventory()
-    let returning = Task { await workspace.selectBox("demo-ui") }
+    let returning = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    #expect(workspace.execs.isEmpty)
-    #expect(!workspace.hasLiveTerminal)
+    #expect(workspace.selection.execs.isEmpty)
+    #expect(!workspace.selection.hasLiveTerminal)
     await client.release()
     await returning.value
-    #expect(workspace.hasLiveTerminal)
+    #expect(workspace.selection.hasLiveTerminal)
 }
 
 @MainActor @Test func refreshedInventoryReplacesWarmTerminals() async {
     let client = SwitchingClient()
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    await workspace.selectBox(nil)
+    await workspace.selection.selectBox("demo-ui")
+    await workspace.selection.selectBox(nil)
     await client.holdNextInventory(empty: true)
-    let returning = Task { await workspace.selectBox("demo-ui") }
+    let returning = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    #expect(workspace.hasLiveTerminal)
+    #expect(workspace.selection.hasLiveTerminal)
     await client.release()
     await returning.value
-    #expect(workspace.execs.isEmpty)
-    #expect(workspace.terminalInventory?.box == "demo-ui")
-    #expect(workspace.terminalInventory?.execIDs.isEmpty == true)
-    #expect(workspace.execID == nil)
-    #expect(!workspace.hasLiveTerminal)
+    #expect(workspace.selection.execs.isEmpty)
+    #expect(workspace.selection.terminalInventory?.box == "demo-ui")
+    #expect(workspace.selection.terminalInventory?.execIDs.isEmpty == true)
+    #expect(workspace.selection.execID == nil)
+    #expect(!workspace.selection.hasLiveTerminal)
 }
 
 @MainActor @Test func warmInventoryCannotCrossConnections() async {
     let client = SwitchingClient()
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "first")
-    await workspace.selectBox("demo-ui")
-    await workspace.selectBox(nil)
+    await workspace.selection.selectBox("demo-ui")
+    await workspace.selection.selectBox(nil)
     await workspace.connect(client: client, label: "second")
     await client.holdNextInventory()
-    let returning = Task { await workspace.selectBox("demo-ui") }
+    let returning = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    #expect(workspace.execs.isEmpty)
+    #expect(workspace.selection.execs.isEmpty)
     await client.release()
     await returning.value
 }
 
 @MainActor @Test func switchingAwayCancelsObsoleteInventoryRequest() async {
     let client = SwitchingClient()
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
     await client.holdNextInventory()
-    let loading = Task { await workspace.selectBox("demo-ui") }
+    let loading = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    await workspace.selectBox(nil)
+    await workspace.selection.selectBox(nil)
     await client.release()
     await loading.value
     #expect(await client.cancelled)
-    #expect(workspace.sandboxID == nil)
-    #expect(workspace.execs.isEmpty)
+    #expect(workspace.selection.sandboxID == nil)
+    #expect(workspace.selection.execs.isEmpty)
 }
 
 private actor SwitchingClient: DiscoboxClient {
@@ -116,21 +111,20 @@ private actor SwitchingClient: DiscoboxClient {
 
 @MainActor @Test func terminalCleanupInventorySurvivesLoadingAndClearsOnDisconnect() async {
     let client = SwitchingClient()
-    let workspace = Workspace()
-    workspace.streamsLiveTerminals = true
+    let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
-    await workspace.selectBox("demo-ui")
-    let inventory = workspace.terminalInventory
+    await workspace.selection.selectBox("demo-ui")
+    let inventory = workspace.selection.terminalInventory
     #expect(inventory?.execIDs.isEmpty == false)
-    await workspace.selectBox(nil)
-    #expect(workspace.execs.isEmpty)
-    #expect(workspace.terminalInventory == inventory)
+    await workspace.selection.selectBox(nil)
+    #expect(workspace.selection.execs.isEmpty)
+    #expect(workspace.selection.terminalInventory == inventory)
     await client.holdNextInventory()
-    let load = Task { await workspace.selectBox("demo-ui") }
+    let load = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
-    #expect(workspace.terminalInventory == inventory)
+    #expect(workspace.selection.terminalInventory == inventory)
     await client.release()
     await load.value
     workspace.disconnect()
-    #expect(workspace.terminalInventory == nil)
+    #expect(workspace.selection.terminalInventory == nil)
 }

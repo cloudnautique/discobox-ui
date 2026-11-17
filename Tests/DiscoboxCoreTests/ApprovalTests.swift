@@ -12,18 +12,18 @@ import Testing
 }
 
 @MainActor @Test func approvalsRefreshWithoutBoxSelectionAndClearOnDisconnect() async throws {
-    let workspace = Workspace()
+    let workspace = ConnectionSession()
     let client = InboxFixture()
     await workspace.connect(client: client, label: "fixture")
-    #expect(workspace.sandboxID == nil)
-    await workspace.refreshApprovals()
-    let item = try #require(workspace.approvals.first)
+    #expect(workspace.selection.sandboxID == nil)
+    await workspace.approvalStore.refreshApprovals()
+    let item = try #require(workspace.approvalStore.approvals.first)
     #expect(item.boxID == "demo-ui")
-    try await workspace.answer(item, action: "deny", payload: .object([:]))
-    #expect(workspace.approvals.isEmpty)
+    try await workspace.approvalStore.answer(item, action: "deny", payload: .object([:]))
+    #expect(workspace.approvalStore.approvals.isEmpty)
     #expect(await client.answers == 1)
     workspace.disconnect()
-    #expect(workspace.approvals.isEmpty)
+    #expect(workspace.approvalStore.approvals.isEmpty)
 }
 private actor InboxFixture: DiscoboxClient {
     let demo = DemoClient()

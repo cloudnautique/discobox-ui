@@ -137,10 +137,7 @@ public actor DemoClient: DiscoboxClient {
         case .newShell:
             closedShells.remove("shell-1")
             return Data(#"{"id":"shell-1","status":"running","command":["bash"],"workdir":"/workspace/discobox","tty":true}"#.utf8)
-        case .input:
-            for part in request.input ?? [] { if let text = part.text { messages.append("❯ " + text) } }
-            messages.append("[Demo only — no command was executed]")
-            return Data(#"{"resumeAfter":"demo"}"#.utf8)
+
         }
     }
 
