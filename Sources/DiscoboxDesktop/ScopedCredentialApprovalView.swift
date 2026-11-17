@@ -270,7 +270,7 @@ struct ScopedCredentialApprovalView: View {
         loading = true; error = nil
         defer { if token == reviewRequest { loading = false } }
         do {
-            let result = try await workspace.operation(.approvalContext, requestID: item.id, payload: payload)
+            let result = try await workspace.approvalContext(for: item, candidate: payload, connection: connection ?? workspace.connectionID)
             guard !closed, workspace.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
             guard result["request"] == request else { throw DiscoboxError("The request changed. Reopen it from the current inbox.") }
             context = result
@@ -300,10 +300,9 @@ struct ScopedCredentialApprovalView: View {
                 try await workspace.validateApproval(item, connection: connection)
                 guard !closed else { return }
                 operationStatus = "Storing the credential on the requesting computer…"
-                let result = try await workspace.operation(.createSecret, payload: body)
+                let created = try await workspace.createSecret(body, connection: connection)
                 guard !closed, workspace.connectionID == connection else { return }
-                guard !result["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
-                secretID = result["id"].string; creating = false
+                secretID = created; creating = false
                 await reload(selectDefault: false)
             } catch { if !closed { self.error = error.localizedDescription; requiresReload = true } }
         }
@@ -316,13 +315,15 @@ struct ScopedCredentialApprovalView: View {
         Task {
             defer { busy = false }
             do {
-                try await workspace.validateApproval(item, connection: connection)
-                guard !closed else { return }
-                operationStatus = "Waiting for the requesting computer to record your decision…"
+                let proceed = { () -> Bool in
+                    guard !closed else { return false }
+                    operationStatus = "Waiting for the requesting computer to record your decision…"
+                    return true
+                }
                 if deny {
-                    try await workspace.answer(item, action: "deny", payload: .object([:]), onAccepted: close)
+                    try await workspace.answer(item, .deny, connection: connection, proceed: proceed, onAccepted: { _ in close() })
                 } else if let decision {
-                    try await workspace.answerWithReceipt(item, action: "approve", payload: .object(["approval": decision, "contextFingerprint": fingerprint]), onAccepted: { result in
+                    try await workspace.answer(item, .reviewedCredential(approval: decision, contextFingerprint: fingerprint), connection: connection, proceed: proceed, onAccepted: { result in
                         busy = false
                         guard !closed else { return }
                         receipt = result

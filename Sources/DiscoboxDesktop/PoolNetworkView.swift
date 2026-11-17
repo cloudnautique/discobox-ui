@@ -97,7 +97,7 @@ struct PoolNetworkView: View {
         guard !changedConnection else { return }; busy = true; error = nil
         defer { busy = false }
         do {
-            let result = try await workspace.operation(.poolConfiguration, poolID: poolID)
+            let result = try await workspace.poolConfiguration(poolID, connection: connection)
             guard !changedConnection else { return }; pool = result; draft = .init(proxy: result["proxy"]); reviewed = false
         } catch { self.error = error.localizedDescription }
     }
@@ -108,7 +108,7 @@ struct PoolNetworkView: View {
         Task {
             defer { busy = false; draft.httpCredentials = ""; draft.httpsCredentials = ""; reviewed = false }
             do {
-                let result = try await workspace.operation(.updatePoolProxy, payload: body, poolID: poolID)
+                let result = try await workspace.updatePoolProxy(poolID, payload: body, connection: connection)
                 guard !changedConnection else { return }
                 pool = result; draft = .init(proxy: result["proxy"])
                 message = "Saved. Check the applied revision above. Restart the pool yourself if required; saving does not restart it."

@@ -111,11 +111,10 @@ struct ConsentApprovalView: View {
     private func submit(approve: Bool) {
         guard !busy, !resolved, connection == workspace.connectionID else { return }
         busy = true; error = nil
-        let payload: JSONValue = isRefresh && approve ? .object(["value": .string(value)]) : .object([:])
+        let answer: ApprovalAnswer = !approve ? .deny : isRefresh ? .refresh(token: value) : .approve
         Task {
             do {
-                try await workspace.validateApproval(item, connection: connection!)
-                try await workspace.answerWithReceipt(item, action: approve ? (isRefresh ? "refresh" : "approve") : "deny", payload: payload, onAccepted: { result in
+                try await workspace.answer(item, answer, connection: connection!, onAccepted: { result in
                     busy = false; value = ""
                     if !closed { receipt = result; approved = approve }
                 })

@@ -471,29 +471,29 @@ struct AuditView: View {
         }
     }
     private func exportBody(_ record: AuditRecord, part: String) {
-        let pieces = record.id.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count >= 3 else { return }
-        let panel = NSSavePanel(); panel.nameFieldStringValue = String(pieces[2]) + "-" + part + ".bin"
+        guard let reference = AuditRecordReference(record.id) else { return }
+        let box = boxID, connection = workspace.connectionID
+        let panel = NSSavePanel(); panel.nameFieldStringValue = reference.record + "-" + part + ".bin"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             recordingBusy = true
             Task {
                 defer { recordingBusy = false }
                 do {
-                    let result = try await workspace.operation(.saveAuditBody, recordID: String(pieces[2]), action: part, localPath: url.path, poolID: String(pieces[1]))
+                    let result = try await workspace.saveAuditBody(reference, part: part, box: box, to: url, connection: connection)
                     recording = "Exported \(Int(result["bytes"].number ?? 0)) bytes." + (result["recordingTruncatedFrom"].string.isEmpty ? "" : " The pool retained only part of this recording (original: " + result["recordingTruncatedFrom"].string + " bytes).")
                 } catch { recording = error.localizedDescription }
             }
         }
     }
     private func readBody(_ record: AuditRecord, part: String) {
-        let pieces = record.id.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count >= 3 else { return }
+        guard let reference = AuditRecordReference(record.id) else { return }
+        let box = boxID, connection = workspace.connectionID
         recordingBusy = true; recording = nil
         Task {
             defer { recordingBusy = false }
             do {
-                let result = try await workspace.operation(.auditBody, recordID: String(pieces[2]), action: part, poolID: String(pieces[1]))
+                let result = try await workspace.auditBody(reference, part: part, box: box, connection: connection)
                 guard selected == record.id else { return }
                 recording = result["text"].string + (result["truncated"] == .bool(true) ? "\n[Preview limited to 1 MiB]" : "") + (result["recordingTruncatedFrom"].string.isEmpty ? "" : "\n[Pool recording was truncated from " + result["recordingTruncatedFrom"].string + " bytes]")
             } catch { recording = error.localizedDescription }

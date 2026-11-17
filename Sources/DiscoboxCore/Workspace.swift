@@ -456,18 +456,31 @@ public final class Workspace {
         guard isConnected, connectionID == connection else { throw CancellationError() }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
-    public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
+    func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
         let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, secretID: secretID, recordID: recordID, link: link, action: action, payload: payload, localPath: localPath, poolID: poolID))
         if data.isEmpty { return .object([:]) }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
-    public func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
+    /// A request the UI started on `connection`. It is never sent after a
+    /// reconnect, and a reply that arrives after one is not returned as if it
+    /// belonged to the new connection. Typed callers are in WorkspaceRequests.
+    func perform(on connection: UUID, _ request: (String) -> BridgeRequest) async throws -> JSONValue {
+        guard isConnected, connectionID == connection, let client, let projectID else {
+            throw DiscoboxError("This computer reconnected or disconnected. Reopen this view to continue.")
+        }
+        let data = try await client.perform(request(projectID))
+        guard isConnected, connectionID == connection else {
+            throw DiscoboxError("This computer reconnected before the reply arrived. Reopen this view and check the current state before trying again.")
+        }
+        return data.isEmpty ? .object([:]) : try JSONDecoder().decode(JSONValue.self, from: data)
+    }
+    func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
         _ = try await answerWithReceipt(item, action: action, payload: payload, onAccepted: { _ in onAccepted() })
     }
     /// Publish the acknowledgment and remove this request before an unrelated
     /// inbox refresh can stall. A committed response is never submitted twice.
-    @discardableResult public func answerWithReceipt(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue {
+    @discardableResult func answerWithReceipt(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: (JSONValue) -> Void = { _ in }) async throws -> JSONValue {
         let connection = connectionID
         let result = try await operation(.answer, requestID: item.id, kind: item.kind, action: action, payload: payload)
         guard connection == connectionID else { throw CancellationError() }

@@ -52,7 +52,7 @@ struct ToolsSheet: View {
         }.frame(height: 640).interactiveDismissDisabled(busy)
         .task {
             defer { loading = false }
-            do { tools = try await workspace.operation(.tools)["tools"].array }
+            do { tools = try await workspace.tools(box: workspace.sandboxID ?? "", connection: workspace.connectionID) }
             catch { self.error = error.localizedDescription }
         }
     }

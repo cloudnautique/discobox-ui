@@ -189,7 +189,7 @@ import UserNotifications
             inboxWorkspace.disconnect()
             toolsWorkspace.disconnect()
             print("STUDIO_THEME_AUDIT_OK: \(auditPanels.count) additional dialog/settings surfaces checked in both Light and Dark")
-            try await workspace.answer(item, action: "approve", payload: .object(["grantTTLSeconds": .number(900)]))
+            try await workspace.answer(item, .credential(request: item.request, secretID: "", duration: "900", maximum: nil), connection: workspace.connectionID)
             guard workspace.approvals.isEmpty else { throw DiscoboxError("Answer did not clear fixture inbox") }
             print("FEATURE_SMOKE_OK: pool resources, cache confirmation, box rows, lifecycle confirmations, approval, new-box preflight, tools and file panel layout; fixture answer clears inbox")
             fflush(stdout); exit(0)

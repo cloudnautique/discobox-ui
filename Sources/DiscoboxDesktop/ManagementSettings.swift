@@ -173,7 +173,7 @@ struct CredentialSettings: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            _ = try await workspace.operation(.deleteSecret, secretID: item["id"].string)
+            try await workspace.deleteSecret(item["id"].string, connection: connection)
             guard connection == workspace.connectionID else { return }
             credentials.removeAll { $0["id"].string == item["id"].string }
         } catch {

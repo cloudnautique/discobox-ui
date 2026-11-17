@@ -302,10 +302,9 @@ struct LegacyApprovalSheet: View {
             defer { busy = false; value = "" }
             do {
                 try await workspace.validateApproval(item, connection: connection)
-                let made = try await workspace.operation(.createSecret, payload: body)
+                let made = try await workspace.createSecret(body, connection: connection)
                 guard !closed, workspace.connectionID == connection else { return }
-                guard !made["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
-                secret = made["id"].string
+                secret = made
                 creating = false; value = ""
                 secrets = try await workspace.approvalSecrets()
                 reviewed = false
@@ -314,29 +313,21 @@ struct LegacyApprovalSheet: View {
     }
     private func submit(deny: Bool) {
         guard !busy, !resolved, let connection, deny || !creating && (item.kind != "trust" || reviewed) && validation == nil else { return }
-        let body: JSONValue
-        do {
-            if deny { body = .object([:]) }
-            else if refresh { body = .object(["value": .string(value), "via": .string("entered")]) }
-            else if item.kind == "credential" { body = try LegacyCredentialDecision.payload(request: request, secretID: secret, duration: duration, maximum: maximum) }
-            else {
-                guard let index = Int(pin), certificates.indices.contains(index) else { throw DiscoboxError("Choose a certificate to trust.") }
-                let cert = certificates[index], ca = cert["isCA"] == .bool(true)
-                var fields = try ApprovalDuration.fields(duration, kind: "trust", maximum: nil)
-                fields["pin"] = .object(["kind": .string(ca ? "ca" : "leaf-spki"), "sha256": cert[ca ? "sha256" : "spkiSha256"]])
-                body = .object(fields)
-            }
-        } catch { self.error = error.localizedDescription; return }
-        let action = deny ? "deny" : refresh ? "refresh" : "approve"
+        let answer: ApprovalAnswer
+        if deny { answer = .deny }
+        else if refresh { answer = .refresh(token: value) }
+        else if item.kind == "credential" { answer = .credential(request: request, secretID: secret, duration: duration, maximum: maximum) }
+        else if let index = Int(pin), certificates.indices.contains(index) { answer = .trust(certificate: certificates[index], duration: duration) }
+        else { self.error = "Choose a certificate to trust."; return }
+        do { _ = try answer.payload() } catch { self.error = error.localizedDescription; return }
         busy = true; error = nil
         Task {
             defer { busy = false; value = "" }
             do {
-                try await workspace.validateApproval(item, connection: connection)
-                try await workspace.answerWithReceipt(item, action: action, payload: body) { result in
+                try await workspace.answer(item, answer, connection: connection, onAccepted: { result in
                     guard !closed else { return }
-                    receipt = result; receiptAction = action
-                }
+                    receipt = result; receiptAction = answer.action
+                })
             } catch {
                 if !closed { self.error = error.localizedDescription; reviewed = false }
                 else if workspace.connectionID == connection { workspace.commandError = error.localizedDescription }

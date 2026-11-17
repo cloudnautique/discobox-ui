@@ -73,7 +73,7 @@ struct CredentialDetailsView: View {
         Task {
             defer { busy = false }
             do {
-                let confirmed = try await workspace.operation(.updateSecretLimits, secretID: secret["id"].string, payload: payload)
+                let confirmed = try await workspace.updateSecretLimits(secret["id"].string, payload: payload, connection: request.connection)
                 guard valid else { return }
                 guard confirmed["id"] == secret["id"], CredentialLimits.maximum(confirmed) == Double(maximum) else {
                     throw DiscoboxError("Discobox did not confirm the saved lifetime. Reopen the credential details before trying again.")
