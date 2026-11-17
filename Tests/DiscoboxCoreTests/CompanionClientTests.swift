@@ -180,3 +180,25 @@ private func protocolManifest() throws -> ProtocolManifest {
     #expect(wire?["name"] as? String == "n" && wire?["prompt"] == nil)
     session.disconnect()
 }
+
+@Test func companionErrorsCarryAKindRatherThanMeaningInTheirText() async throws {
+    for (wire, status, kind) in [("transport", 0, DiscoboxError.Kind.transport), ("certificate", 0, .certificate), ("unauthorized", 0, .unauthorized),
+                                 ("someday-new", 0, .other), ("", 401, .unauthorized), ("", 403, .unauthorized), ("", 400, .other)] {
+        let body = try JSONSerialization.data(withJSONObject: status == 0
+            ? ["version": BridgeRequest.protocolVersion, "status": 0, "error": "fixture failure", "errorKind": wire]
+            : ["version": BridgeRequest.protocolVersion, "status": status])
+        let fixture = try FixtureExecutable(script: """
+        #!/bin/sh
+        /bin/cat >/dev/null
+        printf '%s' '\(String(decoding: body, as: UTF8.self))'
+        """)
+        defer { fixture.remove() }
+        do {
+            _ = try await CompanionClient(executable: fixture.url, endpoint: "unix://").perform(.init(.defaultProject))
+            Issue.record("A failed fixture response was accepted")
+        } catch let error as DiscoboxError {
+            #expect(error.kind == kind, "\(wire) \(status)")
+            #expect(error.connectionRetryable == (kind == .transport))
+        }
+    }
+}

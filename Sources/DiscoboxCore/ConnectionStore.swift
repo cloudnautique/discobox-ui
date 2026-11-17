@@ -11,6 +11,8 @@ public final class ConnectionStore {
     public private(set) var endpointLabel = ""
     public private(set) var transportEndpoint = ""
     public private(set) var connectionError: String?
+    /// The kind of `connectionError`, so views never match on its text.
+    public private(set) var connectionErrorKind: DiscoboxError.Kind?
     public private(set) var recovery = ConnectionRecovery()
     public private(set) var recoveryCount = 0
     @ObservationIgnored var client: (any DiscoboxClient)?
@@ -25,7 +27,7 @@ public final class ConnectionStore {
         if closeTransport { client?.closeConnection() }
         client = nil; projectID = nil; transportEndpoint = ""
         isConnected = false; isConnecting = false; isDemo = false
-        connectionError = nil; recovery.reset(); recoveryInFlight = false; recoveryCount = 0
+        connectionError = nil; connectionErrorKind = nil; recovery.reset(); recoveryInFlight = false; recoveryCount = 0
     }
     func begin(client: any DiscoboxClient, label: String, demo: Bool) {
         self.client = client; endpointLabel = label; transportEndpoint = label
@@ -69,11 +71,12 @@ public final class ConnectionStore {
         if let endpoint, endpoint != transportEndpoint { transportEndpoint = endpoint }
     }
     func didRefresh() {
-        connectionError = nil
+        connectionError = nil; connectionErrorKind = nil
         if !recoveryInFlight { recovery.reset() }
     }
     func failed(_ error: Error, now: Date) {
         connectionError = error.localizedDescription
+        connectionErrorKind = (error as? DiscoboxError)?.kind ?? (ConnectionRecovery.canRetry(error) ? .transport : .other)
         recovery.failed(error, now: now)
     }
     func capture() throws -> SessionAccess {

@@ -231,11 +231,25 @@ public struct BridgeRequest: Encodable, Sendable {
 }
 
 public struct DiscoboxError: LocalizedError, Sendable {
-    public let message: String
-    public let connectionRetryable: Bool
-    public init(_ message: String, connectionRetryable: Bool = false) {
-        self.message = message; self.connectionRetryable = connectionRetryable
+    /// What went wrong, for decisions; `message` is only for people. The
+    /// companion classifies at its boundary (`errorKind`); Swift never infers
+    /// a kind from message text.
+    public enum Kind: String, Sendable {
+        /// The network or transport failed; reads may be retried.
+        case transport
+        /// Authentication or enrollment was refused (HTTP 401/403).
+        case unauthorized
+        /// TLS verification failed; retrying cannot help.
+        case certificate
+        case other
+        /// Unknown kinds from a newer companion are treated as `other`.
+        init(wire: String?) { self = wire.flatMap(Self.init(rawValue:)) ?? .other }
     }
+    public let message: String
+    public let kind: Kind
+    public var connectionRetryable: Bool { kind == .transport }
+    public init(_ message: String, kind: Kind = .other) { self.message = message; self.kind = kind }
+    public init(_ message: String, connectionRetryable: Bool) { self.init(message, kind: connectionRetryable ? .transport : .other) }
     public var errorDescription: String? { message }
 }
 

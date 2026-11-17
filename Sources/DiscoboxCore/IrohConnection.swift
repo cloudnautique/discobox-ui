@@ -130,7 +130,7 @@ private final class IrohProcess: @unchecked Sendable {
             guard let ready = try? JSONDecoder().decode(IrohConnection.Ready.self, from: line) else {
                 throw DiscoboxError("Iroh helper could not start. Rebuild the app and companion together.")
             }
-            if let error = ready.error { throw DiscoboxError(error, connectionRetryable: ready.errorKind == "transport") }
+            if let error = ready.error { throw DiscoboxError(error, kind: .init(wire: ready.errorKind)) }
             return ready
         } catch { close(); throw error }
     }
