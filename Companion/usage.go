@@ -59,15 +59,15 @@ func (b *bridge) usage(ctx context.Context, req request) (response, error) {
 		}
 	}
 	body, err := json.Marshal(map[string]any{"records": records, "missing": missing})
-	return response{Version: 1, Status: 200, Body: body}, err
+	return response{Version: protocolVersion, Status: 200, Body: body}, err
 }
 
 // Return only quota headers, never message bodies or authentication headers.
 func (b *bridge) usageHeaders(ctx context.Context, req request) (response, error) {
-	if validID(req.ProjectID) != nil || validID(req.Kind) != nil || validID(req.RequestID) != nil || validID(req.SandboxID) != nil {
+	if validID(req.ProjectID) != nil || validID(req.PoolID) != nil || validID(req.RecordID) != nil || validID(req.SandboxID) != nil {
 		return response{}, fmt.Errorf("invalid audit identity")
 	}
-	result, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/pools/"+req.Kind+"/audit/http/"+req.RequestID+"?sandboxId="+url.QueryEscape(req.SandboxID), nil)
+	result, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/pools/"+req.PoolID+"/audit/http/"+req.RecordID+"?sandboxId="+url.QueryEscape(req.SandboxID), nil)
 	if err != nil {
 		return response{}, err
 	}
@@ -94,5 +94,5 @@ func (b *bridge) usageHeaders(ctx context.Context, req request) (response, error
 		}
 	}
 	body, err := json.Marshal(map[string]any{"headers": headers})
-	return response{Version: 1, Status: 200, Body: body}, err
+	return response{Version: protocolVersion, Status: 200, Body: body}, err
 }

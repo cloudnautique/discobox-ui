@@ -161,7 +161,7 @@ func TestToolReattachesWithoutCreatingOrStarting(t *testing.T) {
 		}
 		return reply(`{"runtime":{"runtimeState":"running"}}`), nil
 	})
-	result, err := b.execute(t.Context(), request{Operation: "openTool", ProjectID: "p", SandboxID: "b", Kind: "ai.discobox.diff"})
+	result, err := b.execute(t.Context(), request{Operation: "openTool", ProjectID: "p", SandboxID: "b", ToolID: "ai.discobox.diff"})
 	if err != nil || !strings.Contains(string(result.Body), `"id":"diff"`) {
 		t.Fatal(err, string(result.Body))
 	}
@@ -210,7 +210,7 @@ func TestRecordingExportKeepsExactBytesAndDoesNotOverwrite(t *testing.T) {
 		return reply(payload), nil
 	})
 	dest := filepath.Join(t.TempDir(), "record.bin")
-	req := request{Operation: "auditBody", ProjectID: "p", SandboxID: "b", Kind: "pool", RequestID: "http_42", Action: "response", LocalPath: dest}
+	req := request{Operation: "saveAuditBody", ProjectID: "p", SandboxID: "b", PoolID: "pool", RecordID: "http_42", Action: "response", LocalPath: dest}
 	_, err := b.execute(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)

@@ -64,9 +64,6 @@ func (b *bridge) harnessManagement(ctx context.Context, req request) (response, 
 		return response{}, errors.New("choose a running box to review its harness changes")
 	}
 	mutating := req.Operation == "saveHarnessChanges" || req.Operation == "discardHarnessChanges"
-	if mutating && !b.allowManage {
-		return response{}, errors.New("saving harness changes requires explicit permission")
-	}
 	box, err := b.call(ctx, "GET", base+"/sandboxes/"+req.SandboxID, nil)
 	if err != nil || box.Status != 200 {
 		return box, err

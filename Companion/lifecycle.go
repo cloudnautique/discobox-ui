@@ -10,9 +10,6 @@ import (
 
 // Explicit, one-shot intents only. Never retry a lifecycle mutation.
 func (b *bridge) boxAction(ctx context.Context, req request) (response, error) {
-	if !b.allowManage {
-		return response{}, errors.New("box actions require explicit permission")
-	}
 	if err := validID(req.ProjectID); err != nil {
 		return response{}, err
 	}
@@ -54,7 +51,7 @@ func (b *bridge) boxAction(ctx context.Context, req request) (response, error) {
 			return response{}, errors.New("only archived boxes can be purged from the desktop")
 		}
 	case "rename":
-		name := strings.TrimSpace(req.Prompt)
+		name := strings.TrimSpace(req.Name)
 		if name == "" || len(name) > 128 || strings.ContainsFunc(name, func(r rune) bool { return !unicode.IsPrint(r) }) {
 			return response{}, errors.New("name must be one printable line of 1–128 bytes")
 		}

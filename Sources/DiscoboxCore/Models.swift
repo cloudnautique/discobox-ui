@@ -142,8 +142,28 @@ public struct InputPart: Codable, Sendable, Equatable {
     public static func key(_ value: String) -> Self { Self(text: nil, key: value) }
 }
 
+/// The companion's bounded request contract. Operation names, permission
+/// classes and `version` are published in Companion/protocol.json, which the
+/// Go and Swift tests both check, so neither side can drift alone.
 public struct BridgeRequest: Encodable, Sendable {
-    public enum Operation: String, Encodable, Sendable { case boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, ruleProposals, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit }
+    public static let protocolVersion = 2
+    public enum Operation: String, Encodable, Sendable, CaseIterable { case boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, saveAuditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, defaultProject, sandboxes, execs, services, screen, input, newShell, closeShell, closeTerminal, createBox, harnesses, audit
+        /// The companion flag this operation needs. It keeps a polling read
+        /// from mutating by mistake; it is not a security boundary.
+        public enum Permission: String, Sendable { case read, manage, shell, input }
+        public var permission: Permission {
+            switch self {
+            case .input: .input
+            case .newShell: .shell
+            case .setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy,
+                 .clearPoolCache, .deleteSecret, .boxAction, .saveAuditBody, .upload, .download, .openTool, .newAgent,
+                 .answer, .createSecret, .closeShell, .closeTerminal, .createBox: .manage
+            case .boxLink, .serverPeer, .harnessDetails, .harnessChanges, .poolConfiguration, .approvalContext, .poolResources,
+                 .usageHeaders, .usage, .auditBody, .files, .tools, .approvals, .secrets, .defaultProject, .sandboxes, .execs,
+                 .services, .screen, .harnesses, .audit: .read
+            }
+        }
+    }
     public let operation: Operation
     public let discoboxAPI: Bool?
     public let projectID: String?
@@ -155,15 +175,24 @@ public struct BridgeRequest: Encodable, Sendable {
     public let remotePath: String?
     public let localPath: String?
     public let prompt: String?
+    /// A box's new name (rename).
+    public let name: String?
+    /// An approval request; `kind` is that request's kind.
     public let requestID: String?
     public let kind: String?
+    public let secretID: String?
+    /// An audit/usage record within `poolID`.
+    public let recordID: String?
+    public let toolID: String?
+    public let link: String?
     public let action: String?
     public let payload: JSONValue?
     public let input: [InputPart]?
 
     public init(_ operation: Operation, projectID: String? = nil, sandboxID: String? = nil,
-                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
+                execID: String? = nil, input: [InputPart]? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, name: String? = nil, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, toolID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
         self.discoboxAPI = discoboxAPI
+        self.name = name; self.secretID = secretID; self.recordID = recordID; self.toolID = toolID; self.link = link
         self.poolID = poolID
  self.remotePath = remotePath; self.localPath = localPath
  self.prompt = prompt; self.requestID = requestID; self.kind = kind; self.action = action; self.payload = payload

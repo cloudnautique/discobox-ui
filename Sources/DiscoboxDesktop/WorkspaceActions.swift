@@ -480,7 +480,7 @@ struct AuditView: View {
             Task {
                 defer { recordingBusy = false }
                 do {
-                    let result = try await workspace.operation(.auditBody, requestID: String(pieces[2]), kind: String(pieces[1]), action: part, localPath: url.path)
+                    let result = try await workspace.operation(.saveAuditBody, recordID: String(pieces[2]), action: part, localPath: url.path, poolID: String(pieces[1]))
                     recording = "Exported \(Int(result["bytes"].number ?? 0)) bytes." + (result["recordingTruncatedFrom"].string.isEmpty ? "" : " The pool retained only part of this recording (original: " + result["recordingTruncatedFrom"].string + " bytes).")
                 } catch { recording = error.localizedDescription }
             }
@@ -493,7 +493,7 @@ struct AuditView: View {
         Task {
             defer { recordingBusy = false }
             do {
-                let result = try await workspace.operation(.auditBody, requestID: String(pieces[2]), kind: String(pieces[1]), action: part)
+                let result = try await workspace.operation(.auditBody, recordID: String(pieces[2]), action: part, poolID: String(pieces[1]))
                 guard selected == record.id else { return }
                 recording = result["text"].string + (result["truncated"] == .bool(true) ? "\n[Preview limited to 1 MiB]" : "") + (result["recordingTruncatedFrom"].string.isEmpty ? "" : "\n[Pool recording was truncated from " + result["recordingTruncatedFrom"].string + " bytes]")
             } catch { recording = error.localizedDescription }

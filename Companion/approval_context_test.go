@@ -41,7 +41,7 @@ func TestApprovalContextWireEnvelope(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			out := response{Version: 1}
+			out := response{Version: protocolVersion}
 			input := `{"operation":"approvalContext","projectID":"p","requestID":"ask"}`
 			if err := runManaged(server.URL, false, false, false, strings.NewReader(input), &out); err != nil {
 				t.Fatal(err)
@@ -51,7 +51,7 @@ func TestApprovalContextWireEnvelope(t *testing.T) {
 				t.Fatal(err)
 			}
 			var decoded response
-			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != 1 || decoded.Status != status || !json.Valid(decoded.Body) {
+			if err = json.Unmarshal(wire, &decoded); err != nil || decoded.Version != protocolVersion || decoded.Status != status || !json.Valid(decoded.Body) {
 				t.Fatalf("invalid approval envelope: version=%d status=%d err=%v", decoded.Version, decoded.Status, err)
 			}
 			if status == http.StatusOK {

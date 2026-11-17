@@ -55,9 +55,6 @@ func (b *bridge) fileOperation(ctx context.Context, req request) (response, erro
 		}
 		return r, err
 	}
-	if !b.allowManage {
-		return response{}, errors.New("file transfers require explicit permission")
-	}
 	if req.LocalPath == "" || req.RemotePath == "" {
 		return response{}, errors.New("missing transfer path")
 	}
@@ -87,7 +84,7 @@ func (b *bridge) fileOperation(ctx context.Context, req request) (response, erro
 	if err != nil {
 		return response{}, err
 	}
-	return response{Version: 1, Status: 200, Body: []byte(`{}`)}, nil
+	return response{Version: protocolVersion, Status: 200, Body: []byte(`{}`)}, nil
 }
 func (b *bridge) statFile(ctx context.Context, base, remote string) (fileStat, int, error) {
 	r, err := b.call(ctx, "GET", base+"/stat?path="+url.QueryEscape(remote), nil)

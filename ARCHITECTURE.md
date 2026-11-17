@@ -149,7 +149,7 @@ shows connection controls and recovery status. Connecting reads existing resourc
 live terminal opens an interactive stream, resizes it, and holds activity while
 attached. Stopped/cached terminals use the observational screen endpoint.
 Lifecycle, file-write, and approval mutations require explicit UI actions; the
-companion validates an allowlist and requires per-request management permission.
+companion validates an allowlist and requires the per-request management flag.
 No server shutdown operation is exposed. The explicit New Shell operation creates and starts only a newly returned shell ID;
 it is never called by selection or polling.
 Before every attach the helper verifies running box and terminal state. Both
@@ -200,6 +200,17 @@ use JSON through stdin/stdout. Each bounded request gets one process; cancellati
 terminates that child only. This favors a small, inspectable first integration.
 If profiling warrants a persistent companion, retain request IDs and cancellation
 in a versioned protocol rather than adding ad hoc output parsing.
+
+The bounded request surface is one registry (`Companion/operations.go`): each
+operation's handler, permission class (read, manage, shell or input) and
+deadline. `Companion/protocol.json` publishes the names, classes and wire
+version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
+drift from the companion. Each request field has one meaning (a box's new name
+is `name`, a secret is `secretID`, an audit record is `poolID` + `recordID`, a
+link is `link`, a tool is `toolID`); `requestID` and `kind` name only an
+approval request. The `--allow-manage`, `--allow-shell` and `--allow-input`
+flags keep a polling read from mutating by mistake. They are not a security
+boundary against another process running as the same user.
 
 The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
 including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection
@@ -283,7 +294,7 @@ its record. Ambiguous failures are never retried automatically. Selection revisi
 checks prevent late responses from changing a different box's current terminal.
 
 
-New Box and Close Shell use a separate management authorization flag. Creation
+New Box and Close Shell require the management flag. Creation
 reuses sandboxcreate for origin, source pinning, and delivery, then returns the
 new record; it does not start/stop an existing box, invoke the CLI, or sync SSH
 configuration. Long requests are cancelled on application termination; source

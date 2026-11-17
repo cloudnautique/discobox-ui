@@ -21,9 +21,6 @@ import (
 )
 
 func (b *bridge) createBox(ctx context.Context, req request) (out response, failure error) {
-	if !b.allowManage {
-		return response{}, errors.New("box creation requires explicit permission")
-	}
 	if validID(req.ProjectID) != nil || validID(req.HarnessID) != nil {
 		return response{}, errors.New("invalid project or harness")
 	}
@@ -305,9 +302,6 @@ func (c sourceDeliveryClient) GetSandbox(ctx context.Context, params api.GetSand
 }
 
 func (b *bridge) closeShell(ctx context.Context, req request) (response, error) {
-	if !b.allowManage {
-		return response{}, errors.New("closing a shell requires explicit permission")
-	}
 	for _, id := range []string{req.ProjectID, req.SandboxID, req.ExecID} {
 		if validID(id) != nil {
 			return response{}, errors.New("invalid shell identity")

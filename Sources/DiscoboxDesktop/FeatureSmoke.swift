@@ -397,7 +397,7 @@ private actor ComputerUsageFixture: DiscoboxClient {
     init(percent: Int) { self.percent = percent }
     func perform(_ request: BridgeRequest) async throws -> Data {
         if request.operation == .usage { usageReads += 1 }
-        if request.operation == .auditBody, request.requestID == "demo-quota" {
+        if request.operation == .auditBody, request.recordID == "demo-quota" {
             return try JSONSerialization.data(withJSONObject: ["text": "{\"rate_limit\":{\"primary_window\":{\"used_percent\":\(percent),\"limit_window_seconds\":18000}}}", "truncated": false])
         }
         return try await demo.perform(request)

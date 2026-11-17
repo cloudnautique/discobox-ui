@@ -34,7 +34,7 @@ func TestBoxActionsUseExactRoutesOnce(t *testing.T) {
 				// Errors must be returned, never retried.
 				return &http.Response{StatusCode: 409, Body: io.NopCloser(strings.NewReader(`{"detail":"conflict"}`)), Header: http.Header{}}, nil
 			})}}
-			res, err := b.execute(context.Background(), request{Operation: "boxAction", ProjectID: "p", SandboxID: "s", Action: tc.action, Prompt: "My box"})
+			res, err := b.execute(context.Background(), request{Operation: "boxAction", ProjectID: "p", SandboxID: "s", Action: tc.action, Name: "My box"})
 			if err != nil || res.Status != 409 || mutations != 1 {
 				t.Fatalf("result: %+v %v mutations=%d", res, err, mutations)
 			}
@@ -59,7 +59,7 @@ func TestBoxActionsFailClosed(t *testing.T) {
 		{"rename", "p", "s", "bad\nname", true}, {"rename", "p", "s", "", true},
 	} {
 		b := &bridge{allowManage: tc.permission}
-		_, err := b.boxAction(context.Background(), request{Action: tc.action, ProjectID: tc.project, SandboxID: tc.box, Prompt: tc.name})
+		_, err := b.execute(context.Background(), request{Operation: "boxAction", Action: tc.action, ProjectID: tc.project, SandboxID: tc.box, Name: tc.name})
 		if err == nil {
 			t.Fatalf("accepted invalid request: %+v", tc)
 		}

@@ -7,7 +7,7 @@ import Testing
     let fixture = try FixtureExecutable(script: """
     #!/bin/sh
     /bin/cat >/dev/null
-    printf '%s' '{"version":1,"status":200,"body":"\(body)"}'
+    printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":200,"body":"\(body)"}'
     """)
     defer { fixture.remove() }
     let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
@@ -19,7 +19,7 @@ import Testing
     let fixture = try FixtureExecutable(script: """
     #!/bin/sh
     /bin/cat >/dev/null
-    printf '%s' '{"version":1,"status":401}'
+    printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":401}'
     """)
     defer { fixture.remove() }
     let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
@@ -64,10 +64,10 @@ import Testing
     mkdir -p "$0.running"; : > "$0.running/$$"
     i=0
     while [ "$(ls "$0.running" | wc -l)" -lt \(count) ]; do
-        i=$((i + 1)); [ "$i" -gt 200 ] && { printf '%s' '{"version":1,"status":504}'; exit 0; }
+        i=$((i + 1)); [ "$i" -gt 200 ] && { printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":504}'; exit 0; }
         sleep 0.05
     done
-    printf '%s' '{"version":1,"status":200,"body":"e30="}'
+    printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":200,"body":"e30="}'
     """)
     defer { fixture.remove() }
     let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
@@ -94,7 +94,7 @@ private struct FixtureExecutable {
     for (status, kind, error, retryable) in [(502, "", "", true), (503, "", "", true), (403, "", "", false),
                                             (400, "", "", false), (0, "transport", "fixture connection lost", true),
                                             (0, "", "invalid destination", false)] {
-        let wire = try JSONSerialization.data(withJSONObject: ["version": 1, "status": status, "errorKind": kind, "error": error])
+        let wire = try JSONSerialization.data(withJSONObject: ["version": BridgeRequest.protocolVersion, "status": status, "errorKind": kind, "error": error])
         let fixture = try FixtureExecutable(script: """
         #!/bin/sh
         /bin/cat >/dev/null
@@ -137,4 +137,44 @@ private struct FixtureExecutable {
         #expect(ContinuousClock.now - started < .seconds(3))
         #expect(try Data(contentsOf: fixture.url.appendingPathExtension("calls")) == Data("x".utf8))
     }
+}
+
+private struct ProtocolManifest: Decodable { let version: Int; let operations: [String: String] }
+private func protocolManifest() throws -> ProtocolManifest {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return try JSONDecoder().decode(ProtocolManifest.self, from: Data(contentsOf: root.appendingPathComponent("Companion/protocol.json")))
+}
+
+@Test func operationsMatchTheCompanionProtocolManifest() throws {
+    let manifest = try protocolManifest()
+    #expect(manifest.version == BridgeRequest.protocolVersion)
+    let swift = Dictionary(uniqueKeysWithValues: BridgeRequest.Operation.allCases.map { ($0.rawValue, $0.permission.rawValue) })
+    #expect(swift == manifest.operations)
+}
+
+@Test func everyOperationLaunchesTheCompanionWithOnlyItsPermissionFlag() async throws {
+    let fixture = try FixtureExecutable(script: """
+    #!/bin/sh
+    /bin/cat >/dev/null
+    printf '%s\\n' "$*" >> "$0.args"
+    printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":200}'
+    """)
+    defer { fixture.remove() }
+    let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
+    let flags: [BridgeRequest.Operation.Permission: String] = [.read: "", .manage: " --allow-manage", .shell: " --allow-shell", .input: " --allow-input"]
+    for operation in BridgeRequest.Operation.allCases {
+        _ = try await client.perform(.init(operation, projectID: "p"))
+        let lines = try String(contentsOf: fixture.url.appendingPathExtension("args"), encoding: .utf8).split(separator: "\n")
+        #expect(lines.last.map(String.init) == "--endpoint unix://" + flags[operation.permission]!, "\(operation)")
+    }
+}
+
+@Test @MainActor func renameTravelsAsItsOwnNameField() async throws {
+    let workspace = Workspace()
+    await workspace.connect(client: DemoClient(), label: "fixture", demo: true)
+    try await workspace.performBoxAction(.rename, boxID: "demo-ui", connection: workspace.connectionID, name: "Renamed fixture")
+    #expect(workspace.sandboxes.first { $0.id == "demo-ui" }?.displayName == "Renamed fixture")
+    let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(BridgeRequest(.boxAction, projectID: "p", sandboxID: "s", name: "n", action: "rename"))) as? [String: Any]
+    #expect(wire?["name"] as? String == "n" && wire?["prompt"] == nil)
+    workspace.disconnect()
 }

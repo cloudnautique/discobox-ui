@@ -14,14 +14,18 @@ import (
 )
 
 func (b *bridge) auditBody(ctx context.Context, req request) (response, error) {
-	if validID(req.ProjectID) != nil || validID(req.SandboxID) != nil || validID(req.Kind) != nil || validID(req.RequestID) != nil {
+	if validID(req.ProjectID) != nil || validID(req.SandboxID) != nil || validID(req.PoolID) != nil || validID(req.RecordID) != nil {
 		return response{}, errors.New("invalid audit identity")
+	}
+	// Only saveAuditBody writes a local file; a preview never does.
+	if save := req.Operation == "saveAuditBody"; save != (req.LocalPath != "") {
+		return response{}, errors.New("a recording export needs exactly one destination")
 	}
 	part := map[string]string{"request": "request-body", "response": "response-body", "stream": "stream"}[req.Action]
 	if part == "" {
 		return response{}, errors.New("invalid recording part")
 	}
-	target := b.base + "/api/projects/" + req.ProjectID + "/pools/" + req.Kind + "/audit/http/" + req.RequestID + "/" + part + "?sandboxId=" + url.QueryEscape(req.SandboxID)
+	target := b.base + "/api/projects/" + req.ProjectID + "/pools/" + req.PoolID + "/audit/http/" + req.RecordID + "/" + part + "?sandboxId=" + url.QueryEscape(req.SandboxID)
 	request, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return response{}, err
@@ -35,9 +39,6 @@ func (b *bridge) auditBody(ctx context.Context, req request) (response, error) {
 		return response{}, fmt.Errorf("recording unavailable: HTTP %d", result.StatusCode)
 	}
 	if req.LocalPath != "" {
-		if !b.allowManage {
-			return response{}, errors.New("recording export requires explicit permission")
-		}
 		file, err := os.CreateTemp(filepath.Dir(req.LocalPath), ".discobox-recording-")
 		if err != nil {
 			return response{}, err
@@ -55,7 +56,7 @@ func (b *bridge) auditBody(ctx context.Context, req request) (response, error) {
 			return response{}, err
 		}
 		body, _ := json.Marshal(map[string]any{"bytes": count, "recordingTruncatedFrom": result.Header.Get("X-Discobox-Audit-Truncated"), "format": result.Header.Get("X-Discobox-Audit-Format")})
-		return response{Version: 1, Status: 200, Body: body}, nil
+		return response{Version: protocolVersion, Status: 200, Body: body}, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(result.Body, 1024*1024+1))
 	if err != nil {
@@ -66,5 +67,5 @@ func (b *bridge) auditBody(ctx context.Context, req request) (response, error) {
 		data = data[:1024*1024]
 	}
 	body, _ := json.Marshal(map[string]any{"text": strings.ToValidUTF8(string(data), "�"), "truncated": truncated, "recordingTruncatedFrom": result.Header.Get("X-Discobox-Audit-Truncated"), "format": result.Header.Get("X-Discobox-Audit-Format")})
-	return response{Version: 1, Status: 200, Body: body}, nil
+	return response{Version: protocolVersion, Status: 200, Body: body}, nil
 }

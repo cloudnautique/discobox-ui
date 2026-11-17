@@ -15,9 +15,6 @@ func (b *bridge) poolConfiguration(ctx context.Context, req request) (response, 
 	if req.Operation == "poolConfiguration" {
 		return b.call(ctx, "GET", path, nil)
 	}
-	if !b.allowManage {
-		return response{}, errors.New("changing pool network settings requires explicit permission")
-	}
 	var input struct {
 		Proxy    json.RawMessage `json:"proxy"`
 		Expected json.RawMessage `json:"expectedProxy"`

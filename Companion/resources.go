@@ -15,9 +15,6 @@ func (b *bridge) poolOperation(ctx context.Context, req request) (response, erro
 	}
 	base := "/projects/" + req.ProjectID
 	if req.Operation == "clearPoolCache" {
-		if !b.allowManage {
-			return response{}, errors.New("pool cache cleanup requires explicit permission")
-		}
 		if err := validID(req.PoolID); err != nil {
 			return response{}, err
 		}
@@ -45,7 +42,7 @@ func (b *bridge) poolOperation(ctx context.Context, req request) (response, erro
 		Pools         json.RawMessage `json:"pools"`
 		DefaultPoolID string          `json:"defaultPoolId"`
 	}{list.Pools, placement.DefaultPoolID})
-	return response{Version: 1, Status: 200, Body: data}, err
+	return response{Version: protocolVersion, Status: 200, Body: data}, err
 }
 
 // A zero-valued/missing/stale report is not evidence of a full disk. Only the

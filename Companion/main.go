@@ -42,8 +42,13 @@ type request struct {
 	PoolID      string          `json:"poolID,omitempty"`
 	Repository  string          `json:"repository,omitempty"`
 	Prompt      string          `json:"prompt,omitempty"`
+	Name        string          `json:"name,omitempty"`
 	RequestID   string          `json:"requestID,omitempty"`
 	Kind        string          `json:"kind,omitempty"`
+	SecretID    string          `json:"secretID,omitempty"`
+	RecordID    string          `json:"recordID,omitempty"`
+	ToolID      string          `json:"toolID,omitempty"`
+	Link        string          `json:"link,omitempty"`
 	Action      string          `json:"action,omitempty"`
 	Payload     json.RawMessage `json:"payload,omitempty"`
 	Input       []inputPart     `json:"input,omitempty"`
@@ -150,7 +155,7 @@ func main() {
 		}
 		return
 	}
-	out := response{Version: 1}
+	out := response{Version: protocolVersion}
 	err := runManaged(*endpoint, *allowInput, *allowShell, *allowManage, os.Stdin, &out)
 	if err != nil {
 		out.Error = err.Error()
@@ -201,25 +206,14 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	b.allowShell = allowShell
 	b.allowManage = allowManage
 	defer b.client.CloseIdleConnections()
-	duration := requestTimeout(req)
-	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
-		b.client.Timeout = 0
+	op, ok := operations[req.Operation]
+	if !ok {
+		return errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
 	}
-	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" {
-		// Purge waits for confirmed removal; rename can wait for a stopped box
-		// to wake. Bound the whole request by context, not a 10-second header wait.
-		b.client.Transport.(*http.Transport).ResponseHeaderTimeout = 0
-	}
-	if req.Operation == "harnessChanges" || req.Operation == "saveHarnessChanges" || req.Operation == "discardHarnessChanges" {
-		// Save-back can spend 30 seconds acknowledging a committed OAuth
-		// handoff. Keep it bounded by the operation context, not the ordinary
-		// 10-second header wait or 15-second metadata client timeout.
-		b.client.Timeout = 0
-		b.client.Transport.(*http.Transport).ResponseHeaderTimeout = 0
-	}
+	op.configure(b.client)
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	ctx, cancel := context.WithTimeout(parent, duration)
+	ctx, cancel := context.WithTimeout(parent, op.deadlineFor(req))
 	defer cancel()
 	result, err := b.execute(ctx, req)
 	if err != nil {
@@ -227,23 +221,9 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	}
 	// The wire version belongs to this process boundary. Assembled responses
 	// (harness metadata, credential previews) do not pass through b.call.
-	result.Version = 1
+	result.Version = protocolVersion
 	*out = result
 	return nil
-}
-
-func requestTimeout(req request) time.Duration {
-	if req.Operation == "harnessChanges" || req.Operation == "saveHarnessChanges" || req.Operation == "discardHarnessChanges" {
-		return 90 * time.Second
-	}
-	if req.Operation == "boxAction" && req.Action == "archive" {
-		// Archive records an asynchronous intent, without waiting for runtime removal.
-		return 30 * time.Second
-	}
-	if req.Operation == "boxAction" || req.Operation == "clearPoolCache" || req.Operation == "createBox" || req.Operation == "upload" || req.Operation == "download" || (req.Operation == "auditBody" && req.LocalPath != "") {
-		return 30 * time.Minute
-	}
-	return 15 * time.Second
 }
 
 func resolveLocalEndpoint(raw string) string {
@@ -300,7 +280,7 @@ func newBridge(endpoint string, allowInput bool) (*bridge, error) {
 			return nil, errors.New("endpoint requires a hostname")
 		}
 	default:
-		return nil, errors.New("this build supports unix:// and existing http:// or https:// endpoints; Iroh support is not yet implemented")
+		return nil, errors.New("this build supports unix:// and existing http:// or https:// endpoints; Iroh connections use the app's private transport")
 	}
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errEndpointRedirect },
@@ -317,7 +297,7 @@ func validID(id string) error {
 	return nil
 }
 
-func route(req request, allowInput bool) (method, path string, body []byte, err error) {
+func route(req request) (method, path string, body []byte, err error) {
 	method = http.MethodGet
 	if req.Operation == "serverPeer" {
 		return method, "/peer", nil, nil
@@ -353,10 +333,6 @@ func route(req request, allowInput bool) (method, path string, body []byte, err 
 		path = base + "/execs/" + req.ExecID + "/" + req.Operation
 		if req.Operation == "screen" {
 			return method, path + "?scrollback=250", nil, nil
-		}
-		if !allowInput {
-			err = errors.New("terminal input requires explicit permission")
-			return
 		}
 		if err = validateInput(req.Input); err != nil {
 			return
@@ -396,45 +372,9 @@ func validateInput(parts []inputPart) error {
 	return nil
 }
 
-func (b *bridge) execute(ctx context.Context, req request) (response, error) {
-	switch req.Operation {
-	case "boxLink":
-		return parseBoxLink(req)
-	case "setDefaultHarness":
-		return b.setDefaultHarness(ctx, req)
-	case "updateSecretLimits":
-		return b.credentialLimits(ctx, req)
-	case "harnessDetails", "harnessChanges", "saveHarnessChanges", "discardHarnessChanges":
-		return b.harnessManagement(ctx, req)
-	case "poolConfiguration", "updatePoolProxy":
-		return b.poolConfiguration(ctx, req)
-	case "poolResources", "clearPoolCache":
-		return b.poolOperation(ctx, req)
-	case "boxAction":
-		return b.boxAction(ctx, req)
-	case "approvalContext", "deleteSecret", "approvals", "secrets", "answer", "createSecret", "ruleProposals":
-		return b.approvals(ctx, req)
-	case "tools", "openTool", "newAgent":
-		return b.toolOperation(ctx, req)
-	case "files", "upload", "download":
-		return b.fileOperation(ctx, req)
-	case "usageHeaders":
-		return b.usageHeaders(ctx, req)
-	case "usage":
-		return b.usage(ctx, req)
-	case "auditBody":
-		return b.auditBody(ctx, req)
-	case "audit":
-		return b.audit(ctx, req)
-	case "closeShell", "closeTerminal":
-		return b.closeShell(ctx, req)
-	case "createBox":
-		return b.createBox(ctx, req)
-	}
-	if req.Operation == "newShell" {
-		return b.newShell(ctx, req)
-	}
-	method, path, body, err := route(req, b.allowInput)
+// routed serves the plain resource reads and terminal input in route().
+func (b *bridge) routed(ctx context.Context, req request) (response, error) {
+	method, path, body, err := route(req)
 	if err != nil {
 		return response{}, err
 	}
@@ -510,15 +450,12 @@ func (b *bridge) call(ctx context.Context, method, path string, body []byte) (re
 	if len(data) > maxBody {
 		return response{}, errors.New("response exceeds 8 MiB")
 	}
-	return response{Version: 1, Status: res.StatusCode, Body: data}, nil
+	return response{Version: protocolVersion, Status: res.StatusCode, Body: data}, nil
 }
 
 // Only a new shell can be created/started, in one explicit authorized request.
 // There is intentionally no general exec-start operation.
 func (b *bridge) newShell(ctx context.Context, req request) (response, error) {
-	if !b.allowShell {
-		return response{}, errors.New("opening a shell requires explicit permission")
-	}
 	if err := validID(req.ProjectID); err != nil {
 		return response{}, err
 	}

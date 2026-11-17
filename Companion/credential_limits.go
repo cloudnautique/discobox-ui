@@ -11,7 +11,7 @@ import (
 // Editing shared restrictions is a separate explicit Settings operation. Never
 // include values, bindings, routes, or rules in this bounded metadata update.
 func (b *bridge) credentialLimits(ctx context.Context, req request) (response, error) {
-	if !b.allowManage || validID(req.ProjectID) != nil || validID(req.RequestID) != nil {
+	if validID(req.ProjectID) != nil || validID(req.SecretID) != nil {
 		return response{}, errors.New("choose a credential on a connected computer before editing shared limits")
 	}
 	var input struct {
@@ -21,7 +21,7 @@ func (b *bridge) credentialLimits(ctx context.Context, req request) (response, e
 	if json.Unmarshal(req.Payload, &input) != nil || len(input.Expected) == 0 || len(input.Limits) == 0 {
 		return response{}, errors.New("invalid credential limit update")
 	}
-	path := "/projects/" + req.ProjectID + "/secrets/" + req.RequestID
+	path := "/projects/" + req.ProjectID + "/secrets/" + req.SecretID
 	current, err := b.call(ctx, "GET", path, nil)
 	if err != nil || current.Status != 200 {
 		return current, err
@@ -78,7 +78,7 @@ func (b *bridge) credentialLimits(ctx context.Context, req request) (response, e
 		return response{}, errors.New("Discobox returned invalid credential metadata after saving; reopen the credential details before retrying")
 	}
 	var id string
-	if json.Unmarshal(saved["id"], &id) != nil || id != req.RequestID {
+	if json.Unmarshal(saved["id"], &id) != nil || id != req.SecretID {
 		return response{}, errors.New("Discobox did not confirm the saved credential identity; reopen its details before retrying")
 	}
 	for key, expected := range input.Limits {

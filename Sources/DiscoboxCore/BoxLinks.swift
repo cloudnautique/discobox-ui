@@ -23,7 +23,7 @@ public extension Connections {
         }
         let connected = sessions.filter { $0.workspace.isConnected }
         let generations = Dictionary(uniqueKeysWithValues: connected.map { ($0.id, $0.workspace.connectionID) })
-        let parsed = try await reader.workspace.operation(.boxLink, kind: raw,
+        let parsed = try await reader.workspace.operation(.boxLink, link: raw,
             payload: .array(connected.map { .string($0.profile.endpoint) }))
         try Task.checkCancellation()
         guard reader.workspace.connectionID == generation, reader.workspace.isConnected else { throw CancellationError() }

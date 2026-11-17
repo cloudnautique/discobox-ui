@@ -19,13 +19,13 @@ func reply(body string) *http.Response {
 
 func TestPassiveOperationsCannotReachLifecycleOrActiveReads(t *testing.T) {
 	for _, op := range []string{"start", "stop", "restart", "delete", "shutdown", "attach", "logs", "files", "resources", "create", "approve"} {
-		_, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"}, true)
+		_, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"})
 		if err == nil {
 			t.Errorf("accepted forbidden operation %q", op)
 		}
 	}
 	for _, op := range []string{"defaultProject", "sandboxes", "execs", "services", "screen"} {
-		method, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"}, false)
+		method, _, _, err := route(request{Operation: op, ProjectID: "p", SandboxID: "s", ExecID: "e"})
 		if err != nil || method != "GET" {
 			t.Errorf("passive %s: method=%q error=%v", op, method, err)
 		}
@@ -34,7 +34,7 @@ func TestPassiveOperationsCannotReachLifecycleOrActiveReads(t *testing.T) {
 
 func TestRejectPathInjectionAndVirtualPrimary(t *testing.T) {
 	for _, id := range []string{"../shutdown", "a/b", "a%2fb", "?x", "", "primary"} {
-		_, _, _, err := route(request{Operation: "screen", ProjectID: "p", SandboxID: "s", ExecID: id}, false)
+		_, _, _, err := route(request{Operation: "screen", ProjectID: "p", SandboxID: "s", ExecID: id})
 		if err == nil {
 			t.Errorf("accepted unsafe exec %q", id)
 		}
@@ -42,11 +42,11 @@ func TestRejectPathInjectionAndVirtualPrimary(t *testing.T) {
 }
 
 func TestDefaultProjectAlwaysUsesServerAlias(t *testing.T) {
-	method, path, _, err := route(request{Operation: "defaultProject", ProjectID: "other"}, false)
+	method, path, _, err := route(request{Operation: "defaultProject", ProjectID: "other"})
 	if err != nil || method != "GET" || path != "/projects/default" {
 		t.Fatalf("wrong default resolution: %s %s %v", method, path, err)
 	}
-	if _, _, _, err := route(request{Operation: "projects"}, false); err == nil {
+	if _, _, _, err := route(request{Operation: "projects"}); err == nil {
 		t.Fatal("project enumeration is still exposed")
 	}
 }
@@ -54,10 +54,10 @@ func TestDefaultProjectAlwaysUsesServerAlias(t *testing.T) {
 func TestInputRequiresOptInAndExactWireShape(t *testing.T) {
 	text, key := "hello", "Enter"
 	req := request{Operation: "input", ProjectID: "p", SandboxID: "s", ExecID: "e", Input: []inputPart{{Text: &text}, {Key: &key}}}
-	if _, _, _, err := route(req, false); err == nil {
-		t.Fatal("input accepted without opt-in")
+	if _, err := (&bridge{}).execute(context.Background(), req); err == nil || err.Error() != permissionRefusals[permissionInput] {
+		t.Fatalf("input accepted without opt-in: %v", err)
 	}
-	method, path, body, err := route(req, true)
+	method, path, body, err := route(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestInputRequiresOptInAndExactWireShape(t *testing.T) {
 		t.Fatalf("wrong body: %s", body)
 	}
 	req.Input = []inputPart{{Text: &text, Key: &key}}
-	if _, _, _, err := route(req, true); err == nil {
+	if _, _, _, err := route(req); err == nil {
 		t.Fatal("accepted ambiguous input part")
 	}
 }
@@ -155,7 +155,7 @@ func TestEndpointValidationAndRedirectPolicy(t *testing.T) {
 }
 
 func TestResponseEnvelopeRoundTripsBinaryJSON(t *testing.T) {
-	before := response{Version: 1, Status: 200, Body: []byte(`{"projects":null}`)}
+	before := response{Version: protocolVersion, Status: 200, Body: []byte(`{"projects":null}`)}
 	encoded, err := json.Marshal(before)
 	if err != nil {
 		t.Fatal(err)

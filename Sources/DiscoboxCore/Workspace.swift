@@ -292,7 +292,7 @@ public final class Workspace {
         defer { if connection == connectionID { pendingBoxActions.remove(boxID) } }
         if sandboxID == boxID && [.stop, .archive, .unarchive, .purge, .upgrade, .repair].contains(action) { clearSelection() }
         beforeRequest()
-        _ = try await client.perform(.init(.boxAction, projectID: projectID, sandboxID: boxID, prompt: name, action: action.rawValue))
+        _ = try await client.perform(.init(.boxAction, projectID: projectID, sandboxID: boxID, name: name, action: action.rawValue))
         guard connection == connectionID else { return }
         if action == .purge {
             confirmedPurges.insert(boxID)
@@ -408,7 +408,7 @@ public final class Workspace {
         guard let client, let projectID, let sandboxID, selectedBox?.isRunning == true else { throw DiscoboxError("Select a running box.") }
         let selection = selectionRevision
         let payload: JSONValue? = base.isEmpty ? nil : .object(["base": .string(base), "head": .string(head)])
-        let created = try await client.decode(.init(tool == nil ? .newAgent : .openTool, projectID: projectID, sandboxID: sandboxID, kind: tool, action: base.isEmpty ? nil : "review", payload: payload), as: Exec.self)
+        let created = try await client.decode(.init(tool == nil ? .newAgent : .openTool, projectID: projectID, sandboxID: sandboxID, toolID: tool, action: base.isEmpty ? nil : "review", payload: payload), as: Exec.self)
         guard selection == selectionRevision else { return }
         await refreshDetails()
         guard selection == selectionRevision else { return }
@@ -456,9 +456,9 @@ public final class Workspace {
         guard isConnected, connectionID == connection else { throw CancellationError() }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
-    public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
+    public func operation(_ operation: BridgeRequest.Operation, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, localPath: String? = nil, poolID: String? = nil) async throws -> JSONValue {
         guard let client, let projectID else { throw DiscoboxError("Connect to a server first.") }
-        let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, action: action, payload: payload, localPath: localPath, poolID: poolID))
+        let data = try await client.perform(.init(operation, projectID: projectID, sandboxID: sandboxID, requestID: requestID, kind: kind, secretID: secretID, recordID: recordID, link: link, action: action, payload: payload, localPath: localPath, poolID: poolID))
         if data.isEmpty { return .object([:]) }
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }

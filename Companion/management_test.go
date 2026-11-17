@@ -42,7 +42,7 @@ func TestCredentialDeleteIsScopedExplicitAndNotRetried(t *testing.T) {
 			}
 			return nil, errors.New("ambiguous connection failure")
 		})
-		_, err := b.execute(t.Context(), request{Operation: "deleteSecret", ProjectID: "p", RequestID: "secret"})
+		_, err := b.execute(t.Context(), request{Operation: "deleteSecret", ProjectID: "p", SecretID: "secret"})
 		if err == nil {
 			t.Fatal("expected refusal/failure")
 		}
@@ -56,7 +56,7 @@ func TestCredentialDeleteIsScopedExplicitAndNotRetried(t *testing.T) {
 	}
 	b, _ := newBridge("http://fixture", false)
 	b.allowManage = true
-	if _, err := b.execute(t.Context(), request{Operation: "deleteSecret", ProjectID: "p", RequestID: "../other"}); err == nil {
+	if _, err := b.execute(t.Context(), request{Operation: "deleteSecret", ProjectID: "p", SecretID: "../other"}); err == nil {
 		t.Fatal("accepted invalid credential")
 	}
 }

@@ -190,5 +190,5 @@ func (b *bridge) audit(ctx context.Context, req request) (response, error) {
 		out.Limited = append(out.Limited, "Detail payload")
 		data, err = json.Marshal(out)
 	}
-	return response{Version: 1, Status: 200, Body: data}, err
+	return response{Version: protocolVersion, Status: 200, Body: data}, err
 }
