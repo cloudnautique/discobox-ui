@@ -52,11 +52,12 @@ import Testing
 }
 
 @Test func inFlightRequestsDoNotOccupyCooperativeThreads() async throws {
-    // Twice as many helpers as the cooperative pool has threads, each waiting
-    // (up to 10s) until all of them are running at once. Requests that held a
-    // pool thread each could never all be in flight together, so the barrier
-    // would time out; this does not depend on how fast the machine is.
-    let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
+    // More helpers than the cooperative pool has threads, each waiting (up to
+    // 10s) until all of them are running at once. Requests that held a pool
+    // thread each could never all be in flight together, so the barrier would
+    // time out; this does not depend on how fast the machine is. Only just
+    // over the pool width, so the test itself adds little process pressure.
+    let count = ProcessInfo.processInfo.activeProcessorCount + 2
     let fixture = try FixtureExecutable(script: """
     #!/bin/sh
     /bin/cat >/dev/null
