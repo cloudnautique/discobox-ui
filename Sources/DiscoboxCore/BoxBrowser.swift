@@ -20,6 +20,26 @@ import Observation
         revealRevision = UUID()
     }
     public init() {}
+    @ObservationIgnored private var fleetMemo: BrowserFleet?
+    @ObservationIgnored private var snapshotMemo: (fleet: Int, query: BrowserQuery, snapshot: BrowserSnapshot)?
+    var query: BrowserQuery {
+        .init(computerID: computerID, filter: filter, searchText: searchText, selectedTags: selectedTags, matchAnyTag: matchAnyTag, activityFilter: activityFilter)
+    }
+    /// Callers read every input first, so Observation tracks them; the memo
+    /// only avoids re-deriving and re-sorting when those inputs are unchanged.
+    func fleet(_ hosts: [BrowserFleet.Host]) -> BrowserFleet {
+        if let fleetMemo, fleetMemo.hosts == hosts { return fleetMemo }
+        let fleet = BrowserFleet(hosts: hosts, revision: (fleetMemo?.revision ?? 0) + 1)
+        fleetMemo = fleet
+        return fleet
+    }
+    func snapshot(hosts: [BrowserFleet.Host], query: BrowserQuery) -> BrowserSnapshot {
+        let fleet = fleet(hosts)
+        if let snapshotMemo, snapshotMemo.fleet == fleet.revision, snapshotMemo.query == query { return snapshotMemo.snapshot }
+        let snapshot = BrowserSnapshot(fleet: fleet, query: query)
+        snapshotMemo = (fleet.revision, query, snapshot)
+        return snapshot
+    }
     public func toggleComputer(_ id: String) { computerID = computerID == id ? nil : id; archivedSelection.removeAll(); selectedBoxes.removeAll() }
 
     public func selectBoxes(_ ids: Set<BoxLocation>) {
@@ -39,44 +59,31 @@ import Observation
 }
 
 public extension Connections {
+    /// Reading this registers dependencies on every input (each connected
+    /// workspace's boxes, approvals, aging clock, reachability and pending
+    /// actions, and the browser's scope), even when the memo is reused.
+    var browserSnapshot: BrowserSnapshot { browser.snapshot(hosts: browserHosts, query: browser.query) }
     /// Counts use this set, before the quick filter, so selecting a filter does
     /// not change its own count or the other filter's count.
-    var browserCandidates: [ConnectedBox] {
-        sessions.filter { $0.workspace.isConnected && (browser.computerID == nil || browser.computerID == $0.id) }.flatMap { host in
-            return host.workspace.sandboxes.compactMap { box -> ConnectedBox? in
-                let activity = host.workspace.activity(for: box)
-                let attention = box.matchesAttention || activity.needsYou
-                let include: Bool
-                switch browser.filter {
-                case .all: include = !box.isArchived
-                case .running: include = host.workspace.powerStatus(for: box).isRunning
-                case .attention: include = !box.isArchived && attention
-                case .archived: include = box.isArchived
-                }
-                guard include, BoxOrganization.matches(tags: box.meta?.tags ?? [:], selectors: browser.selectedTags, matchAny: browser.matchAnyTag) else { return nil }
-                let item = ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box, needsAttention: attention, activity: activity, power: host.workspace.powerStatus(for: box))
-                return item.matches(browser.searchText) ? item : nil
-            }
-        }.sorted {
-            let names = $0.box.sidebarTitle.localizedStandardCompare($1.box.sidebarTitle)
-            if names != .orderedSame { return names == .orderedAscending }
-            if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-            if $0.location.box != $1.location.box { return $0.location.box < $1.location.box }
-            return $0.location.connection < $1.location.connection
-        }
-    }
-    var browserBoxes: [ConnectedBox] {
-        browserCandidates.filter { item in
-            browser.filter == .archived || browser.activityFilter.map { $0.matches(item.activity ?? AgentActivity(box: item.box), box: item.box) } != false
-        }
-    }
+    var browserCandidates: [ConnectedBox] { browserSnapshot.candidates }
+    var browserBoxes: [ConnectedBox] { browserSnapshot.boxes }
     /// Keep a selected box that stops matching activity visible as context,
     /// without adding it to the filter results or inflating either count.
     var browserSelectionPin: ConnectedBox? {
         guard browser.filter != .archived, let filter = browser.activityFilter, let selected = active.workspace.sandboxID else { return nil }
+        let id = activeID
         return browserCandidates.first { item in
-            item.location.connection == activeID && item.box.id == selected &&
+            item.location.connection == id && item.box.id == selected &&
                 !filter.matches(item.activity ?? AgentActivity(box: item.box), box: item.box)
+        }
+    }
+    internal var browserFleet: BrowserFleet { browser.fleet(browserHosts) }
+    private var browserHosts: [BrowserFleet.Host] {
+        sessions.filter { $0.workspace.isConnected }.map { host in
+            let workspace = host.workspace
+            return .init(id: host.id, computer: host.profile.displayName, boxes: workspace.sandboxes, approvals: workspace.approvals,
+                         clock: workspace.activityClock, reachable: workspace.hasCurrentBoxInventory,
+                         canAct: workspace.connectionError == nil, pending: workspace.pendingBoxActions)
         }
     }
 }

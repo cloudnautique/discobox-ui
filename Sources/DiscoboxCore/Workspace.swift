@@ -57,11 +57,13 @@ public final class Workspace {
     public var searchText = ""
     public var filter: BoxFilter = .all
     public var activityFilter: BoxActivityFilter?
-    var activityObservationTime: Date {
-        // Depend on the existing refresh tick so unchanged snapshots still
-        // age out in the UI. This adds neither a timer nor a network request.
-        _ = lastRefresh
-        return now()
+    /// Existing refreshes advance this only when an age check could change,
+    /// so unchanged reports still age out without republishing every tick.
+    public private(set) var activityClock = ActivityClock()
+    var activityObservationTime: Date { activityClock.now }
+    private func advanceActivityClock() {
+        let next = activityClock.advanced(to: now(), inventoryObservedAt: boxesObservedAt, boxes: sandboxes)
+        if next != activityClock { activityClock = next }
     }
 
     @ObservationIgnored private var client: (any DiscoboxClient)?
@@ -207,6 +209,7 @@ public final class Workspace {
         isDemo = false
         lastRefresh = nil
         boxesObservedAt = nil
+        activityClock = ActivityClock()
         connectionError = nil
         recovery.reset(); recoveryInFlight = false; recoveryCount = 0
         clearSelection()
@@ -261,9 +264,10 @@ public final class Workspace {
             let updatedBoxes = (result.sandboxes ?? []).filter { !$0.isDeleted && !confirmedPurges.contains($0.id) }
             boxesObservedAt = now()
             if sandboxes != updatedBoxes { sandboxes = updatedBoxes }
+            advanceActivityClock()
             let running = Set(updatedBoxes.filter(\.isRunning).map(\.id))
             recentBoxes = recentBoxes.filter { running.contains($0.key) && now().timeIntervalSince($0.value.loadedAt) < 30 }
-            connectionError = nil
+            if connectionError != nil { connectionError = nil }
             if !recoveryInFlight { recovery.reset() }
             if let transport, transportEndpoint != transport { transportEndpoint = transport }
             if let sandboxID, !sandboxes.contains(where: { $0.id == sandboxID }) { clearSelection() }
@@ -426,6 +430,7 @@ public final class Workspace {
             let pending = result.approvalRequests.filter { $0.request["status"].string == "pending" }
             if approvals != pending { approvals = pending }
             approvalError = nil
+            advanceActivityClock()
         } catch {
             guard connectionID == connection, approvalRequest == request, !Task.isCancelled else { return }
             approvalError = error.localizedDescription

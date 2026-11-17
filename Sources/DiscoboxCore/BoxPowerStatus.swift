@@ -35,9 +35,7 @@ public struct BoxPowerStatus: Sendable, Equatable {
 
 public extension Workspace {
     var hasCurrentBoxInventory: Bool {
-        let current = activityObservationTime
-        let recentList = boxesObservedAt.map { abs(current.timeIntervalSince($0)) <= BoxPowerStatus.maximumReportAge } ?? false
-        return isConnected && connectionError == nil && recentList
+        isConnected && connectionError == nil && activityClock.inventoryIsCurrent
     }
     func powerStatus(for box: Sandbox) -> BoxPowerStatus {
         BoxPowerStatus(box: box, reachable: hasCurrentBoxInventory, now: activityObservationTime)

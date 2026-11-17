@@ -78,7 +78,7 @@ public struct BoxLocation: Hashable, Sendable {
     public let box: String
     public init(connection: String, box: String) { self.connection = connection; self.box = box }
 }
-public struct ConnectedBox: Identifiable, Sendable {
+public struct ConnectedBox: Identifiable, Sendable, Equatable {
     public var id: BoxLocation { location }
     public let location: BoxLocation
     public let computer: String
@@ -86,9 +86,12 @@ public struct ConnectedBox: Identifiable, Sendable {
     public let needsAttention: Bool
     public let activity: AgentActivity?
     public let power: BoxPowerStatus
-    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil, power: BoxPowerStatus? = nil) {
+    /// `Sandbox.sidebarTitle`, derived once because sorting compares it repeatedly.
+    public let title: String
+    public init(location: BoxLocation, computer: String, box: Sandbox, needsAttention: Bool, activity: AgentActivity? = nil, power: BoxPowerStatus? = nil, title: String? = nil) {
         self.location = location; self.computer = computer; self.box = box; self.needsAttention = needsAttention; self.activity = activity
         self.power = power ?? BoxPowerStatus(box: box)
+        self.title = title ?? box.sidebarTitle
     }
     public func matches(_ query: String) -> Bool {
         query.split(whereSeparator: { $0.isWhitespace }).allSatisfy {
@@ -200,21 +203,5 @@ public struct ConnectedBox: Identifiable, Sendable {
             }
         }
     }
-    public var switcherBoxes: [ConnectedBox] {
-        sessions.filter { $0.workspace.isConnected }.flatMap { host in
-            let waiting = Set(host.workspace.approvals.map(\.boxID))
-            return host.workspace.switcherBoxes.map { box in
-                ConnectedBox(location: .init(connection: host.id, box: box.id), computer: host.profile.displayName, box: box,
-                             needsAttention: box.matchesAttention || waiting.contains(box.id) || host.workspace.activity(for: box).needsYou,
-                             activity: host.workspace.activity(for: box), power: host.workspace.powerStatus(for: box))
-            }
-        }.sorted {
-            func rank(_ item: ConnectedBox) -> Int { item.needsAttention ? 0 : item.power.isRunning ? 1 : 2 }
-            if rank($0) != rank($1) { return rank($0) < rank($1) }
-            let names = $0.box.displayName.localizedStandardCompare($1.box.displayName)
-            if names != .orderedSame { return names == .orderedAscending }
-            if $0.computer != $1.computer { return $0.computer.localizedStandardCompare($1.computer) == .orderedAscending }
-            return $0.location.connection < $1.location.connection
-        }
-    }
+    public var switcherBoxes: [ConnectedBox] { browserFleet.switcherOrder }
 }
