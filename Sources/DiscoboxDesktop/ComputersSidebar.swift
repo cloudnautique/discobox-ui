@@ -310,7 +310,7 @@ struct ComputersSidebar: View {
             .listRowInsets(EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7))
     }
     private func connect(_ host: ConnectionSession) {
-        Task { do { _ = try await connections.connect(host.profile) { try ConnectionClients.make(host.profile) } }
+        Task { do { _ = try await connections.connect(host.profile) { try await ConnectionClients.make(host.profile) } }
             catch { host.selection.commandError = error.localizedDescription } }
     }
 }

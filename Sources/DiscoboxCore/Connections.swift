@@ -97,7 +97,7 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         reconcileCreations()
         return box
     }
-    @discardableResult public func connect(_ profile: ConnectionProfile, demo: Bool = false, select: Bool = true, client: () throws -> any DiscoboxClient) async throws -> ConnectionSession {
+    @discardableResult public func connect(_ profile: ConnectionProfile, demo: Bool = false, select: Bool = true, client: () async throws -> any DiscoboxClient) async throws -> ConnectionSession {
         syncProfiles([profile])
         let host = session(ConnectionProfiles.normalizedEndpoint(profile.endpoint))!
         if host.connectionState.isConnected || host.connectionState.isConnecting {
@@ -111,7 +111,10 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
             return host
         }
         let attempt = host.beginConnection()
-        let transport = try client()
+        // Making a client may read Keychain off the main actor; a newer attempt
+        // or disconnect in the meantime owns the session instead.
+        let transport = try await client()
+        guard host.ownsAttempt(attempt), !Task.isCancelled else { transport.closeConnection(); return host }
         await host.connect(client: transport, label: host.id, demo: demo)
         guard host.ownsAttempt(attempt), !Task.isCancelled else { return host }
         // Failed initial connects need the recovery loop just as much as

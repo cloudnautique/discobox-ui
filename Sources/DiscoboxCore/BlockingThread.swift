@@ -8,8 +8,8 @@ import Foundation
 /// in-flight request is proportionate. Cancellation stays with the caller,
 /// which signals the work (for example by terminating its process) so that
 /// `work` returns.
-enum BlockingThread {
-    static func run<T: Sendable>(name: String, priority: TaskPriority? = nil,
+public enum BlockingThread {
+    public static func run<T: Sendable>(name: String, priority: TaskPriority? = nil,
                                  _ work: @escaping @Sendable () throws -> T) async throws -> T {
         let qos = qualityOfService(for: priority ?? Task.currentPriority)
         return try await withCheckedThrowingContinuation { continuation in

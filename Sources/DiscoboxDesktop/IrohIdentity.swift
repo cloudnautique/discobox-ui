@@ -6,7 +6,12 @@ import DiscoboxCore
 /// An app-specific enrollment identity, never the CLI's key or a server key.
 /// Only its public ID is shown or saved in preferences.
 enum IrohIdentity {
-    static func seed() throws -> Data {
+    /// Keychain calls block (and can wait on an access prompt), so they run on
+    /// a thread of their own, never the main actor or the cooperative pool.
+    static func seed() async throws -> Data {
+        try await BlockingThread.run(name: "Discobox Keychain identity", priority: .userInitiated) { try IrohIdentity.storedSeed() }
+    }
+    private static func storedSeed() throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "ai.discobox.desktop.iroh",
@@ -28,7 +33,7 @@ enum IrohIdentity {
         item[kSecAttrLabel as String] = "Discobox remote connection identity"
         item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let added = SecItemAdd(item as CFDictionary, nil)
-        if added == errSecDuplicateItem { return try self.seed() }
+        if added == errSecDuplicateItem { return try storedSeed() }
         guard added == errSecSuccess else { throw keychainError(added) }
         return seed
     }

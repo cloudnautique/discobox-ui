@@ -3,9 +3,12 @@ import AppKit
 import DiscoboxCore
 
 @MainActor enum ConnectionClients {
-    static func make(_ profile: ConnectionProfile) throws -> CompanionClient {
-        CompanionClient(executable: CompanionLocation.executable, endpoint: profile.endpoint,
-            identitySeed: profile.isRemote ? try IrohIdentity.seed() : nil,
+    static func make(_ profile: ConnectionProfile) async throws -> CompanionClient {
+        // The Keychain read happens off the main actor (see IrohIdentity.seed).
+        var seed: Data?
+        if profile.isRemote { seed = try await IrohIdentity.seed() }
+        return CompanionClient(executable: CompanionLocation.executable, endpoint: profile.endpoint,
+            identitySeed: seed,
             relayURLs: profile.relayURLs.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
             directOnly: profile.directOnly ?? false)
     }
@@ -146,10 +149,10 @@ struct ConnectionSettings: View {
             do {
                 lastEndpoint = profile.endpoint
                 let target: ConnectionSession
-                if let connections { target = try await connections.connect(profile) { try ConnectionClients.make(profile) } }
+                if let connections { target = try await connections.connect(profile) { try await ConnectionClients.make(profile) } }
                 else {
                     target = workspace
-                    await target.connect(client: try ConnectionClients.make(profile), label: profile.endpoint)
+                    await target.connect(client: try await ConnectionClients.make(profile), label: profile.endpoint)
                 }
                 if target.connectionState.endpointLabel == profile.endpoint, target.connectionState.connectionError != nil {
                     error = nil // The target's live error clears when automatic recovery succeeds.

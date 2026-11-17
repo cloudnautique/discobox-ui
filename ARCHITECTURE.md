@@ -542,7 +542,8 @@ terminal responder without stealing focus from an already-clicked text field.
 Remote connections use the existing backend `pkg/endpoint` implementation; no
 backend source changes. `IrohConnection` owns one persistent companion and an
 anonymous stdin pipe whose EOF shuts it down. Keychain holds the GUI enrollment
-seed; the pipe carries it once. The helper certifies an ephemeral transport key
+seed, read on a dedicated thread
+(never the main actor) while making a client; the pipe carries it once. The helper certifies an ephemeral transport key
 with the stable enrollment identity, following Discobox's existing peer protocol.
 
 The helper exposes HTTP/WebSocket proxying only on an owner-only Unix socket in a

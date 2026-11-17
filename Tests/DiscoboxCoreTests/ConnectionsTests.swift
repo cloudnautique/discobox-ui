@@ -185,3 +185,27 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     #expect(remote.approvalStore.approvals.isEmpty)
     connections.disconnectAll()
 }
+
+@MainActor private final class PendingClient {
+    var resume: CheckedContinuation<Void, Never>?
+}
+/// Making a client can suspend (a Keychain read off the main actor). A
+/// disconnect meanwhile wins: the late client is closed, never connected.
+@MainActor @Test func disconnectWhileMakingAClientDiscardsTheLateClient() async throws {
+    let connections = Connections(polling: false)
+    let client = HostFixture(), pending = PendingClient()
+    let connecting = Task { @MainActor in
+        try await connections.connect(studioProfile, demo: true) {
+            await withCheckedContinuation { pending.resume = $0 }
+            return client
+        }
+    }
+    while pending.resume == nil { await Task.yield() }
+    connections.disconnect(studioProfile.id)
+    pending.resume?.resume()
+    let host = try await connecting.value
+    #expect(!host.connectionState.isConnected)
+    #expect(!host.connectionState.isConnecting)
+    #expect(client.lifetime.closes == 1)
+    #expect(await client.requests.isEmpty)
+}
