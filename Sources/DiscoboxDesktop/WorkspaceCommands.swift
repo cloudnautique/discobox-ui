@@ -141,7 +141,12 @@ import DiscoboxCore
             return consumed ? nil : event
         }
     }
-    func cancelPrefix() { router.cancel(); timeout?.cancel(); hint = nil }
+    /// Called for every event outside the workspace window too, so it only
+    /// writes (and invalidates observers of) the hint when a prefix is pending.
+    func cancelPrefix() {
+        guard router.sequence != nil || hint != nil || timeout != nil else { return }
+        router.cancel(); timeout?.cancel(); timeout = nil; hint = nil
+    }
     private func route(_ event: NSEvent) -> NSEvent? {
         if event.type == .keyUp, swallowed.remove(event.keyCode) != nil { return nil }
         guard let window, event.window === window, window.isKeyWindow,
@@ -159,6 +164,9 @@ import DiscoboxCore
             }
         }
         guard workspace?.connectionState.isConnected == true, !(window.firstResponder is NSTextView) else { return event }
+        // Keys typed while an input method is composing (marked text) belong
+        // to the composition, never to a leader sequence.
+        if let input = window.firstResponder as? NSTextInputClient, input.hasMarkedText() { return event }
         let token = Self.token(event)
         if event.isARepeat, swallowed.contains(event.keyCode) { return nil }
         let result = router.key(token, bindings: bindings)

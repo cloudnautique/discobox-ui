@@ -165,7 +165,7 @@ struct WorkspaceView: View {
                             } label: { Image(systemName: "ellipsis.circle") }
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                                 .disabled(workspace.selection.selectedBox == nil).help("Actions for this box")
-                        }.font(.callout).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
+                        }.font(.callout).foregroundStyle(.primary).fixedSize()
 
                     }.studioPlainBackground()
                 }

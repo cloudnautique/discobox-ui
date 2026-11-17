@@ -96,18 +96,34 @@ struct FilesTable: NSViewRepresentable {
         weak var table: NSTableView?
         init(_ parent: FilesTable) { self.parent = parent }
         func numberOfRows(in tableView: NSTableView) -> Int { parent.entries.count }
+        private static let nameCell = NSUserInterfaceItemIdentifier("files.name")
+        private static let sizeCell = NSUserInterfaceItemIdentifier("files.size")
+        /// Cells are reused through makeView(withIdentifier:); only their
+        /// contents change per row, so scrolling a large folder builds no views.
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard parent.entries.indices.contains(row) else { return nil }
             let file = parent.entries[row]
             if tableColumn?.identifier.rawValue == "size" {
-                let label = NSTextField(labelWithString: file.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
-                label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor; label.alignment = .right
+                let label = tableView.makeView(withIdentifier: Self.sizeCell, owner: nil) as? NSTextField ?? {
+                    let label = NSTextField(labelWithString: "")
+                    label.identifier = Self.sizeCell
+                    label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor; label.alignment = .right
+                    return label
+                }()
+                label.stringValue = file.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
                 return label
             }
+            let cell = tableView.makeView(withIdentifier: Self.nameCell, owner: nil) as? NSTableCellView ?? Self.makeNameCell()
+            cell.imageView?.image = NSImage(systemSymbolName: file.isDirectory ? "folder.fill" : file.canTransfer ? "doc" : "link", accessibilityDescription: nil)
+            cell.imageView?.contentTintColor = file.isDirectory ? NSColor(DiscoboxAppearance.accent) : .secondaryLabelColor
+            cell.textField?.stringValue = file.name
+            return cell
+        }
+        private static func makeNameCell() -> NSTableCellView {
             let cell = NSTableCellView()
-            let image = NSImageView(image: NSImage(systemSymbolName: file.isDirectory ? "folder.fill" : file.canTransfer ? "doc" : "link", accessibilityDescription: nil)!)
-            image.contentTintColor = file.isDirectory ? NSColor(DiscoboxAppearance.accent) : .secondaryLabelColor
-            let label = NSTextField(labelWithString: file.name)
+            cell.identifier = nameCell
+            let image = NSImageView()
+            let label = NSTextField(labelWithString: "")
             label.font = .systemFont(ofSize: 12); label.lineBreakMode = .byTruncatingMiddle
             image.translatesAutoresizingMaskIntoConstraints = false; label.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(image); cell.addSubview(label); cell.imageView = image; cell.textField = label
