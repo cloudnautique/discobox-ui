@@ -65,6 +65,23 @@ inbox now has one window-level owner) still need to run on macOS.
 
 ## Review finding 5: bounded helper processes per inventory refresh
 
+**Status: implemented** (persistent read-only companion; see ARCHITECTURE.md,
+"Components"). Every `read` operation goes to one `--read-server` helper per
+connection generation; writes, shells and transfers keep the one-shot path.
+The Go side (`Companion/internal/readserver`, `bridge.Reader`) and the Swift
+side (`ReadCompanion`, `CompanionClient`) are covered by tests for framing,
+out-of-order replies, cancellation beside a running read, EOF inside a frame,
+oversized/invalid frames, permission refusal, version mismatch, helper death
+and restart, reconnect isolation, and write flags. Bodies travel as raw bytes
+after a JSON header instead of base64 (review P4), for JSON and non-JSON alike,
+so the app decodes each body once.
+
+**Still to do on a Mac:** measure helper launches, refresh latency and CPU
+before/after on a local socket and over Iroh (e.g. count `discobox-desktop-bridge`
+launches during a few minutes of polling with a box selected), and confirm with
+a Desktop build that termination (`CompanionClient.cancelAllRequests`) and
+disconnect leave no read helper running. Inventory batching remains unevaluated.
+
 Confirmed with a qualification: `ConnectionSession.refresh()` reads `.sandboxes`,
 then `BoxSelectionStore.refreshDetails()` reads `.execs` and `.services` concurrently
 when a box is selected. `CompanionClient.perform()` creates a `ProcessRequest` for

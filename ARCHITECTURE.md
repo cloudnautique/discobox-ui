@@ -278,17 +278,38 @@ flowchart LR
 
 The companion is an ordinary unprivileged child process, with no backend launch, database access, or service installation. Explicit repository
 delivery temporarily runs a loopback HTTP proxy restricted to Git routes for the
-newly created box. A request and response
-use JSON through stdin/stdout. Each bounded request gets one process; cancellation
-terminates that child only. This favors a small, inspectable first integration.
-If profiling warrants a persistent companion, retain request IDs and cancellation
-in a versioned protocol rather than adding ad hoc output parsing.
+newly created box. Requests and responses use JSON through private
+stdin/stdout pipes, in two modes:
+
+- **Reads** (every `read` operation in the registry: inventory, terminals,
+  services, approvals, resources, usage, harnesses, …) share one persistent
+  `--read-server` companion per connection generation (`ReadCompanion`), so
+  polling reuses one process and its HTTP connections instead of launching a
+  helper per read. It holds no permission flag and refuses anything but a
+  read. Its framed protocol (`Companion/internal/readserver`, versioned
+  separately as `readServer` in `protocol.json`) carries a transport
+  correlation ID of its own, never `requestID`; replies complete in any order
+  and carry their body as raw bytes after a JSON header. Frames, queued bytes
+  and concurrent reads are bounded; each read keeps its registry deadline (and
+  approval reads their client-side deadline), and cancelling one sends a cancel
+  frame for it alone. Terminals and services stay separate requests, so a slow
+  service list never delays the terminal list. It starts on the first read;
+  stdin EOF is its parent-death signal. If it dies, its waiters fail once with
+  a retryable error and the next read starts a new one. Connect or reconnect
+  (`startGeneration`) and `closeConnection` retire it, failing its pending
+  reads as cancelled, so no reply can cross into a new generation; a closed
+  client falls back to one-shot reads rather than start another helper. A
+  change of transport endpoint (a restarted Iroh proxy) also replaces it.
+- **Everything else** (writes, shells, transfers, tool launches) gets one
+  bounded process with exactly that operation's flag; cancellation terminates
+  that child only. No long-lived helper ever holds `--allow-manage`.
 
 The bounded request surface is one registry
 (`Companion/internal/bridge/operations.go`): each
 operation's handler, permission class (read, manage or shell) and
 deadline. `Companion/protocol.json` publishes the names, classes, error kinds and wire
-version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
+version, plus the read server's framing version and the one class it serves;
+Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
 drift from the companion. Each request field has one meaning (a box's new name
 is `name`, a secret is `secretID`, an audit record is `poolID` + `recordID`, a
 link is `link`, a tool is `toolID`); `requestID` and `kind` name only an
@@ -555,7 +576,9 @@ The helper exposes HTTP/WebSocket proxying only on an owner-only Unix socket in 
 random 0700 directory. Its upstream peer is fixed at startup, it forwards only
 `/projects/` resource routes and `/api/` stream routes, and it does not follow redirects. Each GUI request, terminal attach,
 and port-forward helper retains its existing authorization/cancellation behavior
-and connects to that socket. No public control-plane listener is created.
+and connects to that socket; the persistent read companion is one such client,
+replaced whenever the proxy restarts at a new socket. No public control-plane
+listener is created.
 
 ConnectionStore separates the display address (`endpointLabel`) from the effective
 `transportEndpoint`. Disconnect closes the client transport and resets per-host
