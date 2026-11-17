@@ -527,7 +527,12 @@ struct TerminalSurface: NSViewRepresentable {
             default: return false
             }
         }
-        if event.modifierFlags.contains(.control) { keyDown(with: event); return true }
+        // Claim plain Control chords so they reach the remote program instead
+        // of the menus. Command-Control chords (Enter Full Screen, Emoji &
+        // Symbols) and every chord while read-only continue through AppKit;
+        // one no menu takes still arrives at keyDown afterwards.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.control), !flags.contains(.command), !readOnly { keyDown(with: event); return true }
         return false
     }
     @objc func copy(_ sender: Any?) { binding("copy_to_clipboard") }
