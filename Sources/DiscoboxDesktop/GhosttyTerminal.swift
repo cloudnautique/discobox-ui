@@ -59,26 +59,35 @@ import DiscoboxCore
                 text.withCString { ghostty_surface_complete_clipboard_request(surface, $0, state, false) }
             }
         }
+        // Clipboard confirmations return to Ghostty before asking. The text is
+        // copied now because Ghostty owns it only for this call. The surface
+        // can be freed while the sheet is open, so the answer completes the
+        // request only if the same view still owns that same live surface.
         runtime.confirm_read_clipboard_cb = { userdata, text, state, kind in
             MainActor.assumeIsolated {
                 guard let userdata, let text else { return }
                 let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
                 guard !view.readOnly, let surface = view.surface else { return }
-                if StudioAppKitDialog.confirm(title: kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE ? "Paste into terminal?" : "Allow terminal clipboard access?",
-                    symbol: "doc.on.clipboard", message: "The terminal requested clipboard content. Pasting multiple lines can execute commands.", confirmTitle: "Allow") {
-                    if !view.readOnly { ghostty_surface_complete_clipboard_request(surface, text, state, true) }
+                let content = String(cString: text)
+                StudioAppKitDialog.confirm(title: kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE ? "Paste into terminal?" : "Allow terminal clipboard access?",
+                    symbol: "doc.on.clipboard", message: "The terminal requested clipboard content. Pasting multiple lines can execute commands.", confirmTitle: "Allow",
+                    for: view.window) { [weak view] accepted in
+                    guard accepted, let view, !view.readOnly, view.surface == surface else { return }
+                    content.withCString { ghostty_surface_complete_clipboard_request(surface, $0, state, true) }
                 }
             }
         }
-        runtime.write_clipboard_cb = { _, text, _, confirm in
+        runtime.write_clipboard_cb = { userdata, text, _, confirm in
             MainActor.assumeIsolated {
                 guard let text else { return }
-                if confirm {
-                    guard StudioAppKitDialog.confirm(title: "Allow terminal to replace the clipboard?", symbol: "doc.on.clipboard",
-                        message: "The terminal requested permission to replace your Mac’s clipboard.", confirmTitle: "Allow") else { return }
+                let content = String(cString: text)
+                guard confirm else { GhosttyRuntime.writeClipboard(content); return }
+                let window = userdata.map { Unmanaged<GhosttyTerminalView>.fromOpaque($0).takeUnretainedValue() }?.window
+                StudioAppKitDialog.confirm(title: "Allow terminal to replace the clipboard?", symbol: "doc.on.clipboard",
+                    message: "The terminal requested permission to replace your Mac’s clipboard.", confirmTitle: "Allow",
+                    for: window) { accepted in
+                    if accepted { GhosttyRuntime.writeClipboard(content) }
                 }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(String(cString: text), forType: .string)
             }
         }
         runtime.close_surface_cb = { userdata, _ in
@@ -93,6 +102,10 @@ import DiscoboxCore
         NotificationCenter.default.addObserver(self, selector: #selector(focusChanged), name: NSApplication.didResignActiveNotification, object: nil)
     }
     @objc private func focusChanged() { if let app { ghostty_app_set_focus(app, NSApp.isActive) } }
+    private static func writeClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
 }
 
 struct TerminalIdentity: Hashable {
