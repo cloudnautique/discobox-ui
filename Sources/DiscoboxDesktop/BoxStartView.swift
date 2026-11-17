@@ -46,14 +46,14 @@ struct StoppedBoxBar: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @State private var intent: BoxStartIntent?
-    private var starting: Bool { intent?.working == true || box.runtime.displayState == "starting" }
+    private var starting: Bool { intent?.working == true || box.lifecycle == .starting }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 if starting { ProgressView().controlSize(.small) }
                 else { Image(systemName: "pause.circle").foregroundStyle(.secondary) }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(starting ? "Starting box…" : box.status == "Stopped" ? "Box stopped" : "Box · " + box.status)
+                    Text(starting ? "Starting box…" : box.lifecycle == .stopped ? "Box stopped" : "Box · " + box.status)
                         .font(.system(size: 12, weight: .semibold))
                     Text(starting || box.isRepairing
                          ? (box.preparationStatus?.isEmpty == false ? box.preparationStatus! : "Waiting for Discobox to finish preparing this box.")

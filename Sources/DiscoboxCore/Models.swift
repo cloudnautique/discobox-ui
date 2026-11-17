@@ -39,6 +39,8 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         public let agentStatus: JSONValue?
         public let resources: JSONValue?
         public let upgrade: Upgrade?
+        /// Provisioned; `runtimeState` then says whether it is running.
+        public var isReady: Bool { state == "ready" }
     }
     /// Only decode the stable upgrade fields; image and bundle metadata differ
     /// between server releases and must not prevent boxes from being listed.
@@ -57,9 +59,15 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         let fields = [displayName, id, repository ?? "", harnessName ?? "", config.model ?? "", branch ?? "", meta?.description ?? "", meta?.tags?.values.joined(separator: " ") ?? ""]
         return terms.allSatisfy { term in fields.contains { $0.localizedCaseInsensitiveContains(term) } }
     }
-    public var isRunning: Bool { runtime.displayState.map { $0 == "running" } ?? (runtime.state == "ready" && runtime.runtimeState == "running") }
-    public var isDeleted: Bool { runtime.state == "deleted" || runtime.displayState == "deleted" }
-    public var isArchived: Bool { !isDeleted && (runtime.displayState ?? runtime.state) == "archived" }
+    /// The box's lifecycle as one value: the server's `displayState` when it
+    /// reports one; otherwise `state`, refined by `runtimeState` once ready.
+    public var lifecycle: BoxLifecycle {
+        if let display = runtime.displayState { return BoxLifecycle(display) }
+        return runtime.isReady ? BoxLifecycle(runtime.runtimeState ?? "") : BoxLifecycle(runtime.state)
+    }
+    public var isRunning: Bool { lifecycle == .running }
+    public var isDeleted: Bool { lifecycle == .deleted || BoxLifecycle(runtime.state) == .deleted }
+    public var isArchived: Bool { !isDeleted && lifecycle == .archived }
     public var harnessName: String? { harnessConfig?["name"].string ?? config.model }
     public var repository: String? {
         guard let raw = config.source?["url"].string ?? config.source?["localDirectory"].string ?? meta?.tags?["repository"], !raw.isEmpty else { return nil }
@@ -77,7 +85,33 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
         guard runtime.state == "ready" else { return runtime.state.replacingOccurrences(of: "_", with: " ").capitalized }
         return runtime.runtimeState?.capitalized ?? "Power unknown"
     }
-    public var matchesAttention: Bool { ["failed", "error"].contains(runtime.displayState ?? runtime.state) || runtime.errorMessage?.isEmpty == false }
+    public var matchesAttention: Bool { lifecycle == .failed || lifecycle == .error || runtime.errorMessage?.isEmpty == false }
+}
+
+/// Box lifecycle states the client acts on. Unknown or newer server values
+/// are preserved, never coerced into a known state.
+public enum BoxLifecycle: Equatable, Sendable {
+    case running, stopped, starting, stopping, pending, archived, archiving, deleted, deleting, repairing, failed, error
+    case unknown(String)
+    public init(_ raw: String) {
+        switch raw.lowercased() {
+        case "running": self = .running
+        case "stopped": self = .stopped
+        case "starting": self = .starting
+        case "stopping": self = .stopping
+        case "pending": self = .pending
+        case "archived": self = .archived
+        case "archiving": self = .archiving
+        case "deleted": self = .deleted
+        case "deleting": self = .deleting
+        case "repairing": self = .repairing
+        case "failed": self = .failed
+        case "error": self = .error
+        default: self = .unknown(raw)
+        }
+    }
+    /// A transition in progress, during which lifecycle actions are refused.
+    public var isTransitioning: Bool { [.starting, .stopping, .archiving, .deleting, .repairing].contains(self) }
 }
 
 public struct Exec: Codable, Identifiable, Sendable, Equatable {

@@ -71,3 +71,20 @@ import Testing
     #expect(detached)
     #expect(workspace.inventory.sandboxes.first { $0.id == "demo-ui" }?.isRunning == false)
 }
+
+@Test func lifecycleReadsDisplayStateThenStateThenRuntimeState() throws {
+    func box(_ runtime: [String: String]) throws -> Sandbox {
+        try JSONDecoder().decode(Sandbox.self, from: JSONEncoder().encode(JSONValue.object([
+            "id": .string("b"), "projectId": .string("p"), "displayName": .string("Box"), "config": .object([:]),
+            "runtime": .object(runtime.mapValues { .string($0) })])))
+    }
+    #expect(try box(["state": "ready", "runtimeState": "running"]).lifecycle == .running)
+    #expect(try box(["state": "ready", "runtimeState": "stopped", "displayState": "starting"]).lifecycle == .starting)
+    #expect(try box(["state": "archived"]).lifecycle == .archived)
+    #expect(try box(["state": "ready"]).lifecycle == .unknown(""))
+    // Newer server states survive without being coerced into a known one.
+    let future = try box(["state": "ready", "displayState": "hibernating"])
+    #expect(future.lifecycle == .unknown("hibernating") && !future.isRunning && !future.lifecycle.isTransitioning)
+    #expect(try box(["state": "deleted", "displayState": "archived"]).isDeleted)
+    #expect(try box(["state": "ready", "displayState": "Stopped"]).lifecycle == .stopped)
+}

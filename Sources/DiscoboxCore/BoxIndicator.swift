@@ -14,7 +14,7 @@ public struct BoxIndicator: Sendable, Equatable {
         else if box.needsRepair || activity.state == .failed { state = .error }
         else if activity.needsYou || box.runningWarning != nil || box.isRepairing { state = .attention }
         else if box.isRunning { state = .on }
-        else if box.runtime.runtimeState == "stopped" || box.runtime.displayState == "stopped" { state = .off }
+        else if box.lifecycle == .stopped || box.runtime.runtimeState.map(BoxLifecycle.init) == .stopped { state = .off }
         else { state = .unavailable }
         isWorking = state == .on && activity.isWorking
     }
