@@ -5,55 +5,28 @@ struct ScopedCredentialApprovalView: View {
     let item: ApprovalItem
     var onClose: (() -> Void)? = nil
     @Environment(ConnectionSession.self) private var workspace
-    @Environment(Connections.self) private var connections: Connections?
+    var body: some View { ScopedCredentialApprovalForm(model: BindingApprovalReview(item, in: workspace), onClose: onClose) }
+}
+
+/// Presentation only: drafts, previews and the decision lifecycle live in the model.
+private struct ScopedCredentialApprovalForm: View {
+    @State private var model: BindingApprovalReview
+    let onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
-    @State private var connection: UUID?
-    @State private var context: JSONValue = .null
-    @State private var secretID = ""
-    @State private var use = CredentialPartDecision()
-    @State private var delegate = CredentialPartDecision()
-    @State private var busy = false
-    @State private var operationStatus = ""
-    @State private var requiresReload = false
-    @State private var loading = true
-    @State private var closed = false
-    @State private var error: String?
-    @State private var receipt: JSONValue?
-    @State private var creating = false
-    @State private var newName = ""
-    @State private var newValue = ""
-    @State private var reviewRequest = UUID()
-    @State private var contextDraft = ""
-    private var request: JSONValue { item.request }
-    private var secret: JSONValue { context["secrets"].array.first { $0["id"].string == secretID } ?? .null }
-    private var payload: JSONValue? { try? CredentialDecision.payload(request: request, secret: secret, held: context["held"].array, use: use, delegate: delegate) }
-    private var validation: String? {
-        if creating { return nil }
-        if secretID.isEmpty { return "Choose an existing credential or add a new one." }
-        do { _ = try CredentialDecision.payload(request: request, secret: secret, held: context["held"].array, use: use, delegate: delegate); return nil }
-        catch { return error.localizedDescription }
+    init(model: BindingApprovalReview, onClose: (() -> Void)?) {
+        _model = State(initialValue: model); self.onClose = onClose
     }
-    private var resolved: Bool { connection != nil && (workspace.connectionState.connectionID != connection || !workspace.approvalStore.approvals.contains(item)) }
-    private var draftKey: String { (payload?.pretty ?? "") + secretID + "|" + String(creating) }
-    private var conflicts: [JSONValue] { context["conflicts"].array }
-    private var contextMatchesDraft: Bool { contextDraft == draftKey }
-    private var approvesUse: Bool { request["use"] != .null && use.decision == "approve" }
-    private var approvesSharing: Bool { request["delegate"] != .null && delegate.decision == "approve" }
-    private var hasApproval: Bool { approvesUse || approvesSharing }
-    private var applyTitle: String {
-        if approvesUse && approvesSharing { return "Approve use & sharing" }
-        if approvesSharing { return "Approve sharing" }
-        return request["delegate"] != .null && approvesUse ? "Approve use only" : "Approve"
-    }
-    private var footerSummary: String {
-        if creating { return "Save the new credential before approving. Deny and Later remain available." }
-        if !hasApproval { return "Use Deny to reject the entire request. Existing access stays unchanged." }
-        if approvesSharing {
-            return approvesUse ? "Approve grants the requested use and sharing with child boxes. Credential limits still apply." : "Approve grants sharing with child boxes. It does not approve use in this box."
-        }
-        return request["delegate"] != .null ? "Approve grants use only. The sharing part is denied; existing sharing grants stay unchanged." : "Approve grants only this request’s access, within the credential’s limits. Deny grants no new access."
-    }
+    private var item: ApprovalItem { model.item }
+    private var request: JSONValue { model.request }
+    private var context: JSONValue { model.context }
+    private var secret: JSONValue { model.secret }
+    private var lifecycle: ApprovalReviewLifecycle { model.lifecycle }
+    private var busy: Bool { lifecycle.isBusy }
+    private var loading: Bool { lifecycle.phase == .loading }
+    private var conflicts: [JSONValue] { model.conflicts }
     var body: some View {
+        @Bindable var form = model
+        let receipt = lifecycle.receipt, resolved = lifecycle.isResolved
         StudioConfirmation(title: receipt != nil ? "Decision recorded" : resolved ? "Request no longer pending" : item.reviewTitle, symbol: "key", width: 720) {
             if let receipt {
                 Text("Discobox recorded your decision. These are the server’s granted scopes and lifetime.").foregroundStyle(.secondary)
@@ -79,13 +52,13 @@ struct ScopedCredentialApprovalView: View {
                             DisclosureGroup("More options") {
                                 if request["use"] != .null && request["delegate"] != .null {
                                     Text("Optionally approve only part of this request. The footer states exactly what will be granted.").font(.caption).foregroundStyle(.secondary)
-                                    Toggle("Include use in this box", isOn: Binding(get: { approvesUse }, set: { use.decision = $0 ? "approve" : "deny" }))
-                                    Toggle("Include sharing with child boxes", isOn: Binding(get: { approvesSharing }, set: { delegate.decision = $0 ? "approve" : "deny" }))
+                                    Toggle("Include use in this box", isOn: Binding(get: { model.approvesUse }, set: { model.use.decision = $0 ? "approve" : "deny" }))
+                                    Toggle("Include sharing with child boxes", isOn: Binding(get: { model.approvesSharing }, set: { model.delegate.decision = $0 ? "approve" : "deny" }))
                                 }
-                                if request["use"] != .null { part("Use in this box", draft: $use, isUse: true) }
-                                if request["delegate"] != .null { part("Share with child boxes", draft: $delegate, isUse: false) }
+                                if request["use"] != .null { part("Use in this box", draft: $form.use, isUse: true) }
+                                if request["delegate"] != .null { part("Share with child boxes", draft: $form.delegate, isUse: false) }
                                 effectSummary
-                                if let payload { DisclosureGroup("Exact approval to send") { Text(payload.pretty).font(.caption.monospaced()).textSelection(.enabled) } }
+                                if let payload = model.payload { DisclosureGroup("Exact approval to send") { Text(payload.pretty).font(.caption.monospaced()).textSelection(.enabled) } }
                             }.font(.caption)
                             DisclosureGroup("Full request and constraints") { Text(request.pretty).font(.caption.monospaced()).textSelection(.enabled) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -94,58 +67,48 @@ struct ScopedCredentialApprovalView: View {
                         CredentialBindingConflictNotice(conflicts: conflicts) {
                             // This edits only the draft. A fresh context and a
                             // new explicit review are required before approval.
-                            use.mode = "add"
-                        }.disabled(busy || loading || payload == nil)
+                            model.addBesideExistingAccess()
+                        }.disabled(busy || loading || model.payload == nil)
                     }
                     if loading { Label("Checking current limits and existing access…", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary) }
-                    if !busy, !loading, let validation { Text(validation).font(.caption).foregroundStyle(.secondary) }
-                    if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+                    if !busy, !loading, let validation = model.validation { Text(validation).font(.caption).foregroundStyle(.secondary) }
+                    if let error = lifecycle.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                 }
             }
         } footer: {
             VStack(alignment: .leading, spacing: 12) {
-                if receipt == nil && !resolved { Text(footerSummary).font(.caption).foregroundStyle(.secondary) }
-                if busy { Text(operationStatus + " You can close this window; check the request before retrying.").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("approval.progress") }
-                if requiresReload { Text("The last action could not be confirmed. Reload before making another decision.").font(.caption).foregroundStyle(.orange) }
+                if receipt == nil && !resolved { Text(model.footerSummary).font(.caption).foregroundStyle(.secondary) }
+                if busy { Text(lifecycle.status + " You can close this window; check the request before retrying.").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("approval.progress") }
+                if model.requiresReload { Text("The last action could not be confirmed. Reload before making another decision.").font(.caption).foregroundStyle(.orange) }
                 HStack {
                     Button(receipt != nil || resolved || busy ? "Close" : "Later", action: close).keyboardShortcut(.cancelAction)
                     Spacer()
                     if busy { ProgressView().controlSize(.small) }
                     if receipt == nil && !resolved {
-                        Button("Reload") { Task { await reload() } }.disabled(busy || loading)
-                        Button("Deny", role: .destructive) { submit(deny: true) }.disabled(busy || connection == nil || requiresReload).accessibilityIdentifier("approval.deny")
-                        Button(applyTitle) { submit(deny: false) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                            .disabled(busy || loading || requiresReload || !contextMatchesDraft || creating || !hasApproval || payload == nil || !conflicts.isEmpty || context["fingerprint"].string.isEmpty).accessibilityIdentifier("approval.apply")
+                        Button("Reload") { Task { await model.reload(selectDefault: true) } }.disabled(busy || loading)
+                        Button("Deny", role: .destructive) { _ = model.submit(deny: true) }.disabled(!lifecycle.canDecide).accessibilityIdentifier("approval.deny")
+                        Button(model.applyTitle) { _ = model.submit(deny: false) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                            .disabled(!model.canApprove).accessibilityIdentifier("approval.apply")
                     } else { Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
                 }
             }
-        }.task {
-            connection = workspace.connectionState.connectionID
-            // These are preview drafts. Only the footer's explicit Approve
-            // action sends them; opening the form never grants access.
-            if request["use"] != .null { use.decision = "approve" }
-            if request["delegate"] != .null { delegate.decision = "approve" }
-            use.mode = request["use"]["add"] == .bool(true) ? "add" : "replace"
-            newName = request["name"].string
-            await reload()
-        }.task(id: draftKey + "|" + String(busy)) {
-            guard connection != nil, !busy, !creating, !requiresReload, receipt == nil, !resolved, payload != nil else { return }
-            await reload(selectDefault: false)
-        }.onChange(of: use.duration) { _, value in if use.decision == "approve" { delegate.duration = value } }
-            .onChange(of: use.decision) { _, value in if value == "approve" { delegate.duration = use.duration } }
-            .onChange(of: creating) { if !creating { newValue = "" } }
-            .onDisappear { closed = true; newValue = "" }
+        }.task { await model.load() }
+            .task(id: model.previewKey) { await model.refreshPreview() }
+            .onChange(of: model.dismissesAfterReceipt) { if model.dismissesAfterReceipt { close() } }
+            .onDisappear { model.close() }
     }
     private var credentialChoice: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        @Bindable var form = model
+        let pinned = model.pinned
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Credential").font(.headline)
-            ApprovalCredentialPicker(secretID: $secretID, creating: $creating, secrets: context["secrets"].array, canCreate: !pinned)
+            ApprovalCredentialPicker(secretID: $form.secretID, creating: $form.creating, secrets: context["secrets"].array, canCreate: !pinned)
                 .disabled(pinned || busy || loading)
             if pinned { Text("This box’s existing credential determines the choice.").font(.caption).foregroundStyle(.secondary) }
-            if creating {
-                InlineTokenCredentialForm(name: $newName, value: $newValue,
-                    canSave: !busy && !loading && !requiresReload && !newName.isEmpty && !newValue.isEmpty,
-                    save: createCredential, cancel: { creating = false; newValue = "" }) {
+            if model.creating {
+                InlineTokenCredentialForm(name: $form.newName, value: $form.newValue,
+                    canSave: model.canStoreCredential,
+                    save: { _ = model.storeCredential() }, cancel: { model.creating = false }) {
                         Text("Destination: " + item.destinationSummary).font(.caption).foregroundStyle(.secondary)
                         DisclosureGroup("New credential restrictions") {
                             RouteReview(routes: request["use"]["routes"].array + request["delegate"]["routes"].array, title: "Allowed routes")
@@ -169,10 +132,6 @@ struct ScopedCredentialApprovalView: View {
             }
         }
     }
-    private var pinned: Bool {
-        let held = CredentialDecision.holder(request: request, held: context["held"].array)
-        return held["from"].string == "sandbox" && held["fromId"] == request["sandboxId"]
-    }
     private func part(_ title: String, draft: Binding<CredentialPartDecision>, isUse: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.headline)
@@ -185,18 +144,18 @@ struct ScopedCredentialApprovalView: View {
                     .init(id: ApprovalDuration.automatic, title: "Automatic · within credential limit"),
                     .init(id: "900", title: "15 minutes"), .init(id: "1800", title: "30 minutes"),
                     .init(id: "3600", title: "1 hour"), .init(id: "28800", title: "8 hours"), .init(id: "0", title: "No expiry")
-                ]).disabled(!isUse && use.decision == "approve")
-                if !isUse && use.decision == "approve" { Text("Uses the same credential and lifetime as this answer’s use grant.").font(.caption).foregroundStyle(.secondary) }
+                ]).disabled(!isUse && model.use.decision == "approve")
+                if !isUse && model.use.decision == "approve" { Text("Uses the same credential and lifetime as this answer’s use grant.").font(.caption).foregroundStyle(.secondary) }
                 if isUse {
-                    if use.delivery != "sentinel" { Text("The box receives the actual credential value. Route filtering cannot protect a value it already holds.").font(.caption).foregroundStyle(.orange) }
+                    if model.use.delivery != "sentinel" { Text("The box receives the actual credential value. Route filtering cannot protect a value it already holds.").font(.caption).foregroundStyle(.orange) }
                     DisclosureGroup("Advanced delivery and existing access") {
                         StudioMenuField(title: "Existing access", selection: draft.mode, options: [
                             .init(id: "replace", title: "Replace"), .init(id: "add", title: "Add beside existing grants")
                         ])
                         StudioMenuField(title: "Delivery", selection: draft.delivery, options: [
                             .init(id: "sentinel", title: "Protected placeholder"),
-                            .init(id: "env", title: "Raw value in variable", enabled: secret["allowRaw"] == .bool(true) && use.mode != "add"),
-                            .init(id: "file", title: "Path to raw value file", enabled: secret["allowRaw"] == .bool(true) && use.mode != "add")
+                            .init(id: "env", title: "Raw value in variable", enabled: secret["allowRaw"] == .bool(true) && model.use.mode != "add"),
+                            .init(id: "file", title: "Path to raw value file", enabled: secret["allowRaw"] == .bool(true) && model.use.mode != "add")
                         ])
                     }.font(.caption)
                 }
@@ -211,8 +170,8 @@ struct ScopedCredentialApprovalView: View {
     private var effectSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Effect on existing access").font(.headline)
-            if use.decision == "approve" {
-                Text(use.mode == "add" ? "Adds a separate use grant. Existing grants stay as they are." : "Replaces this box’s use of this credential, including additions. Inherited grants can be shadowed for this variable while the replacement lasts.")
+            if model.use.decision == "approve" {
+                Text(model.use.mode == "add" ? "Adds a separate use grant. Existing grants stay as they are." : "Replaces this box’s use of this credential, including additions. Inherited grants can be shadowed for this variable while the replacement lasts.")
             }
             DisclosureGroup("Binding details") {
                 ForEach(["usePlan", "delegatePlan"], id: \.self) { key in
@@ -263,77 +222,7 @@ struct ScopedCredentialApprovalView: View {
             DisclosureGroup("Full server receipt") { Text(result.pretty).font(.caption.monospaced()).textSelection(.enabled) }
         }
     }
-    private func reload(selectDefault: Bool = true) async {
-        guard !closed, !resolved, let connection else { return }
-        let token = UUID(); reviewRequest = token
-        let requestedDraft = draftKey
-        loading = true; error = nil
-        defer { if token == reviewRequest { loading = false } }
-        do {
-            let result = try await workspace.approvalStore.context(item: item, payload: payload)
-            guard !closed, workspace.connectionState.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
-            guard result["request"] == request else { throw DiscoboxError("The request changed. Reopen it from the current inbox.") }
-            context = result
-            contextDraft = requestedDraft
-            requiresReload = false
-            if selectDefault && secretID.isEmpty {
-                let holder = CredentialDecision.holder(request: request, held: result["held"].array)
-                secretID = holder["secretId"].string
-                if secretID.isEmpty {
-                    let matching = result["secrets"].array.filter {
-                        !request["wellKnownId"].string.isEmpty && $0["wellKnownId"] == request["wellKnownId"]
-                    }
-                    if matching.count == 1 { secretID = matching[0]["id"].string }
-                }
-            }
-        } catch { if !closed, token == reviewRequest, !Task.isCancelled { self.error = error.localizedDescription; contextDraft = "" } }
-    }
-    private func createCredential() {
-        guard !busy, !loading, !requiresReload, creating, let connection else { return }
-        busy = true; error = nil; operationStatus = "Checking the request…"
-        let body: JSONValue
-        do { body = try TokenCredentialPayload.current(name: newName, value: newValue, routes: request["use"]["routes"].array + request["delegate"]["routes"].array) }
-        catch { busy = false; self.error = error.localizedDescription; return }
-        Task {
-            defer { busy = false; newValue = "" }
-            do {
-                try await workspace.approvalStore.validateApproval(item, connection: connection)
-                guard !closed else { return }
-                operationStatus = "Storing the credential on the requesting computer…"
-                let result = try await workspace.credentials.create(payload: body)
-                guard !closed, workspace.connectionState.connectionID == connection else { return }
-                guard !result["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
-                secretID = result["id"].string; creating = false
-                await reload(selectDefault: false)
-            } catch { if !closed { self.error = error.localizedDescription; requiresReload = true } }
-        }
-    }
-    private func submit(deny: Bool) {
-        guard !busy, !requiresReload, !resolved, let connection else { return }
-        let decision = payload, fingerprint = context["fingerprint"]
-        guard deny || (!loading && contextMatchesDraft && !creating && hasApproval && decision != nil && conflicts.isEmpty && !fingerprint.string.isEmpty) else { return }
-        busy = true; error = nil; operationStatus = "Checking the request on the requesting computer…"
-        Task {
-            defer { busy = false }
-            do {
-                let proceed = { () -> Bool in
-                    guard !closed else { return false }
-                    operationStatus = "Waiting for the requesting computer to record your decision…"
-                    return true
-                }
-                if deny {
-                    try await workspace.approvalStore.answer(item, .deny, connection: connection, proceed: proceed, onAccepted: { _ in close() })
-                } else if let decision {
-                    try await workspace.approvalStore.answer(item, .reviewedCredential(approval: decision, contextFingerprint: fingerprint), connection: connection, proceed: proceed, onAccepted: { result in
-                        busy = false
-                        guard !closed else { return }
-                        receipt = result
-                    })
-                }
-            } catch { if !closed { self.error = error.localizedDescription; requiresReload = true } }
-        }
-    }
-    private func close() { guard !closed else { return }; closed = true; newValue = ""; if let onClose { onClose() } else { dismiss() } }
+    private func close() { guard !lifecycle.closed else { return }; model.close(); if let onClose { onClose() } else { dismiss() } }
 }
 
 struct RouteReview: View {

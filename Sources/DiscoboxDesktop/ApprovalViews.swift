@@ -125,42 +125,33 @@ struct LegacyApprovalSheet: View {
     var initialDuration: String? = nil
     var onClose: (() -> Void)? = nil
     @Environment(ConnectionSession.self) private var workspace
-    @Environment(\.dismiss) private var dismiss
-    @State private var connection: UUID?
-    @State private var secrets: [JSONValue] = []
-    @State private var secret = ""
-    @State private var duration = ApprovalDuration.automatic
-    @State private var value = ""
-    @State private var newName = ""
-    @State private var creating = false
-    @State private var host = ""
-    @State private var pin = ""
-    @State private var reviewed = false
-    @State private var loading = true
-    @State private var busy = false
-    @State private var closed = false
-    @State private var error: String?
-    @State private var receipt: JSONValue?
-    @State private var receiptAction = ""
-    private var request: JSONValue { item.request }
-    private var refresh: Bool { request["reason"].string == "refresh" }
-    private var resolved: Bool { connection != nil && (workspace.connectionState.connectionID != connection || !workspace.approvalStore.approvals.contains(item)) }
-    private var certificates: [JSONValue] { request["observedChain"].array + (request["suppliedCA"] == .null ? [] : [request["suppliedCA"]]) }
-    private var selectedSecret: JSONValue { ApprovalDuration.selectedSecret(id: secret, request: request, secrets: secrets) }
-    private var maximum: Double? { item.kind == "credential" ? selectedSecret["maxGrantTTLSeconds"].number : nil }
-    private var validation: String? {
-        if refresh { return value.isEmpty ? "Enter a replacement token." : nil }
-        do { _ = try ApprovalDuration.fields(duration, kind: item.kind, maximum: maximum); return nil }
-        catch { return error.localizedDescription }
-    }
-    private var revision: String { [secret, duration, pin, value, request.pretty, selectedSecret.pretty].joined(separator: "|") }
     var body: some View {
+        LegacyApprovalForm(model: LegacyApprovalReview(item, in: workspace, initialDuration: initialDuration), onClose: onClose)
+    }
+}
+
+/// Presentation only: the draft and request lifecycle live in the model.
+private struct LegacyApprovalForm: View {
+    @State private var model: LegacyApprovalReview
+    let onClose: (() -> Void)?
+    @Environment(\.dismiss) private var dismiss
+    init(model: LegacyApprovalReview, onClose: (() -> Void)?) {
+        _model = State(initialValue: model); self.onClose = onClose
+    }
+    private var item: ApprovalItem { model.item }
+    private var request: JSONValue { model.request }
+    private var lifecycle: ApprovalReviewLifecycle { model.lifecycle }
+    private var busy: Bool { lifecycle.isBusy }
+    private var loading: Bool { lifecycle.phase == .loading }
+    var body: some View {
+        @Bindable var form = model
+        let receipt = lifecycle.receipt, resolved = lifecycle.isResolved
         StudioConfirmation(title: receipt != nil ? "Decision recorded" : resolved ? "Request no longer pending" : item.reviewTitle,
                            symbol: item.kind == "trust" ? "checkmark.shield" : "key", width: 680) {
             if let receipt {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label(receiptAction == "deny" ? "Request denied" : refresh ? "Credential updated" : "Access approved", systemImage: "checkmark.circle").font(.headline)
-                    Text(receiptAction == "deny" ? "No new access was granted. Existing access was left unchanged." : "Discobox recorded this decision on the requesting computer.").foregroundStyle(.secondary)
+                    Label(lifecycle.receiptAction == "deny" ? "Request denied" : model.isRefresh ? "Credential updated" : "Access approved", systemImage: "checkmark.circle").font(.headline)
+                    Text(lifecycle.receiptAction == "deny" ? "No new access was granted. Existing access was left unchanged." : "Discobox recorded this decision on the requesting computer.").foregroundStyle(.secondary)
                     DisclosureGroup("Server receipt") { ScrollView { Text(receipt.pretty).font(.caption.monospaced()).textSelection(.enabled) }.frame(maxHeight: 250) }
                 }
             } else if resolved {
@@ -171,11 +162,11 @@ struct LegacyApprovalSheet: View {
                         ApprovalRequestIdentity(item: item)
                         Text(item.kind == "trust" ? "Certificate trust applies to the destination above." : "This computer uses the legacy credential approval API. Your choice applies to this request; shared credential restrictions stay unchanged.")
                             .font(.caption).foregroundStyle(.secondary)
-                        if refresh {
+                        if model.isRefresh {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Replace shared token value").font(.headline)
                                 Text("Other boxes using this project credential will also use the replacement. Scopes and grant lifetimes stay unchanged.").font(.callout).foregroundStyle(.secondary)
-                                SecureField("New token value", text: $value)
+                                SecureField("New token value", text: $form.value)
                             }.padding(12).studioCard()
                         } else {
                             if item.kind == "trust" { certificateChoice } else { credentialChoice }
@@ -193,17 +184,17 @@ struct LegacyApprovalSheet: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(height: 420).disabled(busy)
                 if loading { ProgressView("Loading credential metadata…").controlSize(.small) }
-                if let validation { Text(validation).font(.caption).foregroundStyle(.secondary) }
-                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if let validation = model.validation { Text(validation).font(.caption).foregroundStyle(.secondary) }
+                if let error = lifecycle.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
             }
         } footer: {
             VStack(alignment: .leading, spacing: 12) {
                 if receipt == nil && !resolved && item.kind == "trust" {
-                    Toggle("I reviewed the access, destination and duration", isOn: $reviewed).toggleStyle(.checkbox).font(.callout)
+                    Toggle("I reviewed the access, destination and duration", isOn: $form.reviewed).toggleStyle(.checkbox).font(.callout)
                         .disabled(loading || busy).accessibilityIdentifier("approval.reviewed")
                 }
                 if receipt == nil && !resolved && item.kind == "credential" {
-                    Text(creating ? "Save the credential before approving. Deny and Later remain available." : "Approve grants this request’s access within the credential’s limits. Deny grants no new access.")
+                    Text(model.creating ? "Save the credential before approving. Deny and Later remain available." : "Approve grants this request’s access within the credential’s limits. Deny grants no new access.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
@@ -211,44 +202,31 @@ struct LegacyApprovalSheet: View {
                     Spacer()
                     if busy { ProgressView().controlSize(.small) }
                     if receipt == nil && !resolved {
-                        Button("Deny", role: .destructive) { submit(deny: true) }.disabled(busy || connection == nil)
-                        Button(refresh ? "Update credential" : "Approve") { submit(deny: false) }
-                            .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                            .disabled(loading || busy || creating || item.kind == "trust" && !reviewed || validation != nil || item.kind == "trust" && pin.isEmpty)
-                            .accessibilityIdentifier("approval.apply")
+                        if lifecycle.phase == .uncertain {
+                            Button("Check again") { Task { await model.recheck() } }
+                        } else {
+                            Button("Deny", role: .destructive) { _ = model.submit(deny: true) }.disabled(!lifecycle.canDecide)
+                            Button(model.isRefresh ? "Update credential" : "Approve") { _ = model.submit(deny: false) }
+                                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                                .disabled(!model.canApprove)
+                                .accessibilityIdentifier("approval.apply")
+                        }
                     } else { Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
                 }
             }
-        }.task {
-            connection = workspace.connectionState.connectionID
-            let requested = request["grantTTLSeconds"].number ?? 3600
-            let trustDuration = requested.isFinite && requested > 0 && requested < Double(Int.max) ? String(Int(requested)) : "3600"
-            duration = initialDuration ?? (item.kind == "trust" ? trustDuration : ApprovalDuration.automatic)
-            newName = request["name"].string
-            host = request["hosts"].array.count == 1 ? request["hosts"].array[0].string : ""
-            defer { loading = false }
-            do {
-                if item.kind == "credential" {
-                    let loaded = try await workspace.approvalStore.approvalSecrets()
-                    guard !closed, !Task.isCancelled, connection == workspace.connectionState.connectionID else { return }
-                    secrets = loaded
-                    let configured = ApprovalDuration.selectedSecret(id: secret, request: request, secrets: loaded)
-                    if secret.isEmpty, !configured["id"].string.isEmpty { secret = configured["id"].string }
-                }
-            } catch { if !closed, !Task.isCancelled { self.error = error.localizedDescription } }
-        }.onChange(of: revision) { reviewed = false }
-            .onChange(of: creating) { if !creating { value = "" } }
-            .onDisappear { closed = true; value = "" }
+        }.task { await model.load() }
+            .onDisappear { model.close() }
     }
     private var credentialChoice: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        @Bindable var form = model
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Credential").font(.headline)
-            ApprovalCredentialPicker(secretID: $secret, creating: $creating, secrets: secrets, placeholder: "Use the server-configured credential")
+            ApprovalCredentialPicker(secretID: $form.secret, creating: $form.creating, secrets: model.secrets, placeholder: "Use the server-configured credential")
                 .disabled(busy || loading)
-            if creating {
-                InlineTokenCredentialForm(name: $newName, value: $value, destinationHost: $host,
-                    canSave: !busy && !loading && !newName.isEmpty && !value.isEmpty && !host.isEmpty,
-                    save: storeCredential, cancel: { creating = false; value = "" }) {
+            if model.creating {
+                InlineTokenCredentialForm(name: $form.newName, value: $form.value, destinationHost: $form.host,
+                    canSave: model.canStoreCredential,
+                    save: { _ = model.storeCredential() }, cancel: { model.creating = false }) {
                         Text("Maximum grant lifetime: one hour. Edit shared limits separately in Settings → Credentials.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -258,19 +236,21 @@ struct LegacyApprovalSheet: View {
         }.padding(12).studioCard()
     }
     private var certificateChoice: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        @Bindable var form = model
+        let certificates = model.certificates
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Certificate to trust").font(.headline)
-            StudioMenuField(title: "Certificate", selection: $pin, options:
+            StudioMenuField(title: "Certificate", selection: $form.pin, options:
                 [.init(id: "", title: "Choose a certificate…")] + certificates.enumerated().map { .init(id: String($0.offset), title: $0.element["subject"].string) })
-            if let index = Int(pin), certificates.indices.contains(index) {
+            if let index = Int(model.pin), certificates.indices.contains(index) {
                 Text(certificates[index].pretty).font(.caption.monospaced()).textSelection(.enabled)
                 if certificates[index]["isCA"] == .bool(true) { Text("Trusts this certificate authority for the destination. Review its fingerprint carefully.").font(.caption).foregroundStyle(.orange) }
             }
         }.padding(12).studioCard()
     }
     private var durationPreset: Binding<String> {
-        Binding(get: { [ApprovalDuration.automatic, "900", "1800", "3600", "28800", "86400", "0"].contains(duration) ? duration : "custom" },
-                set: { duration = $0 == "custom" ? "" : $0 })
+        Binding(get: { [ApprovalDuration.automatic, "900", "1800", "3600", "28800", "86400", "0"].contains(model.duration) ? model.duration : "custom" },
+                set: { model.duration = $0 == "custom" ? "" : $0 })
     }
     private var lifetimeOptions: [StudioMenuPicker.Option] {
         var options: [StudioMenuPicker.Option] = [
@@ -285,56 +265,14 @@ struct LegacyApprovalSheet: View {
         return options
     }
     private var durationChoice: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        @Bindable var form = model
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Duration").font(.headline)
             StudioMenuField(title: "Lifetime", selection: durationPreset, options: lifetimeOptions)
-            if durationPreset.wrappedValue == "custom" { TextField("Duration in seconds", text: $duration) }
-            if let maximum { Text(maximum == 0 ? "Credential permits grants without expiry." : "Credential limit: " + ApprovalDuration.label(maximum)).font(.caption).foregroundStyle(.secondary) }
+            if durationPreset.wrappedValue == "custom" { TextField("Duration in seconds", text: $form.duration) }
+            if let maximum = model.maximum { Text(maximum == 0 ? "Credential permits grants without expiry." : "Credential limit: " + ApprovalDuration.label(maximum)).font(.caption).foregroundStyle(.secondary) }
             Text("Automatic uses the server’s bounded duration. A custom lifetime never raises the credential’s limit.").font(.caption).foregroundStyle(.secondary)
         }.padding(12).studioCard()
     }
-    private func storeCredential() {
-        guard !busy, !loading, creating, let connection else { return }
-        let body: JSONValue
-        do { body = try TokenCredentialPayload.legacy(name: newName, value: value, host: host, maximum: 3600) }
-        catch { self.error = error.localizedDescription; return }
-        busy = true; error = nil
-        Task {
-            defer { busy = false; value = "" }
-            do {
-                try await workspace.approvalStore.validateApproval(item, connection: connection)
-                let made = try await workspace.credentials.create(payload: body)
-                guard !closed, workspace.connectionState.connectionID == connection else { return }
-                guard !made["id"].string.isEmpty else { throw DiscoboxError("Credential may have been stored. Check Settings → Credentials before retrying.") }
-                secret = made["id"].string
-                creating = false; value = ""
-                secrets = try await workspace.approvalStore.approvalSecrets()
-                reviewed = false
-            } catch { if !closed { self.error = error.localizedDescription } }
-        }
-    }
-    private func submit(deny: Bool) {
-        guard !busy, !resolved, let connection, deny || !creating && (item.kind != "trust" || reviewed) && validation == nil else { return }
-        let answer: ApprovalAnswer
-        if deny { answer = .deny }
-        else if refresh { answer = .refresh(token: value) }
-        else if item.kind == "credential" { answer = .credential(request: request, secretID: secret, duration: duration, maximum: maximum) }
-        else if let index = Int(pin), certificates.indices.contains(index) { answer = .trust(certificate: certificates[index], duration: duration) }
-        else { self.error = "Choose a certificate to trust."; return }
-        do { _ = try answer.payload() } catch { self.error = error.localizedDescription; return }
-        busy = true; error = nil
-        Task {
-            defer { busy = false; value = "" }
-            do {
-                try await workspace.approvalStore.answer(item, answer, connection: connection, onAccepted: { result in
-                    guard !closed else { return }
-                    receipt = result; receiptAction = answer.action
-                })
-            } catch {
-                if !closed { self.error = error.localizedDescription; reviewed = false }
-                else if workspace.connectionState.connectionID == connection { workspace.selection.commandError = error.localizedDescription }
-            }
-        }
-    }
-    private func close() { closed = true; value = ""; if let onClose { onClose() } else { dismiss() } }
+    private func close() { model.close(); if let onClose { onClose() } else { dismiss() } }
 }

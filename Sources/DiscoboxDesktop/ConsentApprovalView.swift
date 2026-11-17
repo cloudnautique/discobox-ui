@@ -25,29 +25,35 @@ struct ConsentApprovalView: View {
     let item: ApprovalItem
     var onClose: (() -> Void)? = nil
     @Environment(ConnectionSession.self) private var workspace
+    var body: some View { ConsentApprovalForm(model: ConsentApprovalReview(item, in: workspace), onClose: onClose) }
+}
+
+/// Presentation only: the token, consent and request lifecycle live in the model.
+private struct ConsentApprovalForm: View {
+    @State private var model: ConsentApprovalReview
+    let onClose: (() -> Void)?
+    @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(\.dismiss) private var dismiss
-    @State private var connection: UUID?
-    @State private var value = ""
-    @State private var busy = false
-    @State private var reviewed = false
-    @State private var receipt: JSONValue?
-    @State private var approved = false
-    @State private var closed = false
-    @State private var error: String?
-    private var resolved: Bool { connection != nil && (connection != workspace.connectionState.connectionID || !workspace.approvalStore.approvals.contains(item)) }
-    private var isRefresh: Bool { item.kind == "refresh" }
-    private var approveTitle: String { isRefresh ? "Update credential" : item.kind == "apiAccess" ? "Enable API access" : "Allow leadership" }
+    init(model: ConsentApprovalReview, onClose: (() -> Void)?) {
+        _model = State(initialValue: model); self.onClose = onClose
+    }
+    private var item: ApprovalItem { model.item }
+    private var lifecycle: ApprovalReviewLifecycle { model.lifecycle }
+    private var busy: Bool { lifecycle.isBusy }
+    private var isRefresh: Bool { model.isRefresh }
     var body: some View {
+        @Bindable var form = model
+        let receipt = lifecycle.receipt, resolved = lifecycle.isResolved
         StudioConfirmation(title: receipt != nil ? "Decision recorded" : resolved ? "Request no longer pending" : item.title, symbol: isRefresh ? "key" : "checkmark.shield", width: 660) {
             if let receipt {
-                Label(approved ? (isRefresh ? "Shared credential updated" : item.kind == "apiAccess" ? "Discobox API access enabled" : "Leadership allowed") : "Request denied", systemImage: "checkmark.circle").font(.headline)
-                Text(approved ? "Discobox recorded this decision on the requesting computer." : "No new access was granted.").foregroundStyle(.secondary)
+                Label(model.approved ? (isRefresh ? "Shared credential updated" : item.kind == "apiAccess" ? "Discobox API access enabled" : "Leadership allowed") : "Request denied", systemImage: "checkmark.circle").font(.headline)
+                Text(model.approved ? "Discobox recorded this decision on the requesting computer." : "No new access was granted.").foregroundStyle(.secondary)
                 DisclosureGroup("Server receipt") { ScrollView { Text(receipt.pretty).font(.caption.monospaced()).textSelection(.enabled) }.frame(maxHeight: 250) }
             } else if resolved {
                 Text("This request was answered, changed, or withdrawn. Reopen the current inbox if it still needs your attention.").foregroundStyle(.secondary)
             } else {
-                ApprovalReview(reviewed: $reviewed, revision: item.request.pretty) {
+                ApprovalReview(reviewed: $form.reviewed, revision: item.request.pretty) {
                     VStack(alignment: .leading, spacing: 18) {
                         if let host = connections?.sessions.first(where: { $0 === workspace }) { LabeledContent("Computer", value: host.profile.displayName) }
                         LabeledContent("Requesting box", value: name(item.boxID))
@@ -61,8 +67,8 @@ struct ConsentApprovalView: View {
                         DisclosureGroup("Request details") { Text(item.request.pretty).font(.caption.monospaced()).textSelection(.enabled) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(height: 370)
-                if !reviewed { Text("Read to the end to enable approval.").font(.caption).foregroundStyle(.secondary) }
-                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if !model.reviewed { Text("Read to the end to enable approval.").font(.caption).foregroundStyle(.secondary) }
+                if let error = lifecycle.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                 if busy { Text("Waiting for Discobox. Closing this window leaves the submitted decision in progress.").font(.caption).foregroundStyle(.secondary) }
             }
         } footer: {
@@ -70,20 +76,22 @@ struct ConsentApprovalView: View {
                 Button(resolved || busy ? "Close" : "Later", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
-                if receipt == nil && !resolved && item.supported {
-                    Button(isRefresh ? "Dismiss request" : "Deny", role: .destructive) { submit(approve: false) }
-                        .disabled(busy)
-                    Button(approveTitle) { submit(approve: true) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                        .disabled(busy || !reviewed || isRefresh && value.isEmpty)
+                if receipt == nil && !resolved && lifecycle.phase == .uncertain {
+                    Button("Check again") { Task { await model.recheck() } }
+                } else if receipt == nil && !resolved && item.supported {
+                    Button(isRefresh ? "Dismiss request" : "Deny", role: .destructive) { _ = model.submit(approve: false) }
+                        .disabled(!lifecycle.canDecide)
+                    Button(model.approveTitle) { _ = model.submit(approve: true) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                        .disabled(!model.canApprove)
                         .accessibilityIdentifier("approval.confirmConsent")
                 } else if receipt != nil || resolved {
                     Button("Done", action: close).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }
             }
-        }.onAppear { connection = workspace.connectionState.connectionID }
-            .onDisappear { closed = true; value = "" }
+        }.onDisappear { model.close() }
     }
     @ViewBuilder private var details: some View {
+        @Bindable var form = model
         switch item.kind {
         case "apiAccess":
             Text("What enabling API access allows").font(.headline)
@@ -100,32 +108,14 @@ struct ConsentApprovalView: View {
         case "refresh":
             LabeledContent("Credential", value: item.request["secretName"].string.isEmpty ? item.request["secretId"].string : item.request["secretName"].string)
             Text("Replace this project credential’s token value. Other boxes using the same credential will also use the replacement; grant scopes and lifetimes stay as they are.")
-            SecureField("New token value", text: $value).textFieldStyle(.roundedBorder)
+            SecureField("New token value", text: $form.value).textFieldStyle(.roundedBorder)
             Text("The value is sent only to this request’s computer and cleared when this window closes. No refresh command is run automatically.").font(.caption).foregroundStyle(.secondary)
         default:
             Text("This server uses a request type this build cannot answer. Use a compatible Discobox console to review it. The request remains pending.").foregroundStyle(.secondary)
         }
     }
     private func name(_ id: String) -> String { workspace.inventory.sandboxes.first { $0.id == id }?.displayName ?? id }
-    private func close() { closed = true; value = ""; if let onClose { onClose() } else { dismiss() } }
-    private func submit(approve: Bool) {
-        guard !busy, !resolved, connection == workspace.connectionState.connectionID else { return }
-        busy = true; error = nil
-        let answer: ApprovalAnswer = !approve ? .deny : isRefresh ? .refresh(token: value) : .approve
-        Task {
-            do {
-                try await workspace.approvalStore.answer(item, answer, connection: connection!, onAccepted: { result in
-                    busy = false; value = ""
-                    if !closed { receipt = result; approved = approve }
-                })
-            } catch {
-                busy = false
-                if !closed { self.error = error.localizedDescription }
-                else if connection == workspace.connectionState.connectionID { workspace.selection.commandError = error.localizedDescription }
-                await workspace.approvalStore.refreshApprovals()
-            }
-        }
-    }
+    private func close() { model.close(); if let onClose { onClose() } else { dismiss() } }
 }
 
 /// Approval becomes available only after the current summary has been visible

@@ -8,7 +8,7 @@ import DiscoboxCore
 /// Notification Center access, or external backend operations are involved.
 @MainActor enum ApprovalDurationSmoke {
     static func verify() async throws {
-        for mode in ["automatic", "too-long", "shorter", "deny", "external"] {
+        for mode in ["automatic", "too-long", "shorter", "deny", "external", "close-during-validation"] {
             let client = CappedApprovalClient(), workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Capped fixture", demo: true)
             await workspace.approvalStore.refreshApprovals()
@@ -18,9 +18,9 @@ import DiscoboxCore
             window.contentView = NSHostingView(rootView: ApprovalSheet(item: item, initialDuration: initial).environment(workspace))
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
-            defer { window.orderOut(nil); workspace.disconnect() }
+            defer { window.orderOut(nil); workspace.disconnect(); Task { await client.release() } }
             func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
-            func buttons() -> (approve: NSButton, deny: NSButton)? {
+            func buttons() -> (approve: NSButton, deny: NSButton, close: NSButton)? {
                 guard let root = window.contentView else { return nil }
                 let all = views(root).compactMap { $0 as? NSButton }
                 guard let approve = all.first(where: { $0.cell === window.defaultButtonCell }) else { return nil }
@@ -29,7 +29,7 @@ import DiscoboxCore
                     .sorted { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }
                 guard row.count == 3 else { return nil }
                 let deny = row[1]
-                return (approve, deny)
+                return (approve, deny, row[0])
             }
             if mode == "external" {
                 await client.resolve()
@@ -39,6 +39,24 @@ import DiscoboxCore
                     return controls.count == 2 && controls.contains { $0.cell === window.defaultButtonCell && $0.isEnabled }
                 }
                 guard await client.answers.isEmpty else { throw DiscoboxError("Externally resolved approval sent another response") }
+                continue
+            }
+            if mode == "close-during-validation" {
+                // Closing while the request is re-checked must withdraw the
+                // decision: the review model sends nothing after validation.
+                try await wait { buttons()?.approve.isEnabled == true }
+                guard let controls = buttons() else { throw DiscoboxError("Approval controls missing") }
+                await client.holdNextInbox()
+                controls.approve.performClick(nil)
+                var validating = false
+                for _ in 0..<100 { validating = await client.validating; if validating { break }; try await Task.sleep(for: .milliseconds(50)) }
+                guard validating else { throw DiscoboxError("Approval did not start validation") }
+                controls.close.performClick(nil)
+                await client.release()
+                try await Task.sleep(for: .milliseconds(300))
+                guard await client.answers.isEmpty, workspace.approvalStore.approvals.count == 1 else {
+                    throw DiscoboxError("Closing during validation sent a decision")
+                }
                 continue
             }
             try await wait { buttons()?.deny.isEnabled == true }
@@ -64,7 +82,7 @@ import DiscoboxCore
             }
         }
         print("APPROVAL_RESOLUTION_SMOKE_OK: externally resolved requests show an enabled Done action, no stale form or duplicate response")
-        print("APPROVAL_DURATION_SMOKE_OK: automatic 2-hour request capped to 30 minutes, over-limit custom duration blocks approval, shorter duration preserved, one footer Approve action records consent; Deny needs no consent")
+        print("APPROVAL_DURATION_SMOKE_OK: automatic 2-hour request capped to 30 minutes, over-limit custom duration blocks approval, shorter duration preserved, one footer Approve action records consent; Deny needs no consent; closing during validation sends nothing")
     }
     private static func wait(line: Int = #line, _ predicate: () -> Bool) async throws {
         for _ in 0..<100 { if predicate() { return }; try await Task.sleep(for: .milliseconds(50)) }
@@ -77,10 +95,19 @@ private actor CappedApprovalClient: DiscoboxClient {
     private var pending = true
     private(set) var answers: [BridgeRequest] = []
     private(set) var granted: Double?
+    private var holdInbox = false
+    private var gate: CheckedContinuation<Void, Never>?
+    private(set) var validating = false
     func resolve() { pending = false }
+    func holdNextInbox() { holdInbox = true }
+    func release() { holdInbox = false; gate?.resume(); gate = nil }
     func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
         case .approvals:
+            if holdInbox {
+                holdInbox = false; validating = true
+                await withCheckedContinuation { gate = $0 }
+            }
             return Data((pending ? #"{"approvalRequests":[{"kind":"credential","credential":{"id":"capped","sandboxId":"demo-ui","status":"pending","name":"Repository","wellKnownId":"fixture.repository","grantTTLSeconds":7200,"policy":{"resolved":{"repo":"example/project"}}}}]}"# : #"{"approvalRequests":[]}"#).utf8)
         case .secrets:
             return Data(#"{"secrets":[{"id":"fixture-secret","name":"Repository","wellKnownId":"fixture.repository","maxGrantTTLSeconds":1800}]}"#.utf8)
