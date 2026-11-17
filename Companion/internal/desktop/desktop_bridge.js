@@ -32,8 +32,17 @@
       this.command('v', terminal);
     }
   };
-  setInterval(() => {
-    if (typeof state === 'undefined') { nativePost('error', 'This desktop page does not support the native clipboard bridge. Open it in your browser instead.'); return; }
+  // The viewer exposes state.rfb/state.connected but no event for either (it
+  // replaces state.rfb on reconnect), so this samples them locally. Native is
+  // told only about changes. `state` is a module binding: when it is missing
+  // it never appears, so that failure is posted once and sampling stops.
+  let reported;
+  const sample = () => {
+    if (typeof state === 'undefined') {
+      clearInterval(timer);
+      nativePost('error', 'This desktop page does not support the native clipboard bridge. Open it in your browser instead.');
+      return;
+    }
     if (state.rfb !== attached && state.rfb) {
       attached = state.rfb;
       const connection = attached;
@@ -41,6 +50,8 @@
         if (connection === state.rfb && typeof event.detail?.text === 'string') nativePost('clipboard', event.detail.text);
       });
     }
-    nativePost('ready', !!state.connected);
-  }, 200);
+    const ready = !!state.connected;
+    if (ready !== reported) { reported = ready; nativePost('ready', ready); }
+  };
+  const timer = setInterval(sample, 200);
 }
