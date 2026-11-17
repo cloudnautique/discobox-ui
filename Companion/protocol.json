@@ -45,5 +45,11 @@
     "upload": "manage",
     "usage": "read",
     "usageHeaders": "read"
+  },
+  "readServer": {
+    "version": 1,
+    "permissions": [
+      "read"
+    ]
   }
 }

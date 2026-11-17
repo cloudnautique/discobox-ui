@@ -11,6 +11,12 @@ import "encoding/json"
 // protocol.json, which the Go and Swift tests both check against.
 const ProtocolVersion = 2
 
+// ReadServerVersion is the version of the persistent read companion's framed
+// envelope (internal/readserver), separate from the one-shot ProtocolVersion
+// because the two change independently. It is published in protocol.json
+// beside the only permission class that mode accepts.
+const ReadServerVersion = 1
+
 // Request is one bounded request. Each field has one meaning across
 // operations; see ARCHITECTURE.md ("Components").
 type Request struct {

@@ -16,10 +16,18 @@ type protocolManifest struct {
 	Version    int                   `json:"version"`
 	ErrorKinds []string              `json:"errorKinds"`
 	Operations map[string]permission `json:"operations"`
+	// ReadServer is the persistent read companion's framed protocol: its
+	// own version and the only permission classes it serves.
+	ReadServer struct {
+		Version     int          `json:"version"`
+		Permissions []permission `json:"permissions"`
+	} `json:"readServer"`
 }
 
 func currentManifest() protocolManifest {
 	manifest := protocolManifest{Version: wire.ProtocolVersion, ErrorKinds: wire.ErrorKinds, Operations: map[string]permission{}}
+	manifest.ReadServer.Version = wire.ReadServerVersion
+	manifest.ReadServer.Permissions = ReadServerPermissions
 	for name, op := range operations {
 		manifest.Operations[name] = op.permission
 	}

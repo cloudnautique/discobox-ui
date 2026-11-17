@@ -15,6 +15,7 @@ import (
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/forward"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/iroh"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/readserver"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/terminal"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/wire"
 )
@@ -35,6 +36,7 @@ func main() {
 	demo := flag.Bool("terminal-demo", false, "Run an offline PTY fixture")
 	allowShell := flag.Bool("allow-shell", false, "Allow one explicitly requested new shell")
 	allowManage := flag.Bool("allow-manage", false, "Allow one explicit management, approval, tool launch, or file transfer request")
+	readServer := flag.Bool("read-server", false, "Serve framed read-only requests until stdin closes")
 	diagnosticConnection := flag.String("diagnostic-connection", "", "Opaque UI connection generation for diagnostics")
 	flag.Parse()
 	finishDiagnostics := func() {}
@@ -94,6 +96,17 @@ func main() {
 			}
 			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
+			os.Exit(1)
+		}
+		return
+	}
+	if *readServer {
+		// A long-lived helper never holds a write or shell permission.
+		if *allowManage || *allowShell {
+			fmt.Fprintln(os.Stderr, "--read-server cannot be combined with --allow-manage or --allow-shell")
+			os.Exit(2)
+		}
+		if err := readserver.Run(*endpoint, os.Stdin, os.Stdout); err != nil {
 			os.Exit(1)
 		}
 		return
