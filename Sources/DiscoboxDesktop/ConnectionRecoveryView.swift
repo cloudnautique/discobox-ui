@@ -86,15 +86,16 @@ struct ConnectionRecoveryBanner: View {
                 Spacer(minLength: 8)
                 Button("Retry now") { Task { await workspace.retryConnection() } }
                     .disabled(workspace.connectionState.isConnecting || workspace.connectionState.recovery.isAttempting)
+                    .accessibilityIdentifier("connection.retry")
                 Button("Disconnect", action: disconnect)
             }
             if let error = workspace.connectionState.connectionError {
-                ScrollView {
-                    Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(maxHeight: 100)
+                Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    .lineLimit(3).help(error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(.horizontal, 16).padding(.vertical, 12)
+            .fixedSize(horizontal: false, vertical: true)
             .background(DiscoboxAppearance.warning.opacity(0.07))
     }
 }

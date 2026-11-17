@@ -67,6 +67,17 @@ struct WorkspaceView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).background(DiscoboxAppearance.canvas)
             } else if workspace.connectionState.isConnected || connections.sessions.contains(where: { $0.connectionState.isConnected }) == true {
                 VStack(spacing: 0) {
+                // AppKit-backed split panes do not reliably consume SwiftUI
+                // safe-area insets. Reserve real layout space for notices.
+                if workspace.connectionState.connectionError != nil {
+                    ConnectionRecoveryBanner(workspace: workspace, computer: connections.active.profile.displayName) {
+                        connections.disconnect(connections.activeID)
+                    }
+                }
+                if let error = workspace.selection.commandError {
+                    HStack { Notice(text: error, symbol: "exclamationmark.triangle"); Button("Dismiss") { workspace.selection.commandError = nil }.padding(.trailing) }
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HSplitView {
                     sidebar
                     VStack(spacing: 0) {
@@ -168,16 +179,6 @@ struct WorkspaceView: View {
                 .toolbarBackground(DiscoboxAppearance.chrome, for: .windowToolbar)
                 .toolbarBackground(.visible, for: .windowToolbar)
                 .toolbar(removing: .sidebarToggle)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if workspace.connectionState.connectionError != nil {
-                        ConnectionRecoveryBanner(workspace: workspace, computer: connections.active.profile.displayName) {
-                            connections.disconnect(connections.activeID)
-                        }
-                    }
-                    if let error = workspace.selection.commandError {
-                        HStack { Notice(text: error, symbol: "exclamationmark.triangle"); Button("Dismiss") { workspace.selection.commandError = nil }.padding(.trailing) }
-                    }
-                }
             } else { WelcomeView() }
         }
         .background(WorkspaceWindowReader(commands: commands))
