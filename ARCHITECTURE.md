@@ -254,14 +254,17 @@ in a versioned protocol rather than adding ad hoc output parsing.
 The bounded request surface is one registry
 (`Companion/internal/bridge/operations.go`): each
 operation's handler, permission class (read, manage or shell) and
-deadline. `Companion/protocol.json` publishes the names, classes and wire
+deadline. `Companion/protocol.json` publishes the names, classes, error kinds and wire
 version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
 drift from the companion. Each request field has one meaning (a box's new name
 is `name`, a secret is `secretID`, an audit record is `poolID` + `recordID`, a
 link is `link`, a tool is `toolID`); `requestID` and `kind` name only an
 approval request. The `--allow-manage` and `--allow-shell` flags keep a
 polling read from mutating by mistake. They are not a security boundary
-against another process running as the same user.
+against another process running as the same user. Failures carry an
+`errorKind` (`transport`, `certificate`) that the app maps to
+`DiscoboxError.Kind`; HTTP 401/403 is `unauthorized`. Views decide on the
+kind, never on message text.
 
 The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
 including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection

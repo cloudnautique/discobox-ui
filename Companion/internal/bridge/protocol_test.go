@@ -14,11 +14,12 @@ import (
 
 type protocolManifest struct {
 	Version    int                   `json:"version"`
+	ErrorKinds []string              `json:"errorKinds"`
 	Operations map[string]permission `json:"operations"`
 }
 
 func currentManifest() protocolManifest {
-	manifest := protocolManifest{Version: wire.ProtocolVersion, Operations: map[string]permission{}}
+	manifest := protocolManifest{Version: wire.ProtocolVersion, ErrorKinds: wire.ErrorKinds, Operations: map[string]permission{}}
 	for name, op := range operations {
 		manifest.Operations[name] = op.permission
 	}
