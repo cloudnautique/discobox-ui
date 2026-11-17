@@ -64,7 +64,7 @@ public actor CompanionClient: DiscoboxClient {
                                  interactive: request.operation == .input, newShell: request.operation == .newShell, manage: (request.operation == .auditBody && request.localPath != nil) || [.setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy, .clearPoolCache, .deleteSecret, .boxAction, .createBox, .closeShell, .closeTerminal, .answer, .createSecret, .openTool, .newAgent, .upload, .download].contains(request.operation), payload: payload, progress: progress)
         let data = try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            return try await Task.detached(priority: Task.currentPriority) { try job.run() }.value
+            return try await BlockingThread.run(name: "Discobox companion request") { try job.run() }
         } onCancel: { job.cancel() }
         try Task.checkCancellation()
         let response: BridgeResponse
@@ -97,8 +97,9 @@ private struct APIProblem: Decodable {
     let message: String?
 }
 
-/// Foundation's Process has blocking pipe I/O. It runs off the main actor;
-/// the lock protects its launch/cancel race, not UI state.
+/// Foundation's Process has blocking pipe I/O. `run()` executes on a
+/// dedicated `BlockingThread`, never the cooperative pool; the lock protects
+/// its launch/cancel race, not UI state.
 private final class ProcessRequest: @unchecked Sendable {
     private final class Registry: @unchecked Sendable {
         let lock = NSLock()

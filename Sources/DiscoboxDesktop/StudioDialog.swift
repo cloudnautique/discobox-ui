@@ -132,8 +132,34 @@ struct StudioQuotaProgressStyle: ProgressViewStyle {
 }
 
 /// App-owned AppKit callbacks use the same SwiftUI chrome as other sheets.
-/// Synchronous terminal callbacks retain their original modal lifetime.
 @MainActor enum StudioAppKitDialog {
+    /// Window-attached confirmation for callers that must return before the
+    /// user answers, such as Ghostty's C clipboard callbacks: an app-modal
+    /// session inside such a callback keeps polling and teardown running and
+    /// can free the terminal the callback is still using. `completion` runs
+    /// once on the main actor after the sheet ends. With no window, or while
+    /// another sheet is attached, the request is declined, never queued or
+    /// shown app-modally.
+    static func confirm(title: String, symbol: String, message: String, confirmTitle: String,
+                        destructive: Bool = false, defaultConfirm: Bool = true,
+                        for window: NSWindow?, completion: @escaping (Bool) -> Void) {
+        guard let window, window.attachedSheet == nil else { completion(false); return }
+        let panel = NSPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let view = NSHostingView(rootView: StudioMessageSheet(title: title, symbol: symbol, message: message,
+            confirmTitle: confirmTitle, destructive: destructive, defaultConfirm: defaultConfirm,
+            cancel: { window.endSheet(panel, returnCode: .cancel) }, confirm: { window.endSheet(panel, returnCode: .OK) }))
+        panel.contentView = view
+        panel.setContentSize(view.fittingSize)
+        window.beginSheet(panel) { response in
+            panel.orderOut(nil); panel.contentView = nil
+            completion(response == .OK)
+        }
+    }
+
+    /// Blocks in an app-modal session. Only for callers that need the answer
+    /// synchronously and hold no external resource across it (for example a
+    /// window-close veto); terminal callbacks use the window-attached variant.
     static func confirm(title: String, symbol: String, message: String, confirmTitle: String,
                         destructive: Bool = false, defaultConfirm: Bool = true) -> Bool {
         let panel = NSPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
