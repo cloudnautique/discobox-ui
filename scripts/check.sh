@@ -4,6 +4,7 @@ source "$(dirname "$0")/dev-env.sh"
 
 case "${1:-}" in
     lint)
+        require_upstream
         python3 scripts/generate-brand.py --check
         python3 - <<'PYFONT'
 import hashlib
@@ -14,7 +15,7 @@ assert "SIL OPEN FONT LICENSE" in Path("Resources/Fonts/OFL.txt").read_text()
 PYFONT
         # Use the compiler's Swift diagnostics without imposing a new source style.
         swift build --disable-sandbox --cache-path .build/package-cache -Xswiftc -warnings-as-errors
-        unformatted=$(gofmt -l Companion/*.go)
+        unformatted=$(gofmt -l Companion)
         if [[ -n "$unformatted" ]]; then
             printf 'Go files need formatting (run make fmt-go):\n%s\n' "$unformatted" >&2
             exit 1
@@ -31,10 +32,11 @@ PY
         git diff --cached --check
         ;;
     vet)
+        require_upstream
         (cd Companion && go vet ./...)
         ;;
     fmt-go)
-        gofmt -w Companion/*.go
+        gofmt -w Companion
         ;;
     verify)
         if [[ ! -d dist/Discobox.app ]]; then

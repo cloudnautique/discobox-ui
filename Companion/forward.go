@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/discobox-ai/discobox/cli/internal/portforward"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 )
 
 type reportedPort struct {
@@ -34,7 +34,7 @@ type forwardSnapshot struct {
 	Error string          `json:"error,omitempty"`
 }
 
-func reportedTargets(data []byte) ([]portforward.Target, error) {
+func reportedTargets(data []byte) ([]upstream.PortTarget, error) {
 	var box struct {
 		Runtime struct {
 			RuntimeState string `json:"runtimeState"`
@@ -50,16 +50,16 @@ func reportedTargets(data []byte) ([]portforward.Target, error) {
 	if box.Runtime.RuntimeState != "running" || (box.Runtime.DisplayState != "" && box.Runtime.DisplayState != "running") {
 		return nil, errors.New("Box is not running. Start it to open its services.")
 	}
-	targets := make([]portforward.Target, 0)
+	targets := make([]upstream.PortTarget, 0)
 	for _, p := range box.Runtime.AgentStatus.Ports {
 		if p.Port < 1 || p.Port > 65535 {
 			continue
 		}
-		network := portforward.TCP
+		network := upstream.TCP
 		if p.Protocol == "udp" {
-			network = portforward.UDP
+			network = upstream.UDP
 		}
-		targets = append(targets, portforward.Target{Port: p.Port, Network: network, Host: dialHostForPort(p.Addresses, network), Protocol: p.Protocol, ServiceID: p.ServiceID, ServiceName: p.ServiceName})
+		targets = append(targets, upstream.PortTarget{Port: p.Port, Network: network, Host: dialHostForPort(p.Addresses, network), Protocol: p.Protocol, ServiceID: p.ServiceID, ServiceName: p.ServiceName})
 	}
 	return targets, nil
 }
@@ -70,7 +70,7 @@ type runningPortDialer struct {
 	tunnel *sandboxPortDialer
 }
 
-func (d runningPortDialer) DialPort(ctx context.Context, target portforward.Target) (net.Conn, error) {
+func (d runningPortDialer) DialPort(ctx context.Context, target upstream.PortTarget) (net.Conn, error) {
 	check, cancel := context.WithTimeout(ctx, 10*time.Second)
 	err := d.b.requireRunningBox(check, d.req)
 	cancel()
@@ -98,10 +98,10 @@ func runForward(endpoint string, req request, input io.Reader, output io.Writer)
 	// The GUI keeps stdin open. Its exit closes the pipe, even without SIGTERM.
 	go func() { _, _ = io.Copy(io.Discard, input); cancel() }()
 	events := make(chan string, 8)
-	forward := portforward.New(ctx, portforward.Options{
+	forward := upstream.NewPortForwarder(ctx, upstream.PortForwardOptions{
 		Dialer: runningPortDialer{b: b, req: req, tunnel: &sandboxPortDialer{baseURL: b.base, client: b.client, projectID: req.ProjectID, sandboxID: req.SandboxID}},
-		Observe: func(event portforward.Event) {
-			if event.Kind == portforward.BindFailed || event.Kind == portforward.DialFailed {
+		Observe: func(event upstream.PortEvent) {
+			if event.Kind == upstream.PortBindFailed || event.Kind == upstream.PortDialFailed {
 				select {
 				case events <- event.String():
 				default:
@@ -118,7 +118,7 @@ func runForward(endpoint string, req request, input io.Reader, output io.Writer)
 		read, done := context.WithTimeout(ctx, 10*time.Second)
 		res, err := b.call(read, "GET", "/projects/"+req.ProjectID+"/sandboxes/"+req.SandboxID, nil)
 		done()
-		var targets []portforward.Target
+		var targets []upstream.PortTarget
 		if err == nil && res.Status != 200 {
 			err = fmt.Errorf("Port discovery failed (HTTP %d)", res.Status)
 		}

@@ -1,16 +1,16 @@
 package main
 
-import "github.com/discobox-ai/discobox/cli/internal/portforward"
+import "github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 
 // Bind-address handling follows the CLI listening_ports.go implementation.
-func dialHostForPort(addresses []string, network portforward.Network) string {
-	if network == portforward.UDP {
+func dialHostForPort(addresses []string, network upstream.PortNetwork) string {
+	if network == upstream.UDP {
 		return udpDialHost(addresses)
 	}
 	for _, address := range addresses {
 		switch address {
 		case "0.0.0.0", "::", "[::]", "*", "127.0.0.1", "::1", "[::1]", "localhost":
-			return portforward.DefaultDialHost
+			return upstream.DefaultDialHost
 		}
 	}
 	for _, address := range addresses {
@@ -18,7 +18,7 @@ func dialHostForPort(addresses []string, network portforward.Network) string {
 			return address
 		}
 	}
-	return portforward.DefaultDialHost
+	return upstream.DefaultDialHost
 }
 
 // udpDialLoopback is where a UDP port with nothing better to go on is dialed:

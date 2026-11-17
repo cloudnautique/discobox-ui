@@ -10,13 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/discobox-ai/discobox/cli/internal/sandboxcreate"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 	"github.com/discobox-ai/discobox/pkg/platform"
 	"github.com/discobox-ai/discobox/pkg/sourceref"
 )
 
 func TestGitHubShorthandResolvesWithoutNetwork(t *testing.T) {
-	source, err := sandboxcreate.ParseSource("example/project")
+	source, err := upstream.ParseSource("example/project")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +89,8 @@ func TestSSHSourceBuildsAnAPICreationBody(t *testing.T) {
 	t.Setenv("DISCOBOX_TEST_SOURCE_REPO", repo)
 	t.Setenv("GIT_SSH_COMMAND", "'"+strings.ReplaceAll(ssh, "'", "'\\''")+"'")
 	t.Setenv("GIT_SSH_VARIANT", "ssh")
-	options := sandboxcreate.PromptOptions{Source: "git@github.com:example/private.git", Platform: platform.Platform{OS: "linux", Arch: "arm64"}, IncludeDirty: sandboxcreate.IncludeDirtyNever}
-	_, original, err := sandboxcreate.BuildPromptSandboxBody(context.Background(), options)
+	options := upstream.PromptOptions{Source: "git@github.com:example/private.git", Platform: platform.Platform{OS: "linux", Arch: "arm64"}, IncludeDirty: upstream.IncludeDirtyNever}
+	_, original, err := upstream.BuildPromptSandboxBody(context.Background(), options)
 	if original != nil {
 		original.Close()
 	}
@@ -101,7 +101,7 @@ func TestSSHSourceBuildsAnAPICreationBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, local, err := sandboxcreate.BuildPromptSandboxBody(context.Background(), options)
+	body, local, err := upstream.BuildPromptSandboxBody(context.Background(), options)
 	if local != nil {
 		defer local.Close()
 	}

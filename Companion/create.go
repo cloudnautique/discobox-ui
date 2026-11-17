@@ -15,7 +15,7 @@ import (
 	"time"
 
 	api "github.com/discobox-ai/discobox/api/gen"
-	"github.com/discobox-ai/discobox/cli/internal/sandboxcreate"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 	"github.com/discobox-ai/discobox/pkg/platform"
 	"github.com/discobox-ai/discobox/pkg/sourceref"
 )
@@ -112,11 +112,11 @@ func (b *bridge) createBox(ctx context.Context, req request) (out response, fail
 			}
 		}
 	}
-	options := sandboxcreate.PromptOptions{Source: source, NoSource: source == "", Platform: target, PoolID: poolID, IncludeDirty: sandboxcreate.IncludeDirtyNever}
+	options := upstream.PromptOptions{Source: source, NoSource: source == "", Platform: target, PoolID: poolID, IncludeDirty: upstream.IncludeDirtyNever}
 	if strings.TrimSpace(req.Prompt) != "" {
 		options.Prompt = []string{req.Prompt}
 	}
-	body, local, err := sandboxcreate.BuildPromptSandboxBody(ctx, options)
+	body, local, err := upstream.BuildPromptSandboxBody(ctx, options)
 	if err != nil {
 		return response{}, err
 	}
@@ -176,9 +176,9 @@ func (b *bridge) createBox(ctx context.Context, req request) (out response, fail
 		defer server.Close()
 		// Keep authentication on this computer, as before. The newer delivery
 		// API requires an explicit policy; this UI does not lend Git credentials.
-		options := sandboxcreate.DeliveryOptions{Credentials: sandboxcreate.GitCredentialsLocal}
+		options := upstream.DeliveryOptions{Credentials: upstream.GitCredentialsLocal}
 		delivery := sourceDeliveryClient{Client: client, bridge: b}
-		if err := sandboxcreate.DeliverSource(ctx, delivery, req.ProjectID, sandbox, local, "http://"+listener.Addr().String(), "", nil, options); err != nil {
+		if err := upstream.DeliverSource(ctx, delivery, req.ProjectID, sandbox, local, "http://"+listener.Addr().String(), "", nil, options); err != nil {
 			return response{}, fmt.Errorf("box %s was created but source delivery failed; do not create again: %w", sandbox.ID, err)
 		}
 	}
@@ -189,7 +189,7 @@ func (b *bridge) createBox(ctx context.Context, req request) (out response, fail
 // a URI and its serializer uses net/url. Normalize at the desktop boundary,
 // before any source lookup or creation, preserving SSH, ref and subdirectory.
 func repositorySource(value string) (string, error) {
-	source, err := sandboxcreate.ParseSource(strings.TrimSpace(value))
+	source, err := upstream.ParseSource(strings.TrimSpace(value))
 	if err != nil || source.Kind != sourceref.Git {
 		return "", errors.New("repository must be a remote Git URL or OWNER/REPO")
 	}

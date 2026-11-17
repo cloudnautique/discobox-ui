@@ -75,7 +75,7 @@ func main() {
 	desktop := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
 	desktopURL := flag.String("desktop-url", "", "Existing local desktop forward")
 	forward := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
-	configure := flag.String("configure-harness", "", "Run only a harness interactive setup flow")
+	harnessConsole := flag.Bool("harness-console", false, "Open the console's harness screen for --project")
 	attach := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
 	attachStatus := flag.String("attach-status", "", "Private FIFO for terminal connection state")
 	project := flag.String("project", "", "Project ID")
@@ -95,8 +95,8 @@ func main() {
 		finishDiagnostics = startDiagnostics(component, *endpoint, *diagnosticConnection, request{ProjectID: *project, SandboxID: *box, ExecID: *execID})
 	}
 	defer finishDiagnostics()
-	if *configure != "" {
-		if err := runHarnessSetup(*endpoint, *project, *configure); err != nil {
+	if *harnessConsole {
+		if err := runHarnessConsole(*endpoint, *project); err != nil {
 			fmt.Fprintf(os.Stderr, "\r\nSetup failed: %s\r\n", err)
 			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
 			finishDiagnostics()

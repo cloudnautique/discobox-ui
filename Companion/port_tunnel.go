@@ -17,7 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/discobox-ai/discobox/cli/internal/portforward"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 	"github.com/discobox-ai/discobox/pkg/execstream/frame"
 )
 
@@ -31,7 +31,7 @@ const tunnelDialTimeout = 30 * time.Second
 // already answers on rather than through an SSH session — and `/udp/attach` for
 // a UDP one (ADR 0109 §4).
 //
-// It is a portforward.Dialer, which is all the forwarder knows about it.
+// It is an upstream portforward.Dialer, which is all the forwarder knows about it.
 type sandboxPortDialer struct {
 	baseURL   string
 	client    *http.Client
@@ -39,7 +39,7 @@ type sandboxPortDialer struct {
 	sandboxID string
 }
 
-func (d *sandboxPortDialer) DialPort(ctx context.Context, target portforward.Target) (net.Conn, error) {
+func (d *sandboxPortDialer) DialPort(ctx context.Context, target upstream.PortTarget) (net.Conn, error) {
 	socketURL, err := sandboxTunnelWebSocketURL(d.baseURL, d.projectID, d.sandboxID, target)
 	if err != nil {
 		return nil, err
@@ -71,16 +71,16 @@ func (d *sandboxPortDialer) DialPort(ctx context.Context, target portforward.Tar
 		stream:    websocket.NetConn(connCtx, wsConn, websocket.MessageBinary),
 		cancel:    cancel,
 		target:    target,
-		datagrams: target.Network == portforward.UDP,
+		datagrams: target.Network == upstream.UDP,
 	}, nil
 }
 
 // tunnelDialError says why the tunnel was refused. The reason only exists in
 // the handshake response body — a websocket dial error is "expected 101" and
 // nothing more — and it is gone once the response is discarded.
-func tunnelDialError(target portforward.Target, resp *http.Response, err error) error {
+func tunnelDialError(target upstream.PortTarget, resp *http.Response, err error) error {
 	where := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
-	if target.Network == portforward.UDP {
+	if target.Network == upstream.UDP {
 		where += "/udp"
 	}
 	if resp == nil || resp.Body == nil {
@@ -112,7 +112,7 @@ func tunnelErrorMessage(body []byte) string {
 // sandboxTunnelWebSocketURL is the control-plane route that dials the target's
 // host:port from inside the sandbox's network namespace, over the target's
 // network.
-func sandboxTunnelWebSocketURL(baseURL, projectID, sandboxID string, target portforward.Target) (string, error) {
+func sandboxTunnelWebSocketURL(baseURL, projectID, sandboxID string, target upstream.PortTarget) (string, error) {
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil {
 		return "", fmt.Errorf("parse server URL %q: %w", baseURL, err)
@@ -124,7 +124,7 @@ func sandboxTunnelWebSocketURL(baseURL, projectID, sandboxID string, target port
 		parsed.Scheme = "ws"
 	}
 	route := "/tcp/attach"
-	if target.Network == portforward.UDP {
+	if target.Network == upstream.UDP {
 		route = "/udp/attach"
 	}
 	parsed.Path = "/api/projects/" + url.PathEscape(projectID) + "/sandboxes/" + url.PathEscape(sandboxID) + route
@@ -147,7 +147,7 @@ type tunnelConn struct {
 	ws     *websocket.Conn
 	stream net.Conn
 	cancel context.CancelFunc
-	target portforward.Target
+	target upstream.PortTarget
 	// datagrams makes Read return one frame per call, the way a UDP socket
 	// returns one datagram, instead of a byte stream that runs frames
 	// together.

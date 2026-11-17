@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	apimodel "github.com/discobox-ai/discobox/api/model"
-	"github.com/discobox-ai/discobox/cli/internal/sandboxcreate"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 )
 
 // Reuse the TUI's recorded phase/freshness and readiness semantics. Only
@@ -48,7 +48,7 @@ func withPreparationStatus(body []byte) []byte {
 			continue
 		}
 		model := apimodel.Sandbox{Runtime: apimodel.SandboxRuntime(snapshot.Runtime)}
-		box["preparationStatus"], _ = json.Marshal(string(sandboxcreate.ProvisionStatus(&model)))
+		box["preparationStatus"], _ = json.Marshal(string(upstream.ProvisionStatus(&model)))
 		decorated = true
 	}
 	if !decorated {

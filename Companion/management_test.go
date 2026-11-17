@@ -2,31 +2,24 @@ package main
 
 import (
 	"errors"
-	"github.com/discobox-ai/discobox/cli/internal/cli"
 	"net/http"
 	"reflect"
 	"testing"
 )
 
-func TestHarnessSetupIsRestrictedAndNeverStartsServer(t *testing.T) {
-	args, err := harnessSetupArgs("unix:///tmp/fixture.sock", "project", "harness")
+func TestHarnessConsoleIsRestrictedAndNeverStartsServer(t *testing.T) {
+	args, err := harnessConsoleArgs("unix:///tmp/fixture.sock", "project")
 	want := []string{"--server", "unix:///tmp/fixture.sock", "--project", "project", "--auto-start-server=false", "configure"}
 	if err != nil || !reflect.DeepEqual(args, want) {
 		t.Fatalf("%v %v", args, err)
 	}
-	for _, id := range []string{"", "../other", "--help", "harness; touch /tmp/x"} {
-		// Flag-like IDs are accepted by validID, but must never reach the CLI parser.
-		if _, err := harnessSetupArgs("unix:///tmp/fixture.sock", "project", id); err == nil {
-			t.Fatalf("accepted %q", id)
+	for _, project := range []string{"", "../other", "a/b", "project; touch /tmp/x"} {
+		if _, err := harnessConsoleArgs("unix:///tmp/fixture.sock", project); err == nil {
+			t.Fatalf("accepted project %q", project)
 		}
 	}
-}
-
-func TestHarnessSetupResolvesToUpstreamConfigureCommand(t *testing.T) {
-	cmd := cli.NewRootCommand()
-	found, remaining, err := cmd.Find([]string{"configure"})
-	if err != nil || found.Name() != "configure" || len(remaining) != 0 {
-		t.Fatalf("wrong setup command: %v %v %v", found, remaining, err)
+	if _, err := harnessConsoleArgs("", "project"); err == nil {
+		t.Fatal("accepted an empty endpoint")
 	}
 }
 

@@ -23,14 +23,21 @@ Run these commands from the root of this repository. Access to the Discobox
 source repository is required:
 
 ```sh
-git clone https://github.com/discobox-ai/discobox.git discobox
-git -C discobox checkout 936af3323d1b65f7bee68178d82d823988d0fb52
+make upstream
 make ghostty
 make build
 open dist/Discobox.app
 ```
 
-If `discobox/` already exists, check its revision instead of cloning again.
+`make upstream` clones the Discobox source into `discobox/`, or fetches into an
+existing checkout, and checks out the revision pinned in `UPSTREAM_REVISION`.
+That file is the only place the revision is recorded: `make build`, `make test`,
+`make lint`, `make vet`, `make smoke` and CI fail early, naming both revisions,
+when `discobox/` is missing, at another commit, or has local changes. To try an
+upstream change before moving the pin, set `DISCOBOX_UPSTREAM_UNPINNED=1`, which
+turns that failure into a warning. Set `DISCOBOX_SOURCE_URL` to clone from a
+mirror. To move the pin, edit `UPSTREAM_REVISION` and run `make upstream`.
+
 The app uses this source for its companion client; building does not start a
 Discobox server. The checkout is excluded from this repository’s commits.
 
@@ -74,6 +81,7 @@ caches live under `.build/`.
 
 | Target | Purpose |
 | --- | --- |
+| `make upstream` | Clone or update `discobox/` to the pinned `UPSTREAM_REVISION` |
 | `make build` | Build and ad-hoc sign the app bundle |
 | `make test` | Run Swift tests, Go race tests, and Go vet |
 | `make lint` | Check Swift compiler warnings, Go formatting, script syntax, plist, and diff whitespace |
@@ -133,7 +141,8 @@ git tag v0.1.0-preview.1
 git push origin v0.1.0-preview.1
 ```
 
-The workflow checks out the exact tag's app source and the pinned Discobox source.
+The workflow checks out the exact tag's app source and the Discobox source at
+the revision in `UPSTREAM_REVISION`.
 Update the runner/Xcode selection and cache keys together when changing toolchains.
 
 For an additional interactive-session check, run the demo UI smoke test:

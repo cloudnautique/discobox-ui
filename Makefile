@@ -4,10 +4,13 @@ SHELL := /bin/bash
 # SwiftPM and packaging share an output directory. Keep even `make -j ci`
 # sequential to avoid competing builds or partially copied bundles.
 .NOTPARALLEL:
-.PHONY: brand-tokens help build smoke ghostty test lint vet fmt-go verify ci
+.PHONY: upstream brand-tokens help build smoke ghostty test lint vet fmt-go verify ci
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+upstream: ## Clone or update discobox/ to the revision pinned in UPSTREAM_REVISION
+	bash scripts/upstream.sh sync
 
 brand-tokens: ## Regenerate the native palette from the pinned upstream brand tokens
 	python3 scripts/generate-brand.py

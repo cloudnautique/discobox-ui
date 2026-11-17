@@ -59,7 +59,7 @@ func TestConfiguredDefaultDoesNotOverrideExplicitEndpoints(t *testing.T) {
 	if err != nil || b.base != "https://fixture.invalid" {
 		t.Fatalf("explicit %v %v", b, err)
 	}
-	args, err := harnessSetupArgs("unix://", "p", "h")
+	args, err := harnessConsoleArgs("unix://", "p")
 	if err != nil || args[1] != "http://127.0.0.1:12345" {
 		t.Fatalf("setup doesn't share resolver %v %v", args, err)
 	}

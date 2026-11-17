@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/discobox-ai/discobox/cli/internal/portforward"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/upstream"
 	"github.com/discobox-ai/discobox/pkg/execstream/frame"
 )
 
@@ -22,7 +22,7 @@ func TestReportedTargetsKeepDesktopMultiplePortsAndBindAddresses(t *testing.T) {
 	if err != nil || len(targets) != 3 {
 		t.Fatalf("targets=%+v err=%v", targets, err)
 	}
-	if targets[0].Host != "localhost" || targets[0].ServiceID != "ai.discobox.desktop" || targets[1].Host != "10.0.0.2" || targets[2].Host != "::1" || targets[2].Network != portforward.UDP {
+	if targets[0].Host != "localhost" || targets[0].ServiceID != "ai.discobox.desktop" || targets[1].Host != "10.0.0.2" || targets[2].Host != "::1" || targets[2].Network != upstream.UDP {
 		t.Fatalf("wrong targets %+v", targets)
 	}
 	if _, err := reportedTargets([]byte(`{"runtime":{"runtimeState":"stopped"}}`)); err == nil {
@@ -149,9 +149,9 @@ func TestTunnelCarriesTCPHalfCloseAndUDPDatagrams(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	for _, network := range []portforward.Network{portforward.TCP, portforward.UDP} {
+	for _, network := range []upstream.PortNetwork{upstream.TCP, upstream.UDP} {
 		dialer := &sandboxPortDialer{baseURL: server.URL, client: server.Client(), projectID: "p", sandboxID: "s"}
-		conn, err := dialer.DialPort(t.Context(), portforward.Target{Network: network, Host: "localhost", Port: 8080})
+		conn, err := dialer.DialPort(t.Context(), upstream.PortTarget{Network: network, Host: "localhost", Port: 8080})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -2,6 +2,7 @@
 set -euo pipefail
 # This script builds artifacts only; it never launches the app or backend.
 source "$(dirname "$0")/dev-env.sh"
+require_upstream
 GHOSTTY_SDK="$PWD/.build/ghostty/sdk/6d2dd585a5d87fa745d48188dd096ca6e63014d0"
 if [[ ! -f "$GHOSTTY_SDK/EMBEDDING_PATCHES" ]] ||
    [[ "$(cat "$GHOSTTY_SDK/EMBEDDING_PATCHES")" != "$(shasum -a 256 patches/ghostty-*.patch | shasum -a 256 | awk '{print $1}')" ]]; then
