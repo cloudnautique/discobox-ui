@@ -251,7 +251,8 @@ terminates that child only. This favors a small, inspectable first integration.
 If profiling warrants a persistent companion, retain request IDs and cancellation
 in a versioned protocol rather than adding ad hoc output parsing.
 
-The bounded request surface is one registry (`Companion/operations.go`): each
+The bounded request surface is one registry
+(`Companion/internal/bridge/operations.go`): each
 operation's handler, permission class (read, manage or shell) and
 deadline. `Companion/protocol.json` publishes the names, classes and wire
 version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
@@ -274,6 +275,16 @@ Iroh enrollment uses an app-owned Keychain identity and the persistent transport
 Reads are an allowlist of operations, not an arbitrary HTTP proxy. The legacy
 `input` request and `--allow-input` flag are removed. Live keyboard input and
 output use the separate `--attach` PTY/WebSocket transport.
+
+The companion's `main.go` only parses flags and picks a mode. Its packages under
+`Companion/internal/` each own one responsibility: `wire` (request/response,
+protocol version, error kinds), `bridge` (endpoint transport, operation
+registry and handlers for bounded requests), `terminal` (`--attach`),
+`forward` (`--forward`), `iroh` (`--iroh-proxy`/`--iroh-identity`), `desktop`
+(`--desktop`), `console` (`--harness-console`), `diagnostics` (the private
+transport log) and `fdwait`. Upstream's unpublished `cli/internal` packages are
+reached only through `upstream`, whose package comment lists what upstream
+would need to promote to `pkg/` for that adapter to go away.
 
 ## Terminal strategy
 

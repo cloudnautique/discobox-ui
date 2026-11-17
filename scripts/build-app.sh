@@ -15,7 +15,7 @@ python3 scripts/generate-brand.py --check
 swift build --product DiscoboxDesktop --disable-sandbox --cache-path .build/package-cache --configuration release -debug-info-format none
 (
     cd Companion
-    go build -tags iroh_nolibs -ldflags "-X main.diagnosticBuild=$(git describe --always --dirty --exclude "*") -X main.diagnosticUpstream=$(git -C ../discobox rev-parse --short HEAD)" -trimpath -o ../.build/discobox-desktop-bridge .
+    go build -tags iroh_nolibs -ldflags "-X github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics.diagnosticBuild=$(git describe --always --dirty --exclude "*") -X github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics.diagnosticUpstream=$(git -C ../discobox rev-parse --short HEAD)" -trimpath -o ../.build/discobox-desktop-bridge .
 )
 APP="$PWD/dist/Discobox.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
