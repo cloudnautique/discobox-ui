@@ -10,13 +10,16 @@ struct BoxActionRequest: Identifiable {
 
 struct BoxActionMenu: View {
     let box: Sandbox
+    /// Supplied by sidebar rows so the menu does not observe the whole workspace.
+    var pending: Bool? = nil
     let choose: (BoxAction) -> Void
     @Environment(Workspace.self) private var workspace
     var body: some View {
+        let disabled = pending ?? workspace.pendingBoxActions.contains(box.id)
         ForEach(BoxAction.allCases.filter { $0.isAvailable(for: box) }) { action in
             Button(role: action == .purge ? .destructive : nil) { choose(action) } label: {
                 Label(action.title + "…", systemImage: action.symbol)
-            }.disabled(workspace.pendingBoxActions.contains(box.id))
+            }.disabled(disabled)
         }
     }
 }
