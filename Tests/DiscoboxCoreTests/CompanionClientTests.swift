@@ -141,7 +141,7 @@ private struct FixtureExecutable {
     }
 }
 
-private struct ProtocolManifest: Decodable { let version: Int; let operations: [String: String] }
+private struct ProtocolManifest: Decodable { let version: Int; let errorKinds: [String]; let operations: [String: String] }
 private func protocolManifest() throws -> ProtocolManifest {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try JSONDecoder().decode(ProtocolManifest.self, from: Data(contentsOf: root.appendingPathComponent("Companion/protocol.json")))
@@ -152,6 +152,9 @@ private func protocolManifest() throws -> ProtocolManifest {
     #expect(manifest.version == BridgeRequest.protocolVersion)
     let swift = Dictionary(uniqueKeysWithValues: BridgeRequest.Operation.allCases.map { ($0.rawValue, $0.permission.rawValue) })
     #expect(swift == manifest.operations)
+    // Every kind the companion reports means something specific to the app.
+    #expect(!manifest.errorKinds.isEmpty)
+    for kind in manifest.errorKinds { #expect(DiscoboxError.Kind(wire: kind) != .other, "\(kind)") }
 }
 
 @Test func everyOperationLaunchesTheCompanionWithOnlyItsPermissionFlag() async throws {
@@ -179,4 +182,26 @@ private func protocolManifest() throws -> ProtocolManifest {
     let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(BridgeRequest(.boxAction, projectID: "p", sandboxID: "s", name: "n", action: "rename"))) as? [String: Any]
     #expect(wire?["name"] as? String == "n" && wire?["prompt"] == nil)
     session.disconnect()
+}
+
+@Test func companionErrorsCarryAKindRatherThanMeaningInTheirText() async throws {
+    for (wire, status, kind) in [("transport", 0, DiscoboxError.Kind.transport), ("certificate", 0, .certificate), ("unauthorized", 0, .unauthorized),
+                                 ("someday-new", 0, .other), ("", 401, .unauthorized), ("", 403, .unauthorized), ("", 400, .other)] {
+        let body = try JSONSerialization.data(withJSONObject: status == 0
+            ? ["version": BridgeRequest.protocolVersion, "status": 0, "error": "fixture failure", "errorKind": wire]
+            : ["version": BridgeRequest.protocolVersion, "status": status])
+        let fixture = try FixtureExecutable(script: """
+        #!/bin/sh
+        /bin/cat >/dev/null
+        printf '%s' '\(String(decoding: body, as: UTF8.self))'
+        """)
+        defer { fixture.remove() }
+        do {
+            _ = try await CompanionClient(executable: fixture.url, endpoint: "unix://").perform(.init(.defaultProject))
+            Issue.record("A failed fixture response was accepted")
+        } catch let error as DiscoboxError {
+            #expect(error.kind == kind, "\(wire) \(status)")
+            #expect(error.connectionRetryable == (kind == .transport))
+        }
+    }
 }

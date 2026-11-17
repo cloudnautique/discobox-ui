@@ -127,7 +127,6 @@ struct TerminalIdentity: Hashable {
     private(set) var hasConnected = false
     private let status: TerminalAttachStatus?
     private var closed = false
-    private var monitor: Task<Void, Never>?
     convenience init(identity: TerminalIdentity, previousOutput: String? = nil) {
         let status = identity.demo ? nil : try? TerminalAttachStatus()
         var args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec, "--diagnostic-connection", identity.connection.uuidString]
@@ -151,26 +150,76 @@ struct TerminalIdentity: Hashable {
         // Ghostty executes command through a shell. Quote every argument,
         // including the bundled path; endpoint text must never become shell code.
         let command = ([CompanionLocation.executable.path] + arguments).map(Self.quote).joined(separator: " ")
+        // Child exit needs no polling: Ghostty performs SHOW_CHILD_EXITED for
+        // every exit (action_cb -> processEnded -> ended), and close_surface_cb
+        // also reaches `ended`. Both arrive while the surface is hidden.
         error = view.start(command: command)
-        monitor = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                guard let self, let surface = self.view.surface else { return }
-                if ghostty_surface_process_exited(surface) { self.view.processEnded(); return }
-            }
-        }
     }
     static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-    func close() { closed = true; monitor?.cancel(); monitor = nil; status?.close(); view.close() }
+    func close() { closed = true; status?.close(); view.close() }
 }
 
 @MainActor @Observable final class TerminalStore {
+    /// Hidden sessions kept warm per computer. Each holds a Ghostty renderer,
+    /// IO threads and scrollback plus an attach helper, stream and status FIFO.
+    /// Eight covers the agent and shells of the last few boxes visited; older
+    /// hidden ones are released and reattach (replaying the screen) on return.
+    nonisolated static let defaultHiddenSessionLimit = 8
+    /// Saved screens of released sessions, across identities. Each screen is
+    /// capped at 8 MB by `outputText`, so at least four worst-case screens fit.
+    nonisolated static let previousOutputBudget = 32 * 1024 * 1024
+    private let hiddenSessionLimit: Int
     private var sessions: [TerminalIdentity: TerminalSession] = [:]
     private var recoveryAfter: [TerminalIdentity: Date] = [:]
-    private var previousOutput: [TerminalIdentity: String] = [:]
+    @ObservationIgnored private var previousOutput = BoundedTextStore<TerminalIdentity>(budget: TerminalStore.previousOutputBudget)
+    @ObservationIgnored private var recency = RecencyList<TerminalIdentity>()
+    /// Mounted LiveTerminal views per identity; see `present`.
+    @ObservationIgnored private var presented: [TerminalIdentity: Int] = [:]
+    @ObservationIgnored private var pendingRelease: Task<Void, Never>?
+    init(hiddenSessionLimit: Int = TerminalStore.defaultHiddenSessionLimit) { self.hiddenSessionLimit = hiddenSessionLimit }
+
+    /// The retained session, if any. Never starts a child, so `body` uses this.
+    func existing(_ identity: TerminalIdentity) -> TerminalSession? { sessions[identity] }
+    /// Returns the identity's session, starting its attach child if none is
+    /// retained. Call from explicit actions (a view task), never from `body`.
     func session(_ identity: TerminalIdentity) -> TerminalSession {
+        recency.touch(identity)
         if let value = sessions[identity] { return value }
-        let value = TerminalSession(identity: identity, previousOutput: previousOutput.removeValue(forKey: identity)); sessions[identity] = value; return value
+        let value = TerminalSession(identity: identity, previousOutput: previousOutput.removeValue(forKey: identity)); sessions[identity] = value
+        scheduleRelease()
+        return value
+    }
+    /// Keeps `identity` presented while the calling view task runs; cancelling
+    /// the task (the view disappearing or changing identity) hides it again.
+    func present(_ identity: TerminalIdentity) async {
+        presented[identity, default: 0] += 1
+        if sessions[identity] != nil { recency.touch(identity) }
+        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+        if let count = presented[identity], count > 1 { presented[identity] = count - 1 } else { presented.removeValue(forKey: identity) }
+        if sessions[identity] != nil { recency.touch(identity) }
+        scheduleRelease()
+    }
+    /// Views appear and disappear in separate tasks, in either order. Waiting
+    /// a moment lets a box switch settle so a session about to be shown again
+    /// is never released in between.
+    private func scheduleRelease() {
+        guard pendingRelease == nil else { return }
+        pendingRelease = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard let self else { return }
+            self.pendingRelease = nil
+            self.releaseHiddenSessions()
+        }
+    }
+    /// Releases least-recently-used hidden sessions beyond the limit exactly as
+    /// Reconnect does: the screen is saved as previous output and the stream
+    /// detaches. Presented, focused or mounted sessions are never released.
+    func releaseHiddenSessions() {
+        let hidden = recency.overflow(limit: hiddenSessionLimit) { identity in
+            guard let session = sessions[identity] else { return false }
+            return presented[identity] == nil && session.view.window == nil
+        }
+        for identity in hidden { retire(identity) }
     }
     func focus(_ identity: TerminalIdentity) {
         guard let view = sessions[identity]?.view else { return }
@@ -184,16 +233,18 @@ struct TerminalIdentity: Hashable {
         retire(identity)
     }
     private func retire(_ identity: TerminalIdentity) {
+        recency.remove(identity)
         guard let old = sessions.removeValue(forKey: identity) else { return }
         // Failed connection attempts must not overwrite the last useful screen.
         let current = old.view.outputText()
-        previousOutput[identity] = old.hasConnected && !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? current : old.previousOutput ?? current
+        previousOutput.set(old.hasConnected && !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? current : old.previousOutput ?? current, for: identity)
         old.close()
     }
     private var identities: Set<TerminalIdentity> { Set(sessions.keys).union(previousOutput.keys).union(recoveryAfter.keys) }
     private func forget(_ identity: TerminalIdentity) {
         recoveryAfter.removeValue(forKey: identity)
         previousOutput.removeValue(forKey: identity)
+        recency.remove(identity)
         sessions.removeValue(forKey: identity)?.close()
     }
     /// Reattach only an ended stream whose concrete exec was just confirmed
@@ -220,7 +271,8 @@ struct TerminalIdentity: Hashable {
     }
     func closeAll() {
         for session in sessions.values { session.close() }
-        sessions.removeAll(); recoveryAfter.removeAll(); previousOutput.removeAll()
+        sessions.removeAll(); recoveryAfter.removeAll(); previousOutput.removeAll(); recency.removeAll()
+        pendingRelease?.cancel(); pendingRelease = nil
     }
 }
 
@@ -236,7 +288,21 @@ struct LiveTerminal: View {
     @Environment(BoxLinkNavigation.self) private var boxLinks: BoxLinkNavigation?
     @State private var showingPreviousOutput = false
     var body: some View {
-        let session = store.session(identity)
+        // A single container keeps the presence task alive while the content
+        // switches between the placeholder and the session.
+        ZStack {
+            if let session = store.existing(identity) { content(session) }
+            else {
+                // Starting the attach child is an explicit action, not a side
+                // effect of evaluating body. It also replaces a session that
+                // Reconnect or recovery retired while this view is shown.
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task(id: identity) { _ = store.session(identity) }
+            }
+        }
+        .task(id: identity) { await store.present(identity) }
+    }
+    @ViewBuilder private func content(_ session: TerminalSession) -> some View {
         VStack(spacing: 0) {
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }
             TerminalSurface(view: session.view, focused: focused, onFocus: onFocus).id(identity)

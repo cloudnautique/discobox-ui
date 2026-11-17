@@ -202,7 +202,7 @@ struct CredentialSettings: View {
             if existing.isFinished { existing.window.close() }
             else { existing.window.makeKeyAndOrderFront(nil); return }
         }
-        let session = TerminalSession(arguments: ["--configure-harness", harness.id, "--endpoint", workspace.connectionState.transportEndpoint, "--project", project])
+        let session = TerminalSession(arguments: ["--harness-console", "--endpoint", workspace.connectionState.transportEndpoint, "--project", project])
         session.view.openURL = { raw in
             guard let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return false }
             return NSWorkspace.shared.open(url)

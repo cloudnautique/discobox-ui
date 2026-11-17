@@ -2,6 +2,7 @@
 set -euo pipefail
 # Separate fixture bundle; never placed in dist or included in a release archive.
 source "$(dirname "$0")/dev-env.sh"
+require_upstream
 swift build --product DiscoboxSmoke --configuration debug --disable-sandbox --cache-path .build/package-cache
 (
     cd Companion

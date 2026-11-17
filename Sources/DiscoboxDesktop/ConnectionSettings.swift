@@ -150,9 +150,9 @@ struct ConnectionSettings: View {
                     target = workspace
                     await target.connect(client: try ConnectionClients.make(profile), label: profile.endpoint)
                 }
-                if target.connectionState.endpointLabel == profile.endpoint, let failure = target.connectionState.connectionError {
+                if target.connectionState.endpointLabel == profile.endpoint, target.connectionState.connectionError != nil {
                     error = nil // The target's live error clears when automatic recovery succeeds.
-                    if failure.contains("Access refused") { needsAuthorization.insert(profile.id) }
+                    if target.connectionState.connectionErrorKind == .unauthorized { needsAuthorization.insert(profile.id) }
                 } else { needsAuthorization.remove(profile.id) }
             } catch { self.error = error.localizedDescription }
         }
@@ -293,7 +293,7 @@ struct ConnectionEditor: View {
                 } catch {
                     guard !Task.isCancelled else { return }
                     self.error = error.localizedDescription
-                    if profile.isRemote && error.localizedDescription.contains("Access refused") { enrollment = true; loadIdentity() }
+                    if profile.isRemote && (error as? DiscoboxError)?.kind == .unauthorized { enrollment = true; loadIdentity() }
                 }
             }
         } catch { self.error = error.localizedDescription }

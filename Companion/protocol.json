@@ -1,5 +1,9 @@
 {
   "version": 2,
+  "errorKinds": [
+    "certificate",
+    "transport"
+  ],
   "operations": {
     "answer": "manage",
     "approvalContext": "read",

@@ -15,7 +15,7 @@ public final class BoxSelectionStore {
     public private(set) var isOpeningSession = false
     public var commandError: String?
     @ObservationIgnored var selectionRevision = UUID()
-    @ObservationIgnored private var detailsRequest = UUID()
+    @ObservationIgnored private var detailsRequest = LatestRequest()
     @ObservationIgnored private var recentBoxes: [String: RecentBox] = [:]
     @ObservationIgnored private var inventoryLoadedAt: Date?
     @ObservationIgnored private var selectionLoad: Task<Void, Never>?
@@ -91,15 +91,14 @@ public final class BoxSelectionStore {
     public func refreshDetails() async {
         guard let client = connectionState.client, let projectID = connectionState.projectID, let sandboxID else { return }
         let current = selectionRevision
-        let request = UUID()
-        detailsRequest = request
+        let request = detailsRequest.begin()
         do {
             async let execResult = client.decode(.init(.execs, projectID: projectID, sandboxID: sandboxID), as: ExecsResponse.self)
             async let serviceResult = client.decode(.init(.services, projectID: projectID, sandboxID: sandboxID), as: ServicesResponse.self)
             // Publish terminal inventory as soon as it arrives. Service discovery
             // can be slow and must not delay mounting an interactive terminal.
             let terminals = try await execResult
-            guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
+            guard current == selectionRevision, detailsRequest.owns(request) else { return }
             let updatedExecs = terminals.execs.filter(\.tty).sorted {
                 if ($0.primary == true) != ($1.primary == true) { return $0.primary == true }
                 return $0.id < $1.id
@@ -117,11 +116,11 @@ public final class BoxSelectionStore {
                 await selectExec(execs.first(where: { $0.primary == true })?.id ?? execs.first?.id)
             }
             let serviceList = try await serviceResult
-            guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
+            guard current == selectionRevision, detailsRequest.owns(request) else { return }
             if services != serviceList.services { services = serviceList.services }
             if servicesObservedAt != serviceList.observedAt { servicesObservedAt = serviceList.observedAt }
         } catch {
-            guard current == selectionRevision, request == detailsRequest, !Task.isCancelled else { return }
+            guard current == selectionRevision, detailsRequest.owns(request) else { return }
             detailError = error.localizedDescription
         }
     }

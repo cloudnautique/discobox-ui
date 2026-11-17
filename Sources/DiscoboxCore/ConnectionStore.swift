@@ -11,19 +11,23 @@ public final class ConnectionStore {
     public private(set) var endpointLabel = ""
     public private(set) var transportEndpoint = ""
     public private(set) var connectionError: String?
+    /// The kind of `connectionError`, so views never match on its text.
+    public private(set) var connectionErrorKind: DiscoboxError.Kind?
     public private(set) var recovery = ConnectionRecovery()
     public private(set) var recoveryCount = 0
     @ObservationIgnored var client: (any DiscoboxClient)?
-    @ObservationIgnored var revision = UUID()
     @ObservationIgnored var recoveryInFlight = false
     public var canReconnect: Bool { client != nil }
+    /// True while `generation` (a captured connectionID) is still this
+    /// connection's lifetime and the calling task has not been cancelled.
+    func isCurrent(_ generation: UUID) -> Bool { generation == connectionID && !Task.isCancelled }
     public init() {}
     func invalidate(closeTransport: Bool = true) {
-        revision = UUID(); connectionID = UUID()
+        connectionID = UUID()
         if closeTransport { client?.closeConnection() }
         client = nil; projectID = nil; transportEndpoint = ""
         isConnected = false; isConnecting = false; isDemo = false
-        connectionError = nil; recovery.reset(); recoveryInFlight = false; recoveryCount = 0
+        connectionError = nil; connectionErrorKind = nil; recovery.reset(); recoveryInFlight = false; recoveryCount = 0
     }
     func begin(client: any DiscoboxClient, label: String, demo: Bool) {
         self.client = client; endpointLabel = label; transportEndpoint = label
@@ -31,10 +35,10 @@ public final class ConnectionStore {
     }
     func resolveProject() async throws -> Project {
         guard let client else { throw DiscoboxError("Connect to a server first.") }
-        let current = revision
+        let current = connectionID
         try await prepareTransport()
         let project = try await client.decode(.init(.defaultProject), as: Project.self)
-        guard current == revision, !Task.isCancelled else { throw CancellationError() }
+        guard isCurrent(current) else { throw CancellationError() }
         return project
     }
     func accept(_ project: Project) { projectID = project.id; isConnected = true }
@@ -47,10 +51,10 @@ public final class ConnectionStore {
         if automatically {
             guard let deadline = recovery.nextRetryAt, deadline <= now, !recovery.requiresAction else { return nil }
         }
-        recoveryInFlight = true; recovery.begin(); return revision
+        recoveryInFlight = true; recovery.begin(); return connectionID
     }
     func finishRecovery(_ token: UUID, now: Date) {
-        guard token == revision else { return }
+        guard token == connectionID else { return }
         recoveryInFlight = false
         if Task.isCancelled, recovery.isAttempting { failed(URLError(.networkConnectionLost), now: now) }
     }
@@ -61,17 +65,18 @@ public final class ConnectionStore {
     }
     func prepareTransport() async throws {
         guard let client else { throw DiscoboxError("Connect to a server first.") }
-        let current = revision
+        let current = connectionID
         let endpoint = try await client.prepareConnection()
-        guard current == revision, !Task.isCancelled else { throw CancellationError() }
+        guard isCurrent(current) else { throw CancellationError() }
         if let endpoint, endpoint != transportEndpoint { transportEndpoint = endpoint }
     }
     func didRefresh() {
-        connectionError = nil
+        connectionError = nil; connectionErrorKind = nil
         if !recoveryInFlight { recovery.reset() }
     }
     func failed(_ error: Error, now: Date) {
         connectionError = error.localizedDescription
+        connectionErrorKind = (error as? DiscoboxError)?.kind ?? (ConnectionRecovery.canRetry(error) ? .transport : .other)
         recovery.failed(error, now: now)
     }
     func capture() throws -> SessionAccess {

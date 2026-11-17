@@ -251,16 +251,20 @@ terminates that child only. This favors a small, inspectable first integration.
 If profiling warrants a persistent companion, retain request IDs and cancellation
 in a versioned protocol rather than adding ad hoc output parsing.
 
-The bounded request surface is one registry (`Companion/operations.go`): each
+The bounded request surface is one registry
+(`Companion/internal/bridge/operations.go`): each
 operation's handler, permission class (read, manage or shell) and
-deadline. `Companion/protocol.json` publishes the names, classes and wire
+deadline. `Companion/protocol.json` publishes the names, classes, error kinds and wire
 version; Go and Swift tests both check it, so `BridgeRequest.Operation` cannot
 drift from the companion. Each request field has one meaning (a box's new name
 is `name`, a secret is `secretID`, an audit record is `poolID` + `recordID`, a
 link is `link`, a tool is `toolID`); `requestID` and `kind` name only an
 approval request. The `--allow-manage` and `--allow-shell` flags keep a
 polling read from mutating by mistake. They are not a security boundary
-against another process running as the same user.
+against another process running as the same user. Failures carry an
+`errorKind` (`transport`, `certificate`) that the app maps to
+`DiscoboxError.Kind`; HTTP 401/403 is `unauthorized`. Views decide on the
+kind, never on message text.
 
 The default local shorthand is resolved through `pkg/endpoint.DefaultEndpoint()`,
 including `DISCOBOX_SERVER_ADDRESS`. A pinned Unix path or HTTP/S connection
@@ -274,6 +278,16 @@ Iroh enrollment uses an app-owned Keychain identity and the persistent transport
 Reads are an allowlist of operations, not an arbitrary HTTP proxy. The legacy
 `input` request and `--allow-input` flag are removed. Live keyboard input and
 output use the separate `--attach` PTY/WebSocket transport.
+
+The companion's `main.go` only parses flags and picks a mode. Its packages under
+`Companion/internal/` each own one responsibility: `wire` (request/response,
+protocol version, error kinds), `bridge` (endpoint transport, operation
+registry and handlers for bounded requests), `terminal` (`--attach`),
+`forward` (`--forward`), `iroh` (`--iroh-proxy`/`--iroh-identity`), `desktop`
+(`--desktop`), `console` (`--harness-console`), `diagnostics` (the private
+transport log) and `fdwait`. Upstream's unpublished `cli/internal` packages are
+reached only through `upstream`, whose package comment lists what upstream
+would need to promote to `pkg/` for that adapter to go away.
 
 ## Terminal strategy
 
@@ -290,8 +304,11 @@ forwards SIGWINCH as resize frames, and handles local HUP/TERM by detaching,
 not by forwarding those signals. Typed Ctrl-C remains remote terminal input.
 
 Session identities include a connection UUID, endpoint, project, box, and concrete
-exec ID. Switching tabs/boxes retains the surface and local stream; disconnect
-and app exit free all surfaces. Remote exit leaves its output visible, with a
+exec ID. Switching tabs/boxes retains the surface and local stream for the eight
+most recently hidden sessions per computer; older hidden ones are released like
+Reconnect (screen kept as previous output, 32 MB total per computer) and reattach
+with replay when shown again. Disconnect and app exit free all surfaces. Remote
+exit leaves its output visible, with a
 Reconnect action. Successful live terminal inventories evict obsolete execs only
 for their own box; loading transitions and cached inventories do not evict warm
 sessions. Stopped/removed boxes release their local terminal resources when the
@@ -477,7 +494,8 @@ while switching boxes and clears them on connection changes. The tab strip uses
 existing terminal inventory plus explicitly opened Audit/Services/Files tabs.
 All tool content uses one selected pane, optionally sharing an NSSplitView with
 the pinned harness; no independent left activity drawer is created. TerminalStore
-retains the Ghostty sessions while their tabs are hidden. Closing a terminal still
+retains recently hidden Ghostty sessions (bounded, see Terminal strategy) while
+their tabs are hidden. Closing a terminal still
 uses the existing confirmation and explicit backend close action.
 
 Command-Shift-brackets navigate tabs; Command-brackets cycle the two panes.

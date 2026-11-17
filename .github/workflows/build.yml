@@ -23,7 +23,6 @@ jobs:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DISCOBOX_REVISION: 936af3323d1b65f7bee68178d82d823988d0fb52
       GOPRIVATE: github.com/discobox-ai/*
       GIT_TERMINAL_PROMPT: '0'
 
@@ -32,6 +31,11 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+
+      - name: Read pinned Discobox revision
+        run: |
+          revision=$(bash scripts/upstream.sh revision)
+          echo "DISCOBOX_REVISION=$revision" >> "$GITHUB_ENV"
 
       - name: Check out pinned Discobox client sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -51,7 +55,7 @@ jobs:
       - name: Check Xcode and Metal
         run: |
           test "$(uname -m)" = arm64
-          test "$(git -C discobox rev-parse HEAD)" = "$DISCOBOX_REVISION"
+          bash scripts/upstream.sh check
           xcodebuild -version
           swift --version
           if ! xcrun -sdk macosx metal --version; then

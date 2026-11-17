@@ -76,9 +76,9 @@ import Observation
         guard let client = connectionState.client, let projectID = connectionState.projectID else { throw DiscoboxError("Connect to a server first.") }
         guard connection == nil || connection == connectionState.connectionID else { throw DiscoboxError("The destination computer reconnected. Review the new box settings again.") }
         let credentialPayload = try LaunchCredential.payload(credentials)
-        let current = connectionState.revision
+        let current = connectionState.connectionID
         await pools.refreshResources(force: true)
-        guard current == connectionState.revision, !Task.isCancelled else { throw CancellationError() }
+        guard connectionState.isCurrent(current) else { throw CancellationError() }
         let destination = poolID ?? pools.resources.defaultPoolID
         if let destination, !destination.isEmpty {
             guard !pending.clearingPools.contains(destination) else { throw DiscoboxError("This pool is clearing its caches. Wait for cleanup to finish.") }
@@ -90,17 +90,17 @@ import Observation
         }
         do {
             let box = try await client.decode(.init(.createBox, projectID: projectID, harnessID: harness, repository: repository, prompt: prompt, payload: credentialPayload, poolID: destination, discoboxAPI: discoboxAPI ? true : nil), as: Sandbox.self)
-            guard current == connectionState.revision else { throw CancellationError() }
+            guard current == connectionState.connectionID else { throw CancellationError() }
             await refresh()
-            guard current == connectionState.revision else { throw CancellationError() }
+            guard current == connectionState.connectionID else { throw CancellationError() }
             // Keep the accepted box selectable even if this first list refresh
             // failed or has not included it yet.
             inventory.includeCreated(box)
             await selection.selectBox(box.id)
-            guard current == connectionState.revision else { throw CancellationError() }
+            guard current == connectionState.connectionID else { throw CancellationError() }
             return inventory.sandboxes.first(where: { $0.id == box.id }) ?? box
         } catch {
-            if current == connectionState.revision { await refresh() }
+            if current == connectionState.connectionID { await refresh() }
             throw error
         }
     }

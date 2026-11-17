@@ -136,7 +136,7 @@ public extension BoxBrowser {
         if !item.power.isCurrent { return .init(title: "Status unknown", rank: 2) }
         if item.needsAttention { return .init(title: "Needs attention", rank: 0) }
         if item.power.isRunning { return .init(title: "Running", rank: 1) }
-        if item.box.status == "Stopped" { return .init(title: "Stopped", rank: 3) }
+        if item.box.lifecycle == .stopped { return .init(title: "Stopped", rank: 3) }
         return .init(title: item.box.status, rank: 2)
     }
     private static func precedes(_ lhs: ConnectedBox, _ rhs: ConnectedBox, sidebar: Bool) -> Bool {

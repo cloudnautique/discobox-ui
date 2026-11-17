@@ -8,3 +8,6 @@ export GOCACHE="$PWD/.build/go-cache"
 export GOTOOLCHAIN=local
 export IROH_GO_CACHE_DIR="$PWD/.build/iroh-cache"
 mkdir -p "$GOCACHE" "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE"
+
+# Fail fast unless discobox/ is the revision pinned in UPSTREAM_REVISION.
+require_upstream() { bash scripts/upstream.sh check; }

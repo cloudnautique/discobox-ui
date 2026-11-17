@@ -54,7 +54,7 @@ Three local build fixes were necessary:
 
 - `Sources/DiscoboxDesktop/GhosttyTerminal.swift` owns the runtime, surface,
   AppKit input adapter, and connection-scoped session store.
-- `Companion/attach.go` transports raw PTY bytes over the existing resumable
+- `Companion/internal/terminal/attach.go` transports raw PTY bytes over the existing resumable
   WebSocket protocol. Local process termination detaches without remote signals.
 - `--demo` uses a synthetic child; `--terminal-smoke` runs the offline integration
   checks and exits. The fixture server tests exercise the live transport path.

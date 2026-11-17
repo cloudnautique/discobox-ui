@@ -8,11 +8,9 @@ public struct BoxCreation: Identifiable, Sendable {
     public let item: ConnectedBox
     public enum Phase: String, Sendable { case starting, failed, ready }
     public var phase: Phase {
-        let runtime = item.box.runtime
         if item.box.isRunning { return .ready }
-        if item.box.matchesAttention || runtime.displayState == "stopped" ||
-            (runtime.displayState == nil && runtime.state == "ready" && runtime.runtimeState == "stopped") { return .failed }
-        return item.box.isRunning ? .ready : .starting
+        if item.box.matchesAttention || item.box.lifecycle == .stopped { return .failed }
+        return .starting
     }
     public var message: String {
         if let error = item.box.runtime.errorMessage, !error.isEmpty { return error }

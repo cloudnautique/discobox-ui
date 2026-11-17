@@ -84,3 +84,11 @@ private actor SessionRecordingClient: DiscoboxClient {
     #expect(request.projectID == session.connectionState.projectID)
     session.disconnect()
 }
+
+@Test func onlyTheLatestRequestMayPublish() {
+    var latest = LatestRequest()
+    let first = latest.begin(), second = latest.begin()
+    #expect(!latest.owns(first) && latest.owns(second))
+    latest.invalidate()
+    #expect(!latest.owns(second))
+}

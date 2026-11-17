@@ -4,79 +4,30 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"syscall"
 
-	serverendpoint "github.com/discobox-ai/discobox/pkg/endpoint"
-	"time"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/bridge"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/console"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/desktop"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/forward"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/iroh"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/terminal"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/wire"
 )
-
-const maxBody = 8 << 20
-
-var errEndpointRedirect = errors.New("redirects are not accepted")
-
-type request struct {
-	DiscoboxAPI *bool           `json:"discoboxAPI,omitempty"`
-	RemotePath  string          `json:"remotePath,omitempty"`
-	LocalPath   string          `json:"localPath,omitempty"`
-	Operation   string          `json:"operation"`
-	ProjectID   string          `json:"projectID"`
-	SandboxID   string          `json:"sandboxID"`
-	ExecID      string          `json:"execID"`
-	HarnessID   string          `json:"harnessID,omitempty"`
-	PoolID      string          `json:"poolID,omitempty"`
-	Repository  string          `json:"repository,omitempty"`
-	Prompt      string          `json:"prompt,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	RequestID   string          `json:"requestID,omitempty"`
-	Kind        string          `json:"kind,omitempty"`
-	SecretID    string          `json:"secretID,omitempty"`
-	RecordID    string          `json:"recordID,omitempty"`
-	ToolID      string          `json:"toolID,omitempty"`
-	Link        string          `json:"link,omitempty"`
-	Action      string          `json:"action,omitempty"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
-}
-
-type response struct {
-	Version   int    `json:"version"`
-	Status    int    `json:"status"`
-	Body      []byte `json:"body,omitempty"`
-	Error     string `json:"error,omitempty"`
-	ErrorKind string `json:"errorKind,omitempty"`
-}
-
-type bridge struct {
-	client      *http.Client
-	base        string
-	allowShell  bool
-	allowManage bool
-}
 
 func main() {
 	irohProxy := flag.Bool("iroh-proxy", false, "Keep an authenticated Iroh connection behind a private socket")
 	irohIdentity := flag.Bool("iroh-identity", false, "Print the public identity supplied over stdin")
 	endpoint := flag.String("endpoint", "unix://", "An existing Discobox endpoint")
-	desktop := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
+	desktopMode := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
 	desktopURL := flag.String("desktop-url", "", "Existing local desktop forward")
-	forward := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
-	configure := flag.String("configure-harness", "", "Run only a harness interactive setup flow")
-	attach := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
+	forwardMode := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
+	harnessConsole := flag.Bool("harness-console", false, "Open the console's harness screen for --project")
+	attachMode := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
 	attachStatus := flag.String("attach-status", "", "Private FIFO for terminal connection state")
 	project := flag.String("project", "", "Project ID")
 	box := flag.String("box", "", "Box ID")
@@ -87,18 +38,18 @@ func main() {
 	diagnosticConnection := flag.String("diagnostic-connection", "", "Opaque UI connection generation for diagnostics")
 	flag.Parse()
 	finishDiagnostics := func() {}
-	if *attach || *irohProxy {
+	if *attachMode || *irohProxy {
 		component := "terminal"
 		if *irohProxy {
 			component = "iroh_proxy"
 		}
-		finishDiagnostics = startDiagnostics(component, *endpoint, *diagnosticConnection, request{ProjectID: *project, SandboxID: *box, ExecID: *execID})
+		finishDiagnostics = diagnostics.Start(component, *endpoint, *diagnosticConnection, wire.Request{ProjectID: *project, SandboxID: *box, ExecID: *execID})
 	}
 	defer finishDiagnostics()
-	if *configure != "" {
-		if err := runHarnessSetup(*endpoint, *project, *configure); err != nil {
+	if *harnessConsole {
+		if err := console.RunHarnesses(*endpoint, *project); err != nil {
 			fmt.Fprintf(os.Stderr, "\r\nSetup failed: %s\r\n", err)
-			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
 			os.Exit(1)
 		}
@@ -106,337 +57,52 @@ func main() {
 		return
 	}
 	if *irohProxy || *irohIdentity {
-		if err := runIroh(*endpoint, *irohIdentity, os.Stdin, os.Stdout); err != nil {
-			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error(), "errorKind": companionErrorKind(err)})
-			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+		if err := iroh.Run(*endpoint, *irohIdentity, os.Stdin, os.Stdout); err != nil {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error(), "errorKind": wire.ErrorKind(err)})
+			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
 	}
 	if *demo {
-		_ = terminalDemo()
+		_ = terminal.Demo()
 		return
 	}
-	if *desktop {
-		if err := runDesktop(*desktopURL, os.Stdin, os.Stdout); err != nil {
+	if *desktopMode {
+		if err := desktop.Run(*desktopURL, os.Stdin, os.Stdout); err != nil {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error()})
-			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
 	}
-	if *forward {
-		if err := runForward(*endpoint, request{ProjectID: *project, SandboxID: *box}, os.Stdin, os.Stdout); err != nil {
+	if *forwardMode {
+		if err := forward.Run(*endpoint, wire.Request{ProjectID: *project, SandboxID: *box}, os.Stdin, os.Stdout); err != nil {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ports": []any{}, "error": err.Error()})
-			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
 	}
-	if *attach {
-		if err := runAttach(*endpoint, request{ProjectID: *project, SandboxID: *box, ExecID: *execID}, *attachStatus); err != nil {
+	if *attachMode {
+		if err := terminal.Attach(*endpoint, wire.Request{ProjectID: *project, SandboxID: *box, ExecID: *execID}, *attachStatus); err != nil {
 			if *attachStatus == "" {
 				fmt.Fprintf(os.Stderr, "\r\nTerminal disconnected: %s\r\n", err)
 			}
-			diagnose(diagnosticEvent{Event: "helper_failed", Reason: diagnosticReason(err)})
+			diagnostics.Emit(diagnostics.Event{Event: "helper_failed", Reason: diagnostics.Reason(err)})
 			finishDiagnostics()
 			os.Exit(1)
 		}
 		return
 	}
-	out := response{Version: protocolVersion}
-	err := runManaged(*endpoint, *allowShell, *allowManage, os.Stdin, &out)
+	out := wire.Response{Version: wire.ProtocolVersion}
+	err := bridge.RunManaged(*endpoint, *allowShell, *allowManage, os.Stdin, &out)
 	if err != nil {
 		out.Error = err.Error()
-		out.ErrorKind = companionErrorKind(err)
+		out.ErrorKind = wire.ErrorKind(err)
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(out)
-}
-
-func companionErrorKind(err error) string {
-	if errors.Is(err, errEndpointRedirect) {
-		return ""
-	}
-	var untrusted x509.UnknownAuthorityError
-	var hostname x509.HostnameError
-	var invalid x509.CertificateInvalidError
-	if errors.As(err, &untrusted) || errors.As(err, &hostname) || errors.As(err, &invalid) {
-		return ""
-	}
-	var transportError *url.Error
-	var networkError net.Error
-	if errors.As(err, &transportError) || errors.As(err, &networkError) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return "transport"
-	}
-	return ""
-}
-
-func runManaged(endpoint string, allowShell, allowManage bool, input io.Reader, out *response) error {
-	var req request
-	decoder := json.NewDecoder(io.LimitReader(input, 128<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return fmt.Errorf("invalid request: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return errors.New("expected one request")
-	}
-	b, err := newBridge(endpoint)
-	if err != nil {
-		return err
-	}
-	b.allowShell = allowShell
-	b.allowManage = allowManage
-	defer b.client.CloseIdleConnections()
-	op, err := lookupOperation(req.Operation)
-	if err != nil {
-		return err
-	}
-	op.configure(b.client)
-	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
-	ctx, cancel := context.WithTimeout(parent, op.deadlineFor(req))
-	defer cancel()
-	result, err := b.dispatch(ctx, op, req)
-	if err != nil {
-		return err
-	}
-	// The wire version belongs to this process boundary. Assembled responses
-	// (harness metadata, credential previews) do not pass through b.call.
-	result.Version = protocolVersion
-	*out = result
-	return nil
-}
-
-func resolveLocalEndpoint(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" || value == "unix://" {
-		return serverendpoint.DefaultEndpoint()
-	}
-	return value
-}
-
-func defaultSocket() string {
-	parsed, err := serverendpoint.Parse(serverendpoint.DefaultEndpoint())
-	if err != nil || parsed.Scheme != "unix" {
-		return ""
-	}
-	return parsed.Value
-}
-
-func newBridge(endpoint string) (*bridge, error) {
-	u, err := url.Parse(resolveLocalEndpoint(endpoint))
-	if err != nil {
-		return nil, fmt.Errorf("invalid endpoint: %w", err)
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.ResponseHeaderTimeout = 10 * time.Second
-	transport.MaxResponseHeaderBytes = 64 << 10
-	base := strings.TrimRight(u.String(), "/")
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return nil, errors.New("endpoint must not contain credentials, a query, or a fragment")
-	}
-	switch u.Scheme {
-	case "unix":
-		if u.Host != "" {
-			return nil, errors.New("use unix:///absolute/socket/path or unix://")
-		}
-		path := u.Path
-		if path == "" {
-			parsed, parseErr := serverendpoint.Parse(u.String())
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			path = parsed.Value
-		}
-		if !filepath.IsAbs(path) {
-			return nil, errors.New("Unix socket path must be absolute")
-		}
-		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", path)
-		}
-		base = "http://discobox.local"
-	case "http", "https":
-		if u.Hostname() == "" {
-			return nil, errors.New("endpoint requires a hostname")
-		}
-	default:
-		return nil, errors.New("this build supports unix:// and existing http:// or https:// endpoints; Iroh connections use the app's private transport")
-	}
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return errEndpointRedirect },
-	}
-	return &bridge{client: client, base: base}, nil
-}
-
-var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-func validID(id string) error {
-	if len(id) > 256 || !identifier.MatchString(id) {
-		return errors.New("invalid resource identifier")
-	}
-	return nil
-}
-
-func route(req request) (method, path string, body []byte, err error) {
-	method = http.MethodGet
-	if req.Operation == "serverPeer" {
-		return method, "/peer", nil, nil
-	}
-	if req.Operation == "defaultProject" {
-		return method, "/projects/default", nil, nil
-	}
-	if err = validID(req.ProjectID); err != nil {
-		return
-	}
-	project := "/projects/" + req.ProjectID
-	if req.Operation == "harnesses" {
-		return method, project + "/harness-configs", nil, nil
-	}
-	if req.Operation == "sandboxes" {
-		return method, project + "/sandboxes", nil, nil
-	}
-	if err = validID(req.SandboxID); err != nil {
-		return
-	}
-	base := "/api" + project + "/sandboxes/" + req.SandboxID
-	switch req.Operation {
-	case "execs", "services":
-		return method, base + "/" + req.Operation, nil, nil
-	case "screen":
-		if err = validID(req.ExecID); err != nil {
-			return
-		}
-		if req.ExecID == "primary" {
-			err = errors.New("select a concrete exec; virtual primary is not supported")
-			return
-		}
-		path = base + "/execs/" + req.ExecID + "/" + req.Operation
-		return method, path + "?scrollback=250", nil, nil
-	default:
-		return "", "", nil, errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
-	}
-}
-
-// routed serves the plain resource reads in route().
-func (b *bridge) routed(ctx context.Context, req request) (response, error) {
-	method, path, body, err := route(req)
-	if err != nil {
-		return response{}, err
-	}
-	res, err := b.call(ctx, method, path, body)
-	if req.Operation == "sandboxes" && err == nil && res.Status == 200 {
-		res.Body = withPreparationStatus(res.Body)
-	}
-	return res, err
-}
-
-func (b *bridge) requireRunningBox(ctx context.Context, req request) error {
-	box, err := b.call(ctx, "GET", "/projects/"+req.ProjectID+"/sandboxes/"+req.SandboxID, nil)
-	if err != nil {
-		return err
-	}
-	var state struct {
-		Runtime struct {
-			RuntimeState string `json:"runtimeState"`
-		} `json:"runtime"`
-	}
-	if box.Status != 200 || json.Unmarshal(box.Body, &state) != nil || state.Runtime.RuntimeState != "running" {
-		return errors.New("input requires a currently running box")
-	}
-	return nil
-}
-func (b *bridge) requireRunning(ctx context.Context, req request) error {
-	if err := b.requireRunningBox(ctx, req); err != nil {
-		return err
-	}
-	exec, err := b.call(ctx, "GET", "/api/projects/"+req.ProjectID+"/sandboxes/"+req.SandboxID+"/execs/"+req.ExecID, nil)
-	if err != nil {
-		return err
-	}
-	var terminal struct {
-		Status     string  `json:"status"`
-		ObservedAt *string `json:"observedAt"`
-		TTY        bool    `json:"tty"`
-	}
-	if exec.Status != 200 || json.Unmarshal(exec.Body, &terminal) != nil || terminal.Status != "running" || terminal.ObservedAt != nil || !terminal.TTY {
-		return errors.New("input requires a live, running terminal")
-	}
-	return nil
-}
-
-func (b *bridge) call(ctx context.Context, method, path string, body []byte) (response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, b.base+path, bytes.NewReader(body))
-	if err != nil {
-		return response{}, err
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-		if method == "PUT" && strings.Contains(path, "/files/content?") {
-			req.Header.Set("Content-Type", "application/octet-stream")
-		}
-	}
-	res, err := b.client.Do(req)
-	if err != nil {
-		return response{}, fmt.Errorf("existing server request failed: %w", err)
-	}
-	defer res.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(res.Body, maxBody+1))
-	if err != nil {
-		return response{}, err
-	}
-	if len(data) > maxBody {
-		return response{}, errors.New("response exceeds 8 MiB")
-	}
-	return response{Version: protocolVersion, Status: res.StatusCode, Body: data}, nil
-}
-
-// Only a new shell can be created/started, in one explicit authorized request.
-// There is intentionally no general exec-start operation.
-func (b *bridge) newShell(ctx context.Context, req request) (response, error) {
-	if err := validID(req.ProjectID); err != nil {
-		return response{}, err
-	}
-	if err := validID(req.SandboxID); err != nil {
-		return response{}, err
-	}
-	if err := b.requireRunningBox(ctx, req); err != nil {
-		return response{}, err
-	}
-	base := "/api/projects/" + req.ProjectID + "/sandboxes/" + req.SandboxID + "/execs"
-	created, err := b.call(ctx, "POST", base+"?wait=ready", []byte(`{"shell":true,"tty":true,"cols":100,"rows":30,"env":{"TERM":"xterm-256color"}}`))
-	if err != nil {
-		return response{}, fmt.Errorf("shell creation may have succeeded; refresh terminals before retrying: %w", err)
-	}
-	if created.Status < 200 || created.Status >= 300 {
-		return created, nil
-	}
-	var record struct {
-		Exec struct {
-			ID      string `json:"id"`
-			Primary bool   `json:"primary"`
-		} `json:"exec"`
-	}
-	if err := json.Unmarshal(created.Body, &record); err != nil {
-		return response{}, err
-	}
-	id := record.Exec.ID
-	if validID(id) != nil || id == "primary" || record.Exec.Primary {
-		return response{}, errors.New("invalid new shell identity")
-	}
-	// Start only the shell returned by this request, never an existing terminal.
-	started, err := b.call(ctx, "POST", base+"/"+id+"/start", nil)
-	if err != nil {
-		return response{}, fmt.Errorf("shell %s was created; refresh before retrying: %w", id, err)
-	}
-	if started.Status < 200 || started.Status >= 300 {
-		return started, nil
-	}
-	return b.call(ctx, "GET", base+"/"+id, nil)
 }
