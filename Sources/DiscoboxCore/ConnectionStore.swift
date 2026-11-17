@@ -32,6 +32,8 @@ public final class ConnectionStore {
         connectionError = nil; connectionErrorKind = nil; recovery.reset(); recoveryInFlight = false; recoveryCount = 0
     }
     func begin(client: any DiscoboxClient, label: String, demo: Bool) {
+        // Reconnect reuses the client; its read companion must not.
+        client.startGeneration()
         self.client = client; endpointLabel = label; transportEndpoint = label
         isDemo = demo; isConnecting = true
     }
