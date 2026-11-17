@@ -290,8 +290,11 @@ forwards SIGWINCH as resize frames, and handles local HUP/TERM by detaching,
 not by forwarding those signals. Typed Ctrl-C remains remote terminal input.
 
 Session identities include a connection UUID, endpoint, project, box, and concrete
-exec ID. Switching tabs/boxes retains the surface and local stream; disconnect
-and app exit free all surfaces. Remote exit leaves its output visible, with a
+exec ID. Switching tabs/boxes retains the surface and local stream for the eight
+most recently hidden sessions per computer; older hidden ones are released like
+Reconnect (screen kept as previous output, 32 MB total per computer) and reattach
+with replay when shown again. Disconnect and app exit free all surfaces. Remote
+exit leaves its output visible, with a
 Reconnect action. Successful live terminal inventories evict obsolete execs only
 for their own box; loading transitions and cached inventories do not evict warm
 sessions. Stopped/removed boxes release their local terminal resources when the
@@ -477,7 +480,8 @@ while switching boxes and clears them on connection changes. The tab strip uses
 existing terminal inventory plus explicitly opened Audit/Services/Files tabs.
 All tool content uses one selected pane, optionally sharing an NSSplitView with
 the pinned harness; no independent left activity drawer is created. TerminalStore
-retains the Ghostty sessions while their tabs are hidden. Closing a terminal still
+retains recently hidden Ghostty sessions (bounded, see Terminal strategy) while
+their tabs are hidden. Closing a terminal still
 uses the existing confirmation and explicit backend close action.
 
 Command-Shift-brackets navigate tabs; Command-brackets cycle the two panes.

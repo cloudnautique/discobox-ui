@@ -1,6 +1,7 @@
 #if DEBUG
 @testable import DiscoboxUI
 import AppKit
+import SwiftUI
 import GhosttyKit
 import DiscoboxCore
 
@@ -8,6 +9,7 @@ import DiscoboxCore
 /// synthetic PTY child is used; this path cannot use saved connection settings.
 @MainActor enum TerminalSmoke {
     static func run(workspace: ConnectionSession, store: TerminalStore) async {
+        let bounded = TerminalStore(hiddenSessionLimit: 1)
         do {
             guard workspace.connectionState.isDemo, let project = workspace.connectionState.projectID,
                   let box = workspace.selection.sandboxID, let exec = workspace.selection.execID else { throw Failure("Demo selection missing") }
@@ -99,17 +101,51 @@ import DiscoboxCore
             store.retainRunningBoxes(workspace.inventory.sandboxes, connection: identity.connection)
             guard other.view.surface == nil, session.view.surface != nil else { throw Failure("Stopped-box cleanup affected the live box") }
             print("SMOKE: obsolete surfaces freed; valid and other-box sessions preserved")
+            // Evaluating a terminal view must not start a child; its task does.
+            func fixture(_ exec: String) -> TerminalIdentity { TerminalIdentity(connection: identity.connection, endpoint: "offline", project: project, box: box, exec: exec, demo: true) }
+            let shownIdentity = fixture("shown-fixture"), olderIdentity = fixture("older-fixture"), newerIdentity = fixture("newer-fixture")
+            let host = NSHostingView(rootView: LiveTerminal(identity: shownIdentity).environment(bounded).environment(ServiceForwards()).environment(workspace))
+            let shownWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            shownWindow.contentView = host
+            shownWindow.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            guard bounded.existing(shownIdentity) == nil else { throw Failure("Evaluating the terminal view created a session") }
+            do { try await wait { bounded.existing(shownIdentity)?.view.window === shownWindow } }
+            catch { throw Failure("The terminal view's task did not create and mount its session") }
+            let shown = bounded.existing(shownIdentity)!
+            print("SMOKE: session created by the view task, not by body")
+            // Over the hidden limit, the least recently used hidden session is
+            // released; the mounted one is kept even though it is older.
+            let older = bounded.session(olderIdentity)
+            let newer = bounded.session(newerIdentity)
+            bounded.releaseHiddenSessions()
+            guard bounded.existing(shownIdentity) === shown, shown.view.surface != nil,
+                  bounded.existing(olderIdentity) == nil, older.view.surface == nil,
+                  bounded.existing(newerIdentity) === newer, newer.view.surface != nil else {
+                throw Failure("Eviction released a shown session or kept the least recently used hidden one")
+            }
+            let returned = bounded.session(olderIdentity)
+            guard returned !== older, returned.view.surface != nil else { throw Failure("A released terminal did not reattach on return") }
+            // Unmount first so the view does not start a replacement.
+            shownWindow.contentView = NSView()
+            shownWindow.orderOut(nil)
+            bounded.closeAll()
+            print("SMOKE: hidden sessions bounded; shown session kept; released session reattaches")
+            // Exit is reported by Ghostty's callbacks, even while hidden.
+            window.contentView = NSView()
             "\u{3}".withCString { ghostty_surface_text(surface, $0, 1) }
-            try await wait { ghostty_surface_process_exited(surface) }
+            do { try await wait { ghostty_surface_process_exited(surface) && session.ended && session.view.readOnly } }
+            catch { throw Failure("Child exit did not end the hidden session: exited=\(ghostty_surface_process_exited(surface)) ended=\(session.ended) readOnly=\(session.view.readOnly)") }
             session.close()
             window.orderOut(nil)
             store.closeAll()
-            print("TERMINAL_SMOKE_OK: PTY output, Unicode, keyboard input, text insertion, navigation in legacy/application/extended modes, Control-A, resize, alternate screen, selection, retained session identity, process exit, surface teardown")
+            print("TERMINAL_SMOKE_OK: PTY output, Unicode, keyboard input, text insertion, navigation in legacy/application/extended modes, Control-A, resize, alternate screen, selection, retained session identity, view-task session creation, hidden-session bound, callback-driven process exit, surface teardown")
             fflush(stdout)
             exit(0)
         } catch {
             print("TERMINAL_SMOKE_FAILED: \(error)")
             fflush(stdout)
+            bounded.closeAll()
             store.closeAll()
             exit(1)
         }
