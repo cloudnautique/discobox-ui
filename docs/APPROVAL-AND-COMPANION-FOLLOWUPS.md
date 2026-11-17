@@ -48,8 +48,20 @@ does not establish that those checks are bypassed.
    scope and receipt tests stay in place. Run approval workflow, queue, conflict,
    dialog-receipt and consent fixtures on macOS after wiring the views.
 
-The Mac/toolchain is available here. The remaining work is the extraction and
-lifecycle verification, not an environment prerequisite.
+### Status: implemented
+
+Implemented as `ApprovalReviewLifecycle` plus `LegacyApprovalReview`,
+`BindingApprovalReview` and `ConsentApprovalReview` in Core, with the three forms
+bound to them. Legacy and consent decisions now withdraw when closed during
+validation, and legacy credential creation checks closure after validation. After
+an unconfirmed decision, legacy and consent forms require Check again (a fresh read)
+instead of re-enabling decisions. The step 5 cases are covered by
+`ApprovalReviewTests` on Linux; the approval duration fixture (run by
+`--approval-workflow-smoke`) adds a close-during-validation mode. The views were
+rewired without a macOS build: `--approval-workflow-smoke` (duration, queue,
+modern, dialog-receipt and upstream/consent panels), `--approval-queue-smoke`,
+`--binding-conflict-smoke`, `--agent-activity-smoke` and `--command-smoke` (the
+inbox now has one window-level owner) still need to run on macOS.
 
 ## Review finding 5: bounded helper processes per inventory refresh
 

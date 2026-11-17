@@ -94,6 +94,20 @@ as its default action. Each review can return to the remaining queue; closing or
 choosing Later never answers a request. A successful server acknowledgement removes
 only that request locally before a follow-up inbox read, so a slow refresh cannot
 leave its attention badge stuck. Queue state is tied to its original connection.
+One window-level `ApprovalInboxPresentation` presents the inbox: rows and buttons
+request a computer's inbox (optionally one box's requests), and the single sheet
+uses that computer's session even if another computer becomes active.
+
+Each request format has its own main-actor review model in Core
+(`LegacyApprovalReview`, `BindingApprovalReview`, `ConsentApprovalReview`); forms
+keep only presentation state. A shared `ApprovalReviewLifecycle` holds the request
+and connection scope and moves from loading to review, validation, transmission,
+then a receipt or an uncertain failure. The decision is frozen when submission
+starts. Closing withdraws pending reads and anything not yet sent, including inline
+credential creation after validation, and clears entered tokens. A transmitted
+operation completes independently and is never replayed; if the form has closed,
+an unconfirmed outcome is reported to its computer's session. An uncertain outcome
+disables decisions until a fresh server read.
 
 Structured credential requests have separate use/delegate decisions and modern
 `ttlSeconds`/scope/delivery fields. Scalar requests on older servers retain their
