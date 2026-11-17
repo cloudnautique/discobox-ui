@@ -86,8 +86,7 @@ private struct FixtureExecutable {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("Discobox fixture \(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         url = directory.appendingPathComponent("fixture companion")
-        try Data((script + "\n").utf8).write(to: url)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        try writeExecutable(script + "\n", to: url)
     }
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }

@@ -16,8 +16,7 @@ import Testing
     printf '%s\\n' '{"endpoint":"unix:///tmp/isolated-iroh-fixture.sock","peerID":"d1-fixture"}'
     exec /bin/cat >/dev/null
     """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    try writeExecutable(script, to: executable)
     let connection = IrohConnection(executable: executable, endpoint: "discobox://fixture", seed: Data(repeating: 0, count: 32))
     async let first = connection.prepare()
     async let second = connection.prepare()
@@ -112,8 +111,7 @@ private struct RestartingIrohFixture {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         url = directory.appendingPathComponent("companion")
         let source = "#!/bin/sh\ncd \"$(dirname \"$0\")\"\n" + script + "\n"
-        try Data(source.utf8).write(to: url)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        try writeExecutable(source, to: url)
     }
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }

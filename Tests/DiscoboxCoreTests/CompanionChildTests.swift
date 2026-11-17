@@ -17,8 +17,7 @@ private func fixture(_ body: String) throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("companion-child-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let executable = directory.appendingPathComponent("companion")
-    try Data("#!/bin/sh\n\(body)\n".utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    try writeExecutable("#!/bin/sh\n\(body)\n", to: executable)
     return executable
 }
 private func describe(_ event: CompanionChild<Line>.Event) -> String {
