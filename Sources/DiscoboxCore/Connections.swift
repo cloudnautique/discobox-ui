@@ -7,41 +7,67 @@ import Observation
     public let workspace = Workspace()
     @ObservationIgnored private var polling: [Task<Void, Never>] = []
     @ObservationIgnored private var attempt = UUID()
+    @ObservationIgnored private let schedule: PollingSchedule
+    var cadence: PollingCadence { get { schedule.cadence } set { schedule.cadence = newValue } }
     func beginConnection() -> UUID { stopPolling(); return attempt }
     func ownsAttempt(_ value: UUID) -> Bool { attempt == value }
-    public init(profile: ConnectionProfile) {
+    public init(profile: ConnectionProfile, clock: PollingClock = .continuous) {
         self.profile = profile
         id = ConnectionProfiles.normalizedEndpoint(profile.endpoint)
+        schedule = PollingSchedule(clock: clock)
         workspace.streamsLiveTerminals = true
     }
     public func update(_ profile: ConnectionProfile) { self.profile = profile }
     func startPolling() {
         stopPolling()
         let workspace = workspace
-        polling = [Task {
-            while !Task.isCancelled {
-                let delay = workspace.recovery.nextRetryAt.map { min(3, max(0.05, $0.timeIntervalSinceNow)) } ?? 3
-                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-                if workspace.isConnecting || workspace.recovery.isAttempting { continue }
-                if workspace.recovery.nextRetryAt != nil { await workspace.retryConnection(automatically: true) }
-                else if workspace.isConnected && workspace.connectionError == nil { await workspace.refresh() }
-            }
-        }, Task {
-            while !Task.isCancelled {
-                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshApprovals() }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            }
-        }, Task(priority: .utility) {
-            while !Task.isCancelled {
-                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshResources() }
-                do { try await Task.sleep(for: .seconds(30)) } catch { return }
-            }
-        }, Task(priority: .utility) {
-            while !Task.isCancelled {
-                if workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting { await workspace.refreshUsage() }
-                do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            }
+        polling = [Self.poll(.inventory, workspace: workspace, schedule: schedule, immediately: false) {
+            if workspace.isConnecting || workspace.recovery.isAttempting { return }
+            if workspace.recovery.nextRetryAt != nil { await workspace.retryConnection(automatically: true) }
+            else if workspace.isConnected && workspace.connectionError == nil { await workspace.refresh() }
+        }, Self.poll(.approvals, workspace: workspace, schedule: schedule) {
+            if Self.isReady(workspace) { await workspace.refreshApprovals() }
+        }, Self.poll(.resources, workspace: workspace, schedule: schedule, priority: .utility) {
+            if Self.isReady(workspace) { await workspace.refreshResources() }
+        }, Self.poll(.usage, workspace: workspace, schedule: schedule, priority: .utility) {
+            if Self.isReady(workspace) { await workspace.refreshUsage() }
         }]
+        observeRecovery(attempt)
+    }
+    private static func isReady(_ workspace: Workspace) -> Bool {
+        workspace.isConnected && workspace.connectionError == nil && !workspace.isConnecting && !workspace.recovery.isAttempting
+    }
+    /// A wake only recomputes the deadline from the last poll, so lowering the
+    /// cadence never adds a poll and raising it polls as soon as one is due.
+    private static func poll(_ loop: PollingLoop, workspace: Workspace, schedule: PollingSchedule, priority: TaskPriority? = nil,
+                             immediately: Bool = true, work: @escaping @MainActor @Sendable () async -> Void) -> Task<Void, Never> {
+        Task(priority: priority) { @MainActor in
+            var last = immediately ? nil : schedule.clock.now()
+            while !Task.isCancelled {
+                do {
+                    while true {
+                        let retryIn = loop == .inventory ? workspace.recovery.nextRetryAt?.timeIntervalSinceNow : nil
+                        let delay = schedule.cadence.delay(loop, sinceLastPoll: last.map { schedule.clock.now() - $0 }, retryIn: retryIn)
+                        if let delay, delay <= .zero { break }
+                        if try await !schedule.sleep(for: delay) { break }
+                    }
+                } catch { return }
+                await work()
+                last = schedule.clock.now()
+            }
+        }
+    }
+    /// Retries scheduled outside the inventory loop (wake, network hints,
+    /// reconnect) must not wait out a long background interval.
+    private func observeRecovery(_ generation: UUID) {
+        let retry = workspace.recovery.nextRetryAt
+        withObservationTracking { _ = workspace.recovery.nextRetryAt } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.attempt == generation else { return }
+                if self.workspace.recovery.nextRetryAt != retry { self.schedule.wake() }
+                self.observeRecovery(generation)
+            }
+        }
     }
     func stopPolling() { attempt = UUID(); polling.forEach { $0.cancel() }; polling.removeAll() }
     deinit { polling.forEach { $0.cancel() } }
@@ -76,26 +102,34 @@ public struct ConnectedBox: Identifiable, Sendable {
 @MainActor @Observable public final class Connections {
     public let browser = BoxBrowser()
     public private(set) var sessions: [ConnectionSession]
-    public private(set) var activeID: String
+    public private(set) var activeID: String { didSet { if activeID != oldValue { updateCadence() } } }
     var creations: [BoxCreation] = []
     @ObservationIgnored private let pollingEnabled: Bool
+    @ObservationIgnored private let clock: PollingClock
+    /// Set by Desktop from app activation and window occlusion.
+    public var presence = PollingPresence.focused { didSet { if presence != oldValue { updateCadence() } } }
     public var active: ConnectionSession { sessions.first { $0.id == activeID } ?? sessions[0] }
     public var suggestedCreationComputerID: String {
         if let id = browser.computerID, session(id)?.workspace.isConnected == true { return id }
         if active.workspace.isConnected { return activeID }
         return sessions.first(where: { $0.workspace.isConnected })?.id ?? activeID
     }
-    public init(polling: Bool = true) {
-        let local = ConnectionSession(profile: .thisComputer)
-        sessions = [local]; activeID = local.id; pollingEnabled = polling
+    public init(polling: Bool = true, clock: PollingClock = .continuous) {
+        let local = ConnectionSession(profile: .thisComputer, clock: clock)
+        sessions = [local]; activeID = local.id; pollingEnabled = polling; self.clock = clock
+        updateCadence()
     }
     public func session(_ id: String) -> ConnectionSession? { sessions.first { $0.id == id } }
     public func syncProfiles(_ profiles: [ConnectionProfile]) {
         for profile in profiles {
             let id = ConnectionProfiles.normalizedEndpoint(profile.endpoint)
             if let existing = session(id) { existing.update(profile) }
-            else { sessions.append(ConnectionSession(profile: profile)) }
+            else { sessions.append(ConnectionSession(profile: profile, clock: clock)) }
         }
+        updateCadence()
+    }
+    private func updateCadence() {
+        for host in sessions { host.cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID) }
     }
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }

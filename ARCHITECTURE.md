@@ -317,7 +317,9 @@ silently dropped. History uses per-trail inclusive time bounds; HTTP following
 uses per-pool row cursors. Timestamp-only ties are reported as a limitation.
 Body previews are explicit bounded reads, never included in background polling.
 
-Approval snapshots are project-wide and independently polled every two seconds.
+Approval snapshots are project-wide and independently polled: every two seconds
+for the focused computer, slower for others and while the window is hidden, but
+never paused, so notifications still arrive in the background.
 Connection/request generations reject stale reads. Answers re-read the specific
 pending record then perform one authenticated backend mutation without retry.
 Policy JSON preserves resolved variables and unknown fields. Secret values are
