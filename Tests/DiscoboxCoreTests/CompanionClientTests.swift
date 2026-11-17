@@ -52,29 +52,28 @@ import Testing
 }
 
 @Test func inFlightRequestsDoNotOccupyCooperativeThreads() async throws {
-    // Twice as many one-second helpers as the cooperative pool has threads.
-    // Requests that blocked pool threads would complete in successive waves,
-    // and the probe would wait behind them; concurrently they take ~1 second.
-    let body = Data(#"{"id":"p","name":"Default"}"#.utf8).base64EncodedString()
+    // Twice as many helpers as the cooperative pool has threads, each waiting
+    // (up to 10s) until all of them are running at once. Requests that held a
+    // pool thread each could never all be in flight together, so the barrier
+    // would time out; this does not depend on how fast the machine is.
+    let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
     let fixture = try FixtureExecutable(script: """
     #!/bin/sh
     /bin/cat >/dev/null
-    /bin/sleep 1
-    printf '%s' '{"version":1,"status":200,"body":"\(body)"}'
+    mkdir -p "$0.running"; : > "$0.running/$$"
+    i=0
+    while [ "$(ls "$0.running" | wc -l)" -lt \(count) ]; do
+        i=$((i + 1)); [ "$i" -gt 200 ] && { printf '%s' '{"version":1,"status":504}'; exit 0; }
+        sleep 0.05
+    done
+    printf '%s' '{"version":1,"status":200,"body":"e30="}'
     """)
     defer { fixture.remove() }
     let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
-    let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
-    let started = ContinuousClock.now
-    try await withThrowingTaskGroup(of: Project.self) { group in
-        for _ in 0..<count { group.addTask { try await client.decode(.init(.defaultProject), as: Project.self) } }
-        try await Task.sleep(for: .milliseconds(200))
-        let probe = ContinuousClock.now
-        _ = await Task.detached { 1 }.value
-        #expect(ContinuousClock.now - probe < .milliseconds(500))
-        for try await project in group { #expect(project.id == "p") }
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for _ in 0..<count { group.addTask { _ = try await client.perform(.init(.defaultProject)) } }
+        try await group.waitForAll()
     }
-    #expect(ContinuousClock.now - started < .seconds(2.5))
 }
 
 private struct FixtureExecutable {
