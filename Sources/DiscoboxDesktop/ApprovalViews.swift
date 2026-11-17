@@ -32,7 +32,7 @@ private struct ApprovalQueueContent: View {
                         Button("Back to requests", systemImage: "chevron.left") { queue.back() }
                         Spacer()
                         Text("\(queue.requests.count) pending").font(.caption).foregroundStyle(.secondary)
-                    }.font(.system(size: 12)).padding(.horizontal, 24).padding(.vertical, 12)
+                    }.font(.callout).padding(.horizontal, 24).padding(.vertical, 12)
                         .background(DiscoboxAppearance.chrome)
                     Divider()
                     ApprovalSheet(item: item, onClose: {
@@ -199,7 +199,7 @@ struct LegacyApprovalSheet: View {
         } footer: {
             VStack(alignment: .leading, spacing: 12) {
                 if receipt == nil && !resolved && item.kind == "trust" {
-                    Toggle("I reviewed the access, destination and duration", isOn: $reviewed).toggleStyle(.checkbox).font(.system(size: 12))
+                    Toggle("I reviewed the access, destination and duration", isOn: $reviewed).toggleStyle(.checkbox).font(.callout)
                         .disabled(loading || busy).accessibilityIdentifier("approval.reviewed")
                 }
                 if receipt == nil && !resolved && item.kind == "credential" {

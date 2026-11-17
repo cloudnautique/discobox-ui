@@ -9,7 +9,7 @@ struct HarnessLaunchSettings: View {
     private var key: String { HarnessLaunchDefaults.key(computer: connection.endpointLabel, project: connection.projectID ?? "", harness: harness.id) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("NEW BOX DEFAULTS").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
+            Text("NEW BOX DEFAULTS").font(.caption2.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 10) {
                 Toggle("Enable Discobox API access", isOn: Binding(get: {
                     HarnessLaunchDefaults.enabled(stored, key: key)
@@ -47,7 +47,7 @@ struct HarnessChangesBanner: View {
                     Image(systemName: "square.and.arrow.up").foregroundStyle(DiscoboxAppearance.accent)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(model.changes["state"].string == "saved-handoff-pending" ? "Shared settings saved · source box update pending" : model.changes["credentials"].array.isEmpty ? "Settings changed in this box" : "Save this login for new boxes")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.callout.weight(.medium))
                         Text(model.changes["state"].string == "saved-handoff-pending" ? "The shared changes are saved. Finish updating this box; you do not need to sign in again." : "Changes in this box are not shared yet. Review and save them to update \(harness.name) on this computer.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }

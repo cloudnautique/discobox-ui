@@ -14,13 +14,13 @@ struct StudioDialogHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 17, weight: .medium))
+                .font(.title3.weight(.medium))
                 .foregroundStyle(destructive ? Color.red : DiscoboxAppearance.accent)
                 .frame(width: 36, height: 36)
                 .background(destructive ? Color.red.opacity(0.1) : DiscoboxAppearance.selection, in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 17, weight: .semibold))
-                if let subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary) }
+                Text(title).font(.title3.weight(.semibold))
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 12)
             if let shortcut, let binding = AppShortcut(shortcut) {
@@ -58,7 +58,7 @@ struct StudioConfirmationSubject: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "shippingbox").foregroundStyle(.secondary).padding(.top, 2)
-            Text(name).font(.system(size: 13, weight: .semibold)).textSelection(.enabled).lineLimit(4)
+            Text(name).font(.body.weight(.semibold)).textSelection(.enabled).lineLimit(4)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
             .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
@@ -70,8 +70,8 @@ struct StudioConfirmationField<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-            content.textFieldStyle(.plain).font(.system(size: 13)).padding(10)
+            Text(title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            content.textFieldStyle(.plain).font(.body).padding(10)
                 .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
         }
@@ -131,66 +131,39 @@ struct StudioQuotaProgressStyle: ProgressViewStyle {
     }
 }
 
-/// App-owned AppKit callbacks use the same SwiftUI chrome as other sheets.
+/// Native window-attached alerts for AppKit/C callbacks. The callback returns
+/// before the user answers, so terminal teardown cannot re-enter a modal loop.
 @MainActor enum StudioAppKitDialog {
-    /// Window-attached confirmation for callers that must return before the
-    /// user answers, such as Ghostty's C clipboard callbacks: an app-modal
-    /// session inside such a callback keeps polling and teardown running and
-    /// can free the terminal the callback is still using. `completion` runs
-    /// once on the main actor after the sheet ends. With no window, or while
-    /// another sheet is attached, the request is declined, never queued or
-    /// shown app-modally.
     static func confirm(title: String, symbol: String, message: String, confirmTitle: String,
                         destructive: Bool = false, defaultConfirm: Bool = true,
                         for window: NSWindow?, completion: @escaping (Bool) -> Void) {
         guard let window, window.attachedSheet == nil else { completion(false); return }
-        let panel = NSPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        let view = NSHostingView(rootView: StudioMessageSheet(title: title, symbol: symbol, message: message,
-            confirmTitle: confirmTitle, destructive: destructive, defaultConfirm: defaultConfirm,
-            cancel: { window.endSheet(panel, returnCode: .cancel) }, confirm: { window.endSheet(panel, returnCode: .OK) }))
-        panel.contentView = view
-        panel.setContentSize(view.fittingSize)
-        window.beginSheet(panel) { response in
-            panel.orderOut(nil); panel.contentView = nil
-            completion(response == .OK)
-        }
-    }
-
-    /// Blocks in an app-modal session. Only for callers that need the answer
-    /// synchronously and hold no external resource across it (for example a
-    /// window-close veto); terminal callbacks use the window-attached variant.
-    static func confirm(title: String, symbol: String, message: String, confirmTitle: String,
-                        destructive: Bool = false, defaultConfirm: Bool = true) -> Bool {
-        let panel = NSPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        let view = NSHostingView(rootView: StudioMessageSheet(title: title, symbol: symbol, message: message,
-            confirmTitle: confirmTitle, destructive: destructive, defaultConfirm: defaultConfirm,
-            cancel: { NSApp.stopModal(withCode: .cancel) }, confirm: { NSApp.stopModal(withCode: .OK) }))
-        panel.contentView = view
-        panel.setContentSize(view.fittingSize)
-        panel.center()
-        let accepted = NSApp.runModal(for: panel) == .OK
-        panel.orderOut(nil); panel.contentView = nil
-        return accepted
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = destructive ? .warning : .informational
+        let confirm = alert.addButton(withTitle: confirmTitle)
+        confirm.hasDestructiveAction = destructive
+        let cancel = alert.addButton(withTitle: "Cancel")
+        confirm.keyEquivalent = defaultConfirm ? "\r" : ""
+        cancel.keyEquivalent = defaultConfirm ? "\u{1b}" : "\r"
+        alert.beginSheetModal(for: window) { response in completion(response == .alertFirstButtonReturn) }
     }
 
     static func message(title: String, symbol: String, message: String, for window: NSWindow) {
         guard window.attachedSheet == nil else { return }
-        let panel = NSPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: StudioMessageSheet(title: title, symbol: symbol, message: message) {
-            window.endSheet(panel)
-        })
-        panel.setContentSize(panel.contentView!.fittingSize)
-        window.beginSheet(panel) { _ in panel.orderOut(nil); panel.contentView = nil }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Done")
+        alert.beginSheetModal(for: window)
     }
 }
 
 struct StudioKeycap: View {
     let text: String
     var body: some View {
-        Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
+        Text(text).font(.system(.caption2, design: .monospaced).weight(.medium))
             .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 3)
             .background(DiscoboxAppearance.surface, in: RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(DiscoboxAppearance.border, lineWidth: 0.5))
@@ -201,9 +174,9 @@ struct StudioFieldLabel: View {
     let title: String
     var body: some View {
         HStack {
-            Text(title).font(.system(size: 12, weight: .medium))
+            Text(title).font(.callout.weight(.medium))
             Spacer()
-            Text("Optional").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Text("Optional").font(.caption2).foregroundStyle(.tertiary)
         }
     }
 }
@@ -218,7 +191,7 @@ struct StudioDestinationRow<Content: View>: View {
             Text(title).foregroundStyle(.secondary)
             Spacer(minLength: 16)
             content.frame(maxWidth: 330, alignment: .trailing)
-        }.font(.system(size: 12)).padding(.horizontal, 12).frame(height: 43)
+        }.font(.callout).padding(.horizontal, 12).frame(height: 43)
     }
 }
 
@@ -239,8 +212,8 @@ struct StudioMenuField: View {
     }
 }
 
-/// A borderless native popup keeps the compact down-chevron presentation and
-/// the same menu keyboard/accessibility behavior as the standard macOS picker.
+/// A standard macOS picker. The system owns drawing, focus, selection,
+/// keyboard navigation and accessibility; Studio supplies only the options.
 struct StudioMenuPicker: View {
     struct Option: Equatable {
         let id: String
@@ -251,71 +224,16 @@ struct StudioMenuPicker: View {
     @Binding var selection: String
     let options: [Option]
     var alignment: NSTextAlignment = .right
-    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        StudioNativeMenuPicker(title: title, selection: $selection, options: options)
-            .frame(height: 22)
-            .overlay {
-                HStack(spacing: 8) {
-                    Text(options.first { $0.id == selection }?.title ?? "")
-                        .lineLimit(1).truncationMode(.middle)
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
-                }.font(.system(size: 12)).foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: alignment == .left ? .leading : .trailing)
-                    .opacity(isEnabled ? 1 : 0.45)
-                    .allowsHitTesting(false).accessibilityHidden(true)
+        Picker(title, selection: $selection) {
+            ForEach(options, id: \.id) { option in
+                Text(option.title).tag(option.id).disabled(!option.enabled)
             }
-    }
-}
-
-private struct StudioNativeMenuPicker: NSViewRepresentable {
-    typealias Option = StudioMenuPicker.Option
-    let title: String
-    @Binding var selection: String
-    let options: [Option]
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = Popup(frame: .zero, pullsDown: false)
-        button.isBordered = false
-        // SwiftUI draws the label and one chevron over this complete native
-        // hit target. The popup still owns the menu, selection and accessibility.
-        button.font = .systemFont(ofSize: 12)
-        button.menu?.autoenablesItems = false
-        button.cell?.lineBreakMode = .byTruncatingMiddle
-        button.setAccessibilityLabel(title)
-        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return button
-    }
-    private final class Popup: NSPopUpButton {
-        // Modern popup cells ignore NSButton.isTransparent/arrowPosition.
-        // Only the hosting overlay paints chrome; the native menu remains.
-        override func draw(_ dirtyRect: NSRect) {}
-    }
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
-        context.coordinator.parent = self
-        if context.coordinator.options != options {
-            button.removeAllItems()
-            for option in options {
-                let item = NSMenuItem(title: option.title, action: #selector(Coordinator.choose(_:)), keyEquivalent: "")
-                item.representedObject = option.id
-                item.isEnabled = option.enabled
-                item.target = context.coordinator
-                button.menu?.addItem(item)
-            }
-            context.coordinator.options = options
         }
-        button.selectItem(at: options.firstIndex { $0.id == selection } ?? -1)
-        button.isEnabled = context.environment.isEnabled
-    }
-    @MainActor final class Coordinator: NSObject {
-        var parent: StudioNativeMenuPicker
-        var options: [Option] = []
-        init(_ parent: StudioNativeMenuPicker) { self.parent = parent }
-        @objc func choose(_ item: NSMenuItem) {
-            guard item.isEnabled, let id = item.representedObject as? String else { return }
-            parent.selection = id
-        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .accessibilityLabel(title)
+        .frame(maxWidth: .infinity, alignment: alignment == .left ? .leading : .trailing)
     }
 }

@@ -22,13 +22,12 @@ public struct DiscoboxApplication: App {
     public var body: some Scene {
         Window("Discobox", id: "workspace") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
+                .modifier(AuxiliaryWindowActions())
                 .environment(boxLinks)
                 .onOpenURL { boxLinks.receive($0.absoluteString, connections: connections, commands: commands) }
-                .sheet(isPresented: Binding(get: { boxLinks.error != nil }, set: { if !$0 { boxLinks.error = nil } })) {
-                    StudioMessageSheet(title: "Couldn’t open box link", symbol: "link", message: boxLinks.error ?? "") {
-                        boxLinks.error = nil
-                    }
-                }
+                .alert("Couldn’t open box link", isPresented: Binding(get: { boxLinks.error != nil }, set: { if !$0 { boxLinks.error = nil } })) {
+                    Button("OK", role: .cancel) { boxLinks.error = nil }
+                } message: { Text(boxLinks.error ?? "") }
                 .onChange(of: appearance, initial: true) { DiscoboxAppearance.apply(appearance) }
                 .onChange(of: savedConnections) { connections.syncProfiles(ConnectionProfiles.decode(savedConnections) ?? []) }
                 .onChange(of: computerName, initial: true) { connections.syncProfiles([localProfile]) }
@@ -93,6 +92,7 @@ public struct DiscoboxApplication: App {
                     .disabled(!workspace.connectionState.canReconnect && !workspace.connectionState.isConnecting)
             }
         }
+        AuxiliaryWindowScenes()
         Settings {
             TabView {
                 AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintpalette") }
@@ -102,6 +102,7 @@ public struct DiscoboxApplication: App {
                 VStack { ComputerPicker().padding([.horizontal, .top]); HarnessSettings().id(connections.activeID) }.tabItem { Label("Harnesses", systemImage: "terminal") }
                 VStack { ComputerPicker().padding([.horizontal, .top]); CredentialSettings().id(connections.activeID) }.tabItem { Label("Credentials", systemImage: "key") }
             }
+            .modifier(AuxiliaryWindowActions())
             .environment(workspace)
             .environment(connections)
             .environment(commands)

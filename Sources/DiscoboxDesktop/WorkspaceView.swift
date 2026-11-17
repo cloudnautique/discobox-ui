@@ -78,8 +78,12 @@ struct WorkspaceView: View {
                     HStack { Notice(text: error, symbol: "exclamationmark.triangle"); Button("Dismiss") { workspace.selection.commandError = nil }.padding(.trailing) }
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HSplitView {
-                    sidebar
+                NavigationSplitView(columnVisibility: Binding(
+                    get: { commands.focusMode ? .detailOnly : .all },
+                    set: { commands.focusMode = $0 == .detailOnly }
+                )) {
+                    sidebar.navigationSplitViewColumnWidth(min: 220, ideal: 282, max: 360)
+                } detail: {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Group {
@@ -104,6 +108,7 @@ struct WorkspaceView: View {
 
                     }.id(workspace.connectionState.connectionID)
                 }
+                .navigationSplitViewStyle(.balanced)
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in contentWidth = width; fitInspector() }
                 })
@@ -131,21 +136,9 @@ struct WorkspaceView: View {
                         .disabled(workspace.connectionState.isConnecting || workspace.connectionState.recovery.isAttempting)
                 }.font(.caption).padding(.horizontal, 14).frame(height: 30).background(DiscoboxAppearance.chrome)
                 }
-                .navigationTitle("")
+                .navigationTitle([connections.active.profile.displayName, workspace.selection.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › "))
                 .toolbar {
-                    ToolbarItem(id: "workspace.sidebar", placement: .navigation) {
-                        Button { commands.focusMode.toggle() } label: { Label("Toggle sidebar", systemImage: "sidebar.left") }
-                            .help("Show or hide boxes")
-                    }.studioPlainBackground()
-                    ToolbarItem(id: "workspace.title", placement: .principal) {
-                        Text([connections.active.profile.displayName, workspace.selection.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › ").isEmpty ? "Discobox" : [connections.active.profile.displayName, workspace.selection.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › "))
-                            .font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
-                    }.studioPlainBackground()
-                    if #available(macOS 26, *) {
-                        ToolbarSpacer(.flexible, placement: .automatic)
-                    } else {
-                        ToolbarItem(placement: .automatic) { Spacer() }
-                    }
+                    ToolbarItemGroup(placement: .automatic) { Spacer() }
                     ToolbarItem(id: "workspace.actions", placement: .automatic) {
                         HStack(spacing: 12) {
                             let hidden = commands.currentLayout?.isSplit != true
@@ -172,13 +165,12 @@ struct WorkspaceView: View {
                             } label: { Image(systemName: "ellipsis.circle") }
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                                 .disabled(workspace.selection.selectedBox == nil).help("Actions for this box")
-                        }.font(.system(size: 12)).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
+                        }.font(.callout).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
 
                     }.studioPlainBackground()
                 }
                 .toolbarBackground(DiscoboxAppearance.chrome, for: .windowToolbar)
                 .toolbarBackground(.visible, for: .windowToolbar)
-                .toolbar(removing: .sidebarToggle)
             } else { WelcomeView() }
         }
         .background(WorkspaceWindowReader(commands: commands))
@@ -224,11 +216,16 @@ struct WorkspaceView: View {
                             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(.primary)
                             Spacer()
                             Button { commands.newBox() } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New box")
+                            Button { Task { await refreshBoxes() } } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }.buttonStyle(.borderless).disabled(refreshingBoxes)
+                                .help("Refresh boxes (⌘R)").accessibilityLabel("Refresh boxes")
+                                .accessibilityIdentifier("workspace.refreshBoxes")
                             if refreshingBoxes { ProgressView().controlSize(.small) }
                             Text("\(connections.browserBoxes.count)").font(.caption).foregroundStyle(.secondary)
                         }.padding(.horizontal, 16).padding(.vertical, 12)
                         TextField("Find a box", text: searchBinding)
-                            .textFieldStyle(.roundedBorder).font(.system(size: 12)).padding(.horizontal, 14).padding(.bottom, 10)
+                            .textFieldStyle(.roundedBorder).font(.callout).padding(.horizontal, 14).padding(.bottom, 10)
                         if currentFilter != .archived {
                             let counts = activityCounts
                             BoxActivityFilters(selection: activityBinding, needsYou: counts.needsYou, working: counts.working)
@@ -240,7 +237,7 @@ struct WorkspaceView: View {
                                     Text(matchAnyTag ? "Any:" : "All:").font(.caption2).foregroundStyle(.secondary)
                                     ForEach(selectedTags.sorted(), id: \.self) { tag in
                                         Button { _ = connections.browser.selectedTags.remove(tag) } label: {
-                                            HStack(spacing: 4) { Text(tag); Image(systemName: "xmark").font(.system(size: 8)) }
+                                            HStack(spacing: 4) { Text(tag); Image(systemName: "xmark").font(.caption2) }
                                                 .font(.caption).padding(.horizontal, 7).padding(.vertical, 4)
                                                 .background(.quaternary, in: Capsule())
                                         }.buttonStyle(.plain).help("Remove filter: " + tag)
@@ -251,16 +248,10 @@ struct WorkspaceView: View {
                         ComputersSidebar(grouping: grouping, tagKey: groupingTagKey)
                             .frame(minHeight: 120)
                             .refreshable { await refreshBoxes() }
-                            .background(BoxPullToRefresh { await refreshBoxes() })
-                            .help("Pull down at the top to refresh, or press ⌘R.")
+                            .help("Refresh boxes with ⌘R or the refresh button above.")
                             .accessibilityAction(named: Text("Refresh boxes")) { Task { await refreshBoxes() } }
-                        if !commands.focusMode { HarnessUsageSection().layoutPriority(1) }
-                    }.frame(minWidth: commands.focusMode ? 0 : 220,
-                            idealWidth: commands.focusMode ? 0 : 282,
-                            maxWidth: commands.focusMode ? 0 : 360)
-                        .clipped().opacity(commands.focusMode ? 0 : 1)
-                        .allowsHitTesting(!commands.focusMode)
-                        .accessibilityHidden(commands.focusMode)
+                        HarnessUsageSection().layoutPriority(1)
+                    }.frame(maxHeight: .infinity)
                         .accessibilityLabel("Boxes").background(DiscoboxAppearance.sidebar)
                         .background(GeometryReader { geometry in
                             Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in sidebarWidth = width; fitInspector() }
@@ -374,7 +365,7 @@ struct BoxChooser: View {
                     }
                     Spacer()
                     Text("\(matches.count) \(matches.count == 1 ? "box" : "boxes")").monospacedDigit()
-                }.font(.system(size: 11)).foregroundStyle(.secondary)
+                }.font(.caption).foregroundStyle(.secondary)
             }.padding(20)
             Divider().overlay(DiscoboxAppearance.border)
             ScrollViewReader { reader in
@@ -386,7 +377,7 @@ struct BoxChooser: View {
                                 Text(section.title.uppercased()).tracking(0.8)
                                 Text("\(items.count)").monospacedDigit()
                             }
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(section.rank == 0 ? Color.orange : Color.secondary)
                             .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)
                             ForEach(items) { item in
@@ -415,7 +406,7 @@ struct BoxChooser: View {
                 StudioKeycap(text: "esc")
                 Text("Close")
                 Spacer()
-            }.font(.system(size: 10)).foregroundStyle(.secondary)
+            }.font(.caption2).foregroundStyle(.secondary)
                 .padding(.horizontal, 20).padding(.vertical, 10).background(DiscoboxAppearance.chrome)
         }.frame(width: 560, height: 580).background(DiscoboxAppearance.surface).tint(DiscoboxAppearance.accent)
             .onChange(of: matches.map(\.id), initial: true) { _, ids in
@@ -471,18 +462,18 @@ private struct BoxChooserRow: View {
         HStack(spacing: 10) {
             BoxStatusLight(indicator: .init(box: item.box, activity: item.activity ?? AgentActivity(box: item.box), power: item.power))
             VStack(alignment: .leading, spacing: 5) {
-                Text(item.box.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                if !metadata.isEmpty { Text(metadata).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                Text(item.box.displayName).font(.callout.weight(.semibold)).lineLimit(1)
+                if !metadata.isEmpty { Text(metadata).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
             }
             Spacer(minLength: 8)
             BoxMaintenanceIndicators(box: item.box)
             if !item.computer.isEmpty {
-                Text(item.computer).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.computer).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     .padding(.horizontal, 6).padding(.vertical, 4)
                     .background(DiscoboxAppearance.chrome, in: RoundedRectangle(cornerRadius: 4))
                     .frame(maxWidth: 125, alignment: .trailing)
             }
-            Image(systemName: "return").font(.system(size: 10)).foregroundStyle(DiscoboxAppearance.accent)
+            Image(systemName: "return").font(.caption2).foregroundStyle(DiscoboxAppearance.accent)
                 .opacity(selected ? 1 : 0).frame(width: 14).accessibilityHidden(true)
         }
         .padding(.horizontal, 12).frame(minHeight: 56)
@@ -558,7 +549,7 @@ struct RepositoryGroupHeader: View {
             Button { toggle?() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+                        .font(.caption2.weight(.semibold)).frame(width: 10)
                     Image(systemName: symbol).foregroundStyle(.secondary)
                     if symbol == "folder" && parts.count > 1 {
                         (Text(parts.dropLast().joined(separator: "/") + " / ").foregroundColor(.secondary)
@@ -570,12 +561,12 @@ struct RepositoryGroupHeader: View {
             }.buttonStyle(.plain).help(repository)
                 .accessibilityLabel("\(repository), \(count) boxes").accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if let newBox {
-                Button(action: newBox) { Image(systemName: "plus").font(.system(size: 11, weight: .medium)).frame(width: 22, height: 23) }
+                Button(action: newBox) { Image(systemName: "plus").font(.caption.weight(.medium)).frame(width: 22, height: 23) }
                     .buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
                     .help("New box in " + repository).accessibilityLabel("New box in " + repository)
                     .accessibilityIdentifier("repository.newBox")
             }
-        }.font(.system(size: 11)).padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 6)
+        }.font(.caption).padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 6)
             .overlay(alignment: .top) { DiscoboxAppearance.border.opacity(0.7).frame(height: 1) }
     }
 }
@@ -598,16 +589,16 @@ struct BoxRow: View {
             BoxStatusLight(indicator: indicator)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(state.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    Text(state.title).font(.callout.weight(.medium)).lineLimit(2)
                     Spacer(minLength: 0)
                     if activity.approvalCount > 0 {
                         Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
-                            .buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
+                            .buttonStyle(.borderless).font(.caption2.weight(.medium)).foregroundStyle(tint)
                             .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.review." + box.id)
                             .help("Review pending requests for this box")
                     } else if activity.needsYou || box.matchesAttention {
-                        Button("Open", action: openAgent).buttonStyle(.borderless).font(.system(size: 10, weight: .medium)).foregroundStyle(tint)
+                        Button("Open", action: openAgent).buttonStyle(.borderless).font(.caption2.weight(.medium)).foregroundStyle(tint)
                             .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.open." + box.id)
                             .help("Open the agent on this box’s computer")
@@ -620,10 +611,10 @@ struct BoxRow: View {
                     if state.isPending { ProgressView().controlSize(.mini) }
                     if let branch = box.branch, !branch.isEmpty {
                         Label(branch, systemImage: "arrow.triangle.branch")
-                            .font(.system(size: 9)).lineLimit(1).truncationMode(.middle)
+                            .font(.caption2).lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: 90, alignment: .trailing)
                     }
-                }.font(.system(size: 10)).foregroundStyle(.secondary)
+                }.font(.caption2).foregroundStyle(.secondary)
 
             }
         }.padding(.vertical, 8)

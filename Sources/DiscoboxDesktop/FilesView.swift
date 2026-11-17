@@ -43,7 +43,7 @@ struct FilesView: View {
                         .help("Refresh folder").accessibilityIdentifier("files.refresh")
                 }.buttonStyle(.borderless).foregroundStyle(DiscoboxAppearance.accent)
                 TextField("Folder path", text: $browser.path)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 11, design: .monospaced))
+                    .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))
                     .onSubmit { Task { await browser.load() } }.accessibilityIdentifier("files.path")
             }.padding(12).disabled(!browser.canNavigate).background(DiscoboxAppearance.chrome)
             Divider()
@@ -56,14 +56,14 @@ struct FilesView: View {
                     VStack(spacing: 12) {
                         Image(systemName: "folder.badge.questionmark").font(.system(size: 28)).foregroundStyle(.secondary)
                         Text("Files unavailable").font(.headline)
-                        Text(error).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
+                        Text(error).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
                         Button("Try Again") { Task { await browser.load(browser.directory) } }.controlSize(.small)
                     }.padding(24).frame(maxWidth: 470)
                 }
                 else if browser.entries.isEmpty && browser.error == nil {
                     VStack(spacing: 8) {
                         Image(systemName: "tray.and.arrow.down").font(.system(size: 28)).foregroundStyle(DiscoboxAppearance.accent)
-                        Text("Drop files into this folder").font(.system(size: 13, weight: .medium))
+                        Text("Drop files into this folder").font(.body.weight(.medium))
                         Text("Files are copied to the selected box.").font(.caption).foregroundStyle(.secondary)
                     }.allowsHitTesting(false)
                 }
@@ -75,7 +75,7 @@ struct FilesView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(browser.transferName).lineLimit(1)
                         Text(ByteCountFormatter.string(fromByteCount: browser.bytes, countStyle: .file)).foregroundStyle(.secondary)
-                    }.font(.system(size: 11))
+                    }.font(.caption)
                     Spacer(minLength: 4)
                     Button("Cancel") { browser.cancelTransfer() }.controlSize(.small)
                 }.padding(10).background(DiscoboxAppearance.surface)
@@ -85,13 +85,13 @@ struct FilesView: View {
                     Image(systemName: "exclamationmark.triangle")
                     Text(error).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Button { browser.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Dismiss error")
-                }.font(.system(size: 11)).foregroundStyle(.orange).padding(10)
+                }.font(.caption).foregroundStyle(.orange).padding(10)
             }
             HStack {
                 Text(selection.isEmpty ? "\(browser.entries.count) items" : "\(selection.count) selected")
                 Spacer()
                 Text(browser.receipt ?? "Drag in to upload · Drag out to save").lineLimit(1).truncationMode(.middle)
-            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 12).frame(height: 30).background(DiscoboxAppearance.chrome)
+            }.font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 12).frame(height: 30).background(DiscoboxAppearance.chrome)
         }
         .onChange(of: browser.directory) { selection = [] }
         .sheet(item: Binding(get: { browser.conflict }, set: { if $0 == nil { browser.resolveConflict(.cancel) } })) { conflict in
@@ -123,8 +123,8 @@ struct FileConflictSheet: View {
     var body: some View {
         StudioConfirmation(title: "Files already exist", symbol: "doc.on.doc", subtitle: "\(count) matching names in the destination") {
             VStack(alignment: .leading, spacing: 18) {
-                Text(directory).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-                Text("Replace matching files or skip existing names. Folders merge their contents; files copied before a cancellation remain in the box.").font(.system(size: 12))
+                Text(directory).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Replace matching files or skip existing names. Folders merge their contents; files copied before a cancellation remain in the box.").font(.callout)
             }
         } footer: {
             HStack {

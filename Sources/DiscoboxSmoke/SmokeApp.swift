@@ -25,6 +25,7 @@ import DiscoboxCore
     var body: some Scene {
         Window("Discobox · Smoke fixtures", id: "smoke") {
             ConnectedWorkspace(connections: connections, runtimes: runtimes, commands: commands)
+                .modifier(AuxiliaryWindowActions())
                 .defaultAppStorage(defaults)
                 .frame(minWidth: 1000, minHeight: 650)
                 .task {
@@ -33,11 +34,13 @@ import DiscoboxCore
                     await run()
                 }
         }.defaultSize(width: 1320, height: 850)
+        AuxiliaryWindowScenes()
     }
     @MainActor private func run() async {
         defer { connections.disconnectAll(); runtimes.closeAll(); defaults.removePersistentDomain(forName: suite) }
         let arguments = Set(ProcessInfo.processInfo.arguments.dropFirst())
         let standalone: [(String, @MainActor () async -> Void)] = [
+            ("--native-window-smoke", { await NativeWindowSmoke.run() }),
             ("--sidebar-swipe-smoke", { await SidebarSwipeSmoke.run() }),
             ("--sidebar-manual-swipe-smoke", { await SidebarSwipeSmoke.run() }),
             ("--terminal-recovery-smoke", { await TerminalRecoverySmoke.run() }),

@@ -120,11 +120,9 @@ struct ConnectedWorkspace: View {
             .sheet(item: $notifications.presentation) { target in
                 ApprovalSheet(item: target.item).environment(target.workspace).environment(connections)
             }
-            .sheet(isPresented: Binding(get: { notifications.actionError != nil }, set: { if !$0 { notifications.actionError = nil } })) {
-                StudioMessageSheet(title: "Approval notification", symbol: "bell.badge", message: notifications.actionError ?? "") {
-                    notifications.actionError = nil
-                }
-            }
+            .alert("Approval notification", isPresented: Binding(get: { notifications.actionError != nil }, set: { if !$0 { notifications.actionError = nil } })) {
+                Button("OK", role: .cancel) { notifications.actionError = nil }
+            } message: { Text(notifications.actionError ?? "") }
     }
 }
 

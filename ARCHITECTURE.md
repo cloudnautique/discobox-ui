@@ -11,10 +11,29 @@ and presentation preferences only, not a second database of boxes.
 
 App-owned sheets use the shared `StudioConfirmation`, `StudioDialogHeader`,
 `StudioConfirmationField`, and `studioCard()` components with adaptive
-`DiscoboxAppearance` surfaces, borders, and accents. Informational and destructive
-prompts share `StudioMessageSheet`; AppKit callbacks use `StudioAppKitDialog` so
-clipboard, console-close, and forwarding messages have the same presentation.
-Each flow retains its own validation, default action, and mutation ownership.
+`DiscoboxAppearance` surfaces, borders, and accents. Simple information uses
+SwiftUI alerts; simple destructive choices use confirmation dialogs. Full review
+and approval forms remain sheets. AppKit callbacks use `StudioAppKitDialog` to
+present native NSAlert sheets asynchronously, including the console-close prompt.
+No dialog starts an app-modal event loop. Each flow retains its own validation,
+default action, and mutation ownership.
+
+`NavigationSplitView` owns sidebar visibility and column sizing. The two terminal
+splits remain `HSplitView` editing panes: the agent stays visible beside shells.
+Connection notices occupy explicit rows above navigation, not safe-area overlays.
+Refresh is a visible sidebar button and Command-R; there is no scroll-event monitor
+for pull-to-refresh. Menu fields use SwiftUI `Picker` with native drawing and focus.
+UI text uses semantic font styles; terminal grid fonts and illustration glyphs
+retain intentional point sizes.
+
+Desktop, harness review, and legacy harness console windows use value-based
+`WindowGroup` scenes and `openWindow`. The resource registry holds opaque UUIDs,
+not restorable URLs or credentials. Reopening an ID focuses its existing window;
+stale restored IDs dismiss without creating remote resources. Each owner releases
+its resources once on close or connection invalidation. A small AppKit close
+delegate adapter forwards to SwiftUI's delegate and asynchronously confirms an
+unfinished console close. Disconnect bypasses that prompt for obsolete resources.
+`--native-window-smoke` exercises these scene and close lifetimes without a server.
 
 Settings keep native macOS controls on Studio surfaces. File pickers, macOS
 permission and Keychain prompts, notification banners, and system menus retain
@@ -465,7 +484,7 @@ the Services drawer does not break already-open browser tabs.
 
 ## Embedded WebKit desktop
 
-One retained NSWindow/WKWebView session per box opens only on explicit Open
+One scene-managed window/WKWebView session per box opens only on explicit Open
 Desktop. It loads a loopback-only companion proxy of the existing desktop port.
 The proxy preserves the viewer and APIs, appending a clipboard adapter only to
 app.js. This depends on the current viewer's state.rfb/state.connected seam and

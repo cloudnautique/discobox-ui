@@ -44,7 +44,7 @@ struct WorkspaceInspector: View {
                     Text("Box").tag("box")
                     Text("Tags").tag("tags")
                 }.pickerStyle(.segmented).labelsHidden()
-                Button { commands.showInspector = false } label: { Image(systemName: "xmark").font(.system(size: 10)) }
+                Button { commands.showInspector = false } label: { Image(systemName: "xmark").font(.caption2) }
                     .buttonStyle(.borderless).help("Close inspector").accessibilityLabel("Close inspector")
             }.padding(.horizontal, 12).frame(height: 42)
             Divider()
@@ -102,8 +102,8 @@ struct ServiceRail: View {
                             Button { open(port) } label: {
                                 VStack(spacing: 3) {
                                     Image(systemName: port.isDesktop ? "desktopcomputer" : port.protocol == "udp" ? "network" : "globe")
-                                        .font(.system(size: 15))
-                                    if !port.isDesktop { Text(String(port.local)).font(.system(size: 9, design: .monospaced)) }
+                                        .font(.title3)
+                                    if !port.isDesktop { Text(String(port.local)).font(.system(.caption2, design: .monospaced)) }
                                 }.frame(width: 44, height: 36).contentShape(Rectangle())
                             }
                             .disabled(!live || workspace.connectionState.isDemo)

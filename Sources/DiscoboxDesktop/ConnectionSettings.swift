@@ -121,13 +121,14 @@ struct ConnectionSettings: View {
                 needsAuthorization.remove(profile.id)
             })
         }
-        .sheet(item: $removing) { profile in
-            StudioMessageSheet(title: "Remove \(profile.displayName)?", symbol: "network",
-                message: "This removes the saved address. Access and any active connection remain available.",
-                confirmTitle: "Remove", destructive: true, defaultConfirm: false, cancel: { removing = nil }) {
+        .confirmationDialog("Remove saved computer?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible, presenting: removing) { profile in
+            Button("Remove", role: .destructive) {
                 if let text = ConnectionProfiles.encode((ConnectionProfiles.decode(savedConnections) ?? []).filter { $0.id != profile.id }) { savedConnections = text }
-                selected = "unix://"; self.removing = nil
+                selected = "unix://"
             }
+            Button("Cancel", role: .cancel) {}
+        } message: { profile in
+            Text("Remove \(profile.displayName)? This removes the saved address. Access and any active connection remain available.")
         }
     }
     private func connecting(_ profile: ConnectionProfile) -> Bool {

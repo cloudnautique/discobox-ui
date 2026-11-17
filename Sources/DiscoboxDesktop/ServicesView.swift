@@ -76,7 +76,7 @@ struct ServicesView: View {
         }
     }
     private func serviceHeading(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold))
+        Label(title, systemImage: symbol).font(.callout.weight(.semibold))
     }
     private func portRow(_ port: ServicePort) -> some View {
         VStack(alignment: .leading, spacing: 5) {

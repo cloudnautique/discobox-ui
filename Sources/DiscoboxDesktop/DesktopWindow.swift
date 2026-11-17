@@ -7,12 +7,12 @@ import DiscoboxCore
     private var sessions: [String: DesktopSession] = [:]
     func open(url: URL, box: Sandbox) {
         if let session = sessions[box.id], !session.closed, session.source == url {
-            session.window.makeKeyAndOrderFront(nil); return
+            session.presentation.show(); return
         }
         sessions.removeValue(forKey: box.id)?.close()
         let session = DesktopSession(source: url, title: computerName.isEmpty ? box.displayName : computerName + " › " + box.displayName)
         sessions[box.id] = session
-        session.window.makeKeyAndOrderFront(nil)
+        session.presentation.show()
     }
     func close(box: String) { sessions.removeValue(forKey: box)?.close() }
     func retainRunningBoxes(_ boxes: [Sandbox]) {
@@ -22,9 +22,9 @@ import DiscoboxCore
     func closeAll() { for session in sessions.values { session.close() }; sessions.removeAll() }
 }
 
-@MainActor @Observable final class DesktopSession: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate {
+@MainActor @Observable final class DesktopSession: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let source: URL
-    let window: NSWindow
+    let presentation: AuxiliaryWindow
     let web: DesktopWebView
     var ready = false
     var error: String?
@@ -46,13 +46,10 @@ import DiscoboxCore
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         web = DesktopWebView(frame: .zero, configuration: config)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1150, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        presentation = AuxiliaryWindow(kind: .desktop, title: "Desktop — " + title, cleanup: {})
         super.init()
-        window.title = "Desktop — " + title
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: DesktopWindowView(session: self))
-        window.center()
+        presentation.content = AnyView(DesktopWindowView(session: self))
+        presentation.onClose { [weak self] in self?.releaseResources() }
         web.session = self
         web.navigationDelegate = self
         config.userContentController.add(self, name: "discoboxDesktop")
@@ -122,14 +119,14 @@ import DiscoboxCore
         web.callAsyncJavaScript(script, arguments: args, in: nil, in: .page) { [weak self] result in
             if case .failure(let error) = result { self?.error = error.localizedDescription }
         }
-        window.makeFirstResponder(web)
+        web.window?.makeFirstResponder(web)
     }
     private func writeClipboard(_ text: String) {
         pasteboard.clearContents(); pasteboard.setString(text, forType: .string)
     }
     func reload() { ready = false; error = nil; web.reload() }
-    func windowWillClose(_ notification: Notification) { close() }
-    func close() {
+    func close() { presentation.close() }
+    private func releaseResources() {
         guard !closed else { return }
         closed = true; ready = false
         web.stopLoading(); web.loadHTMLString("", baseURL: nil)
@@ -139,9 +136,6 @@ import DiscoboxCore
         try? input.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }
         try? output.fileHandleForReading.close(); try? output.fileHandleForWriting.close()
-        window.orderOut(nil)
-        window.contentView = nil
-        window.delegate = nil
     }
 }
 
@@ -183,7 +177,7 @@ private struct DesktopWindowView: View {
                     Toggle("Sync remote clipboard to Mac", isOn: $session.syncClipboard)
                     Button("Reconnect") { session.reload() }
                     Button("Open in Browser") { NSWorkspace.shared.open(session.source) }
-                    Button("Full Screen") { session.window.toggleFullScreen(nil) }
+                    Button("Full Screen") { session.web.window?.toggleFullScreen(nil) }
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }.padding(10).background(DiscoboxAppearance.chrome)
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }

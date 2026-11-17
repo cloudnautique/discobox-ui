@@ -8,11 +8,11 @@ struct CredentialBindingConflictNotice: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Label(delegationOnly ? "Existing delegation cannot be replaced" : "Existing access cannot be replaced", systemImage: "exclamationmark.triangle")
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(DiscoboxAppearance.activityAttention)
+                .font(.callout.weight(.semibold)).foregroundStyle(DiscoboxAppearance.activityAttention)
             if let first = conflicts.first { Text(first["message"].string).font(.caption).foregroundStyle(.secondary) }
             if conflicts.contains(where: { $0["canAdd"] == .bool(true) }) {
                 Button("Keep existing access and add requested use", action: addBeside)
-                    .font(.system(size: 12, weight: .medium)).buttonStyle(.borderless)
+                    .font(.callout.weight(.medium)).buttonStyle(.borderless)
                     .accessibilityIdentifier("approval.addBesideExisting")
                 Text("Changes the draft to an additional scoped grant. Review its effect before applying.").font(.caption2).foregroundStyle(.secondary)
             }

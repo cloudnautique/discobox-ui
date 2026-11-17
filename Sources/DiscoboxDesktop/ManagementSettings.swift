@@ -142,14 +142,13 @@ struct CredentialSettings: View {
                 Task { await refresh() }
             }.environment(workspace)
         }
-        .sheet(isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
-            if let item = pendingDelete, let connection = pendingDeleteConnection {
-                StudioMessageSheet(title: "Delete credential?", symbol: "key", message: "Delete \(item["name"].string) from this server? Access depending on it may stop working. This cannot be undone.",
-                    confirmTitle: "Delete", destructive: true, defaultConfirm: false, cancel: { pendingDelete = nil }) {
-                        pendingDelete = nil
-                        Task { await delete(item, connection: connection) }
-                    }
+        .confirmationDialog("Delete credential?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible, presenting: pendingDelete) { item in
+            if let connection = pendingDeleteConnection {
+                Button("Delete", role: .destructive) { Task { await delete(item, connection: connection) } }
             }
+            Button("Cancel", role: .cancel) {}
+        } message: { item in
+            Text("Delete \(item["name"].string) from this server? Access depending on it may stop working. This cannot be undone.")
         }
     }
 
@@ -188,19 +187,19 @@ struct CredentialSettings: View {
     private var windows: [String: HarnessSetupWindow] = [:]
     func close(connection: UUID) {
         for key in Array(windows.keys) where key.hasPrefix(connection.uuidString + ":") {
-            windows.removeValue(forKey: key)?.window.close()
+            windows.removeValue(forKey: key)?.presentation.close()
         }
     }
     func closeAll() {
-        for controller in Array(windows.values) { controller.window.close() }
+        for controller in Array(windows.values) { controller.presentation.close() }
         windows.removeAll()
     }
     func open(_ harness: Harness, workspace: ConnectionSession) {
         guard workspace.connectionState.isConnected, !workspace.connectionState.isDemo, let project = workspace.connectionState.projectID else { return }
         let key = "\(workspace.connectionState.connectionID):harnesses"
         if let existing = windows[key] {
-            if existing.isFinished { existing.window.close() }
-            else { existing.window.makeKeyAndOrderFront(nil); return }
+            if existing.isFinished { existing.presentation.close() }
+            else { existing.presentation.show(); return }
         }
         let session = TerminalSession(arguments: ["--harness-console", "--endpoint", workspace.connectionState.transportEndpoint, "--project", project])
         session.view.openURL = { raw in
@@ -211,33 +210,27 @@ struct CredentialSettings: View {
             self?.windows.removeValue(forKey: key)
         }
         windows[key] = controller
-        controller.window.makeKeyAndOrderFront(nil)
+        controller.presentation.show()
     }
 }
 
-@MainActor final class HarnessSetupWindow: NSObject, NSWindowDelegate {
-    let window: NSWindow
+@MainActor final class HarnessSetupWindow {
+    let presentation: AuxiliaryWindow
     private let session: TerminalSession
-    private let onClose: () -> Void
     var isFinished: Bool { session.ended || session.error != nil }
     init(harness: Harness, session: TerminalSession, workspace: ConnectionSession, onClose: @escaping () -> Void) {
-        self.session = session; self.onClose = onClose
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        super.init()
-        window.title = "Manage Harnesses"
-        window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 640, height: 400)
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: HarnessSetupContent(session: session, connection: workspace.connectionState.connectionID, close: { [weak self] in self?.window.close() }).environment(workspace))
-        window.center()
+        self.session = session
+        presentation = AuxiliaryWindow(kind: .console, title: "Manage Harnesses") {
+            session.close(); onClose()
+        }
+        presentation.needsCloseConfirmation = { [weak session] in
+            guard let session else { return false }
+            return !session.ended && session.error == nil
+        }
+        presentation.content = AnyView(HarnessSetupContent(session: session, connection: workspace.connectionState.connectionID,
+            close: { [weak presentation] in presentation?.requestClose() }).environment(workspace)
+            .frame(minWidth: 640, minHeight: 400))
     }
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard !isFinished else { return true }
-        return StudioAppKitDialog.confirm(title: "Close harness management?", symbol: "terminal",
-            message: "This closes the harness console. Unsaved changes in its current editor may be lost.",
-            confirmTitle: "Close Console", destructive: true, defaultConfirm: false)
-    }
-    func windowWillClose(_ notification: Notification) { session.close(); onClose() }
 }
 
 private struct HarnessSetupContent: View {
@@ -251,7 +244,7 @@ private struct HarnessSetupContent: View {
             HStack {
                 Text(session.ended ? "Harness console closed — see terminal for the result" : "Manage saved harness files and settings in the console below")
                 Spacer()
-            }.font(.system(size: 12)).padding(12).background(DiscoboxAppearance.chrome)
+            }.font(.callout).padding(12).background(DiscoboxAppearance.chrome)
             Divider()
             if let error = session.error ?? refreshError { Text(error).foregroundStyle(.red).padding(8) }
             TerminalSurface(view: session.view, focused: true, onFocus: nil)

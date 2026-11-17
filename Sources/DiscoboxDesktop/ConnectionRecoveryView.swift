@@ -71,7 +71,7 @@ struct ConnectionRecoveryBanner: View {
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(workspace.connectionState.recovery.requiresAction ? "Connection to \(computer) needs attention" : "Reconnecting to \(computer)")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.callout.weight(.medium))
                     if workspace.connectionState.recovery.isAttempting {
                         Text("Checking the host…").font(.caption).foregroundStyle(.secondary)
                     } else if let deadline = workspace.connectionState.recovery.nextRetryAt {

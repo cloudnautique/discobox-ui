@@ -65,8 +65,8 @@ struct ToolsSheet: View {
 
     private func sectionTitle(_ title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 12, weight: .semibold))
-            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(title).font(.callout.weight(.semibold))
+            Text(detail).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -76,9 +76,9 @@ struct ToolsSheet: View {
                 ProgressView("Loading tools…").controlSize(.small).frame(maxWidth: .infinity).padding(24)
             } else if tools.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "wrench.and.screwdriver").font(.system(size: 20)).foregroundStyle(.secondary)
-                    Text("No tools available").font(.system(size: 12, weight: .medium))
-                    Text("Tools reported by this box appear here.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Image(systemName: "wrench.and.screwdriver").font(.title2).foregroundStyle(.secondary)
+                    Text("No tools available").font(.callout.weight(.medium))
+                    Text("Tools reported by this box appear here.").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity).padding(24)
             } else {
                 ForEach(Array(tools.enumerated()), id: \.offset) { index, tool in
@@ -101,15 +101,15 @@ struct ToolsSheet: View {
 
     private func actionRow(title: String, detail: String, symbol: String, problem: String = "") -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(DiscoboxAppearance.accent)
+            Image(systemName: symbol).font(.title3).foregroundStyle(DiscoboxAppearance.accent)
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
-                if !detail.isEmpty { Text(detail).font(.system(size: 11)).foregroundStyle(.secondary) }
-                if !problem.isEmpty { Text(problem).font(.system(size: 11)).foregroundStyle(.orange) }
+                Text(title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.orange) }
             }.fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Image(systemName: "arrow.up.right").font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
+            Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
     }
 
@@ -123,7 +123,7 @@ struct ToolsSheet: View {
                     TextField("feature-branch", text: $head).accessibilityIdentifier("tools.head")
                 }
                 Text("Both refs must be available in this box. Review comments stay in its repository.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
                     Button("Open review") { launch("ai.discobox.diff", refs: true) }

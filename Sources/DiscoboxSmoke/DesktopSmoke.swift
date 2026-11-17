@@ -14,15 +14,17 @@ import DiscoboxCore
             defer { board.releaseGlobally() }
             let session = DesktopSession(source: url, title: "Offline desktop smoke", pasteboard: board)
             defer { session.close() }
-            session.window.orderFront(nil)
+            session.presentation.show()
+            for _ in 0..<100 where session.presentation.window == nil { try await Task.sleep(for: .milliseconds(30)) }
+            guard let window = session.presentation.window else { throw DiscoboxError("Desktop scene did not open") }
             for _ in 0..<100 where !session.ready { try await Task.sleep(for: .milliseconds(100)) }
             guard session.ready else { throw DiscoboxError(session.error ?? "WebKit fixture never became ready") }
             let text = "Mac café 👋\nquote: \" \\ end"
             board.setString(text, forType: .string)
             session.terminalShortcuts = true
-            session.window.makeKeyAndOrderFront(nil)
-            session.window.makeFirstResponder(session.web)
-            let pasteKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: session.window.windowNumber, context: nil, characters: "v", charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)!
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(session.web)
+            let pasteKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "v", charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)!
             guard session.web.performKeyEquivalent(with: pasteKey) else { throw DiscoboxError("Command-V was not handled by the desktop") }
             try await Task.sleep(for: .milliseconds(200))
             let pasted = try await session.web.evaluateJavaScript("window.fixture.pasted") as? String

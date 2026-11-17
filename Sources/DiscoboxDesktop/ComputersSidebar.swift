@@ -186,8 +186,8 @@ struct ComputersSidebar: View {
         VStack(alignment: .leading, spacing: 3) {
             Button { computersExpanded.toggle() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: computersExpanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .semibold))
-                    Text("Computers").font(.system(size: 11, weight: .semibold))
+                    Image(systemName: computersExpanded ? "chevron.down" : "chevron.right").font(.caption2.weight(.semibold))
+                    Text("Computers").font(.caption.weight(.semibold))
                     if !computersExpanded {
                         Text(browser.computerID.flatMap { connections.session($0)?.profile.displayName } ?? "All")
                             .font(.caption2).lineLimit(1)
@@ -201,8 +201,8 @@ struct ComputersSidebar: View {
                         Image(systemName: "square.stack.3d.up").frame(width: 16).foregroundStyle(.secondary)
                         Text("All computers").fontWeight(browser.computerID == nil ? .semibold : .regular)
                         Spacer()
-                        if browser.computerID == nil { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary) }
-                    }.font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
+                        if browser.computerID == nil { Image(systemName: "checkmark").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
+                    }.font(.callout).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("computers.all")
                 ForEach(connections.sessions) { host in
                     HStack(spacing: 6) {
@@ -212,7 +212,7 @@ struct ComputersSidebar: View {
                                 Text(host.profile.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if !host.approvalStore.approvals.isEmpty { Text("\(host.approvalStore.approvals.count)").font(.caption2).foregroundStyle(.orange) }
-                            }.font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
+                            }.font(.callout).padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Filter boxes on " + host.profile.displayName + ". Click again to show all computers.")
                             .accessibilityIdentifier("computers.filter." + host.id)
                             .accessibilityAddTraits(browser.computerID == host.id ? .isSelected : [])
@@ -323,7 +323,7 @@ private struct CreatedBoxRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Button { Task { await connections.selectBox(creation.id) } } label: {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(creation.item.box.displayName).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    Text(creation.item.box.displayName).font(.callout.weight(.medium)).lineLimit(2)
                     Text(creation.item.computer).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     HStack(alignment: .top, spacing: 6) {
                         if creation.phase == .starting { ProgressView().controlSize(.mini) }
@@ -338,7 +338,7 @@ private struct CreatedBoxRow: View {
                         .help("Show this box by adjusting only the filters that hide it.")
                 }
                 Spacer()
-                Button { connections.dismissCreation(creation.id) } label: { Image(systemName: "xmark").font(.system(size: 9)) }
+                Button { connections.dismissCreation(creation.id) } label: { Image(systemName: "xmark").font(.caption2) }
                     .help("Dismiss this temporary row. The box keeps running.")
                     .accessibilityLabel("Dismiss new box reminder")
             }.font(.caption).buttonStyle(.borderless)

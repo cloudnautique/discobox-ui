@@ -52,7 +52,7 @@ struct NewBoxSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("DESTINATION & AGENT").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+                        Text("DESTINATION & AGENT").font(.caption2.weight(.medium)).tracking(1).foregroundStyle(.secondary)
                         VStack(spacing: 0) {
                             if let connections {
                                 StudioDestinationRow(title: "Computer", symbol: "desktopcomputer") {
@@ -102,7 +102,7 @@ struct NewBoxSheet: View {
                                 }
                                 Divider()
                                 Button("No repository") { repository = ""; focusedField = .prompt }
-                            } label: { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)) }
+                            } label: { Image(systemName: "chevron.down").font(.caption2.weight(.semibold)) }
                                 .menuStyle(.borderlessButton).fixedSize().help("Choose a recent repository")
                                 .accessibilityLabel("Recent repositories").accessibilityIdentifier("newBox.repositories")
                         }
@@ -111,20 +111,20 @@ struct NewBoxSheet: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         StudioFieldLabel(title: "Starting prompt")
-                        TextEditor(text: $prompt).font(.system(size: 12))
+                        TextEditor(text: $prompt).font(.callout)
                             .scrollContentBackground(.hidden).focused($focusedField, equals: .prompt)
                             .padding(8).frame(height: 100)
                             .background(DiscoboxAppearance.canvas, in: RoundedRectangle(cornerRadius: 8))
                             .overlay(alignment: .topLeading) {
                                 if prompt.isEmpty {
-                                    Text("What would you like the agent to work on?").font(.system(size: 12)).foregroundStyle(.tertiary)
+                                    Text("What would you like the agent to work on?").font(.callout).foregroundStyle(.tertiary)
                                         .padding(.horizontal, 13).padding(.vertical, 16).allowsHitTesting(false).accessibilityHidden(true)
                                 }
                             }
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focusedField == .prompt ? DiscoboxAppearance.accent : DiscoboxAppearance.border, lineWidth: focusedField == .prompt ? 1 : 0.5))
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("MANAGER ACCESS").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+                        Text("MANAGER ACCESS").font(.caption2.weight(.medium)).tracking(1).foregroundStyle(.secondary)
                         StudioMenuField(title: "Discobox API access", selection: $apiChoice, options: [
                             .init(id: "default", title: defaultAPI ? "Harness default · Enabled" : "Harness default · Off"),
                             .init(id: "off", title: "Off for this box"),
@@ -137,7 +137,7 @@ struct NewBoxSheet: View {
                         }
                     }.padding(12).studioCard()
                     NewBoxCredentialsSection(drafts: $credentialDrafts)
-                    if let credentialError { Text(credentialError).font(.system(size: 11)).foregroundStyle(.orange) }
+                    if let credentialError { Text(credentialError).font(.caption).foregroundStyle(.orange) }
                     NewBoxResourceSummary(poolID: poolID, creating: creating, manage: { showResources = true })
                         .environment(workspace)
                     if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -270,14 +270,14 @@ private struct NewBoxResourceSummary: View {
                 HStack(spacing: 8) {
                     Image(systemName: warning ? "exclamationmark.triangle" : "internaldrive")
                         .foregroundStyle(warning ? Color.orange : .secondary)
-                    Text(summary(health, pool: pool)).font(.system(size: 11))
+                    Text(summary(health, pool: pool)).font(.caption)
                     Spacer(minLength: 8)
                     if workspace.pools.resources.isRefreshing { ProgressView().controlSize(.mini) }
                     Button { expanded.toggle() } label: {
                         HStack(spacing: 4) {
                             Text("Details")
-                            Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold))
-                        }.font(.system(size: 11))
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2.weight(.semibold))
+                        }.font(.caption)
                     }.buttonStyle(.plain).foregroundStyle(DiscoboxAppearance.accent)
                         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 }

@@ -53,26 +53,25 @@ struct HarnessManagementView: View {
         }
         .onChange(of: manager.review) { _, value in reviewed = false; showingReview = value != .null }
         .onChange(of: manager.boxID) { reviewed = false; showingReview = false }
-        .sheet(isPresented: $confirmingDiscard) {
-            StudioMessageSheet(title: "Discard unsaved changes?", symbol: "arrow.uturn.backward",
-                message: "Discard the reviewed changes from “\(sourceName)”? This does not change the shared harness configuration or the box’s local files.",
-                confirmTitle: "Discard changes", destructive: true, defaultConfirm: false, cancel: { confirmingDiscard = false }) {
-                confirmingDiscard = false; run(.discard)
-            }
+        .confirmationDialog("Discard unsaved changes?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+            Button("Discard changes", role: .destructive) { run(.discard) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Discard the reviewed changes from “\(sourceName)”? This does not change the shared harness configuration or the box’s local files.")
         }
     }
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: showingReview ? "square.and.arrow.up" : "terminal")
-                .font(.system(size: 19, weight: .medium)).foregroundStyle(DiscoboxAppearance.accent)
+                .font(.title2.weight(.medium)).foregroundStyle(DiscoboxAppearance.accent)
                 .frame(width: 38, height: 38).background(DiscoboxAppearance.selection, in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 4) {
-                Text(harness.name).font(.system(size: 18, weight: .semibold)).lineLimit(1)
+                Text(harness.name).font(.title2.weight(.semibold)).lineLimit(1)
                 Text(showingReview ? "Save changes from “\(sourceName)”" : "Login and configuration")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 12)
-            Label(computer, systemImage: "desktopcomputer").font(.system(size: 11)).foregroundStyle(.secondary)
+            Label(computer, systemImage: "desktopcomputer").font(.caption).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200).help(computer)
             Menu {
                 Button("Refresh saved state") { run(.load) }.disabled(blocked)
@@ -84,7 +83,7 @@ struct HarnessManagementView: View {
                     Divider()
                     Button("Discard unsaved changes…", role: .destructive) { confirmingDiscard = true }.disabled(!manager.canDiscard)
                 }
-            } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)) }
+            } label: { Image(systemName: "ellipsis.circle").font(.title3) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Harness actions").accessibilityLabel("Harness actions")
         }.padding(.horizontal, 24).padding(.vertical, 18).background(DiscoboxAppearance.chrome)
     }
@@ -96,7 +95,7 @@ struct HarnessManagementView: View {
                     sectionLabel("Saved login")
                     if manager.details["bindings"].array.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("No shared login saved", systemImage: "key").font(.system(size: 13, weight: .medium))
+                            Label("No shared login saved", systemImage: "key").font(.body.weight(.medium))
                             Text("Sign in inside a box, then save its login here for other boxes using this harness.").font(.callout).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(14).studioCard()
                     } else {
@@ -127,11 +126,11 @@ struct HarnessManagementView: View {
                                 Text("Follows its parent’s bundle, with separate saved login and settings.").font(.caption).foregroundStyle(.secondary)
                             } else {
                                 Text(config["bundle"].string.isEmpty ? config["image"].string : config["bundle"].string)
-                                    .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                                 Text("The software bundle is separate from this harness’s saved account.").font(.caption).foregroundStyle(.secondary)
                             }
                         }.padding(.top, 8)
-                    }.font(.system(size: 12))
+                    }.font(.callout)
                 }
             } else if manager.busy {
                 ProgressView("Loading saved login and settings…").controlSize(.small).padding(.vertical, 12)
@@ -160,7 +159,7 @@ struct HarnessManagementView: View {
                     }
                     HStack {
                         Button("Open box") { openBox(manager.boxID) }.disabled(manager.boxID.isEmpty || blocked)
-                        Button("New box to sign in…", action: newBox).disabled(blocked).font(.system(size: 12))
+                        Button("New box to sign in…", action: newBox).disabled(blocked).font(.callout)
                         Spacer()
                         Button("Review changes", systemImage: "arrow.right") { run(.review) }
                             .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
@@ -173,7 +172,7 @@ struct HarnessManagementView: View {
                     Text("Open the box and sign in to the harness. For Claude Code, use /login. Return here and review the changes to save the login and settings.")
                         .font(.callout).foregroundStyle(.secondary).padding(.top, 6)
                     Text("A copied access token does not include the refresh credentials needed for automatic renewal.").font(.caption).foregroundStyle(.secondary)
-                }.font(.system(size: 12))
+                }.font(.callout)
             }
         }
     }
@@ -193,9 +192,9 @@ struct HarnessManagementView: View {
             HStack(spacing: 10) {
                 Image(systemName: "key").foregroundStyle(DiscoboxAppearance.accent)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(name).font(.system(size: 13, weight: .medium))
+                    Text(name).font(.body.weight(.medium))
                     Text(refreshable ? "Login saved · Refreshable OAuth" : oauth ? "Login saved · Renewal not confirmed" : "Credential saved")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -210,7 +209,7 @@ struct HarnessManagementView: View {
     private var changeReview: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(reviewTitle).font(.system(size: 16, weight: .semibold))
+                Text(reviewTitle).font(.headline.weight(.semibold))
                 Text("Save for \(harness.name) · \(computer) · project \(manager.connectionState.projectID ?? "").")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -237,7 +236,7 @@ struct HarnessManagementView: View {
                             if index > 0 { Divider() }
                             VStack(alignment: .leading, spacing: 5) {
                                 Label(credential["account"].string.isEmpty ? credential["envName"].string : credential["account"].string, systemImage: "key")
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.body.weight(.medium))
                                 Text(credentialDescription(credential)).font(.caption).foregroundStyle(.secondary)
                                 Text(existingCredentialDescription(credential)).font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
@@ -279,7 +278,7 @@ struct HarnessManagementView: View {
     }
     private func diagnosticDescription(_ diagnostic: JSONValue) -> String { diagnostic["code"].string + ": " + diagnostic["message"].string }
     private func sectionLabel(_ title: String) -> some View {
-        Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
+        Text(title.uppercased()).font(.caption2.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
     }
     private var footer: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -295,7 +294,7 @@ struct HarnessManagementView: View {
             }
             if showingReview && (manager.canSave || manager.busy && activity == .save) {
                 Toggle(handoffPending ? "Retry updating the source box with the saved changes" : "Share these login and configuration changes", isOn: $reviewed)
-                    .toggleStyle(.checkbox).font(.system(size: 12)).disabled(blocked).accessibilityIdentifier("harness.reviewed")
+                    .toggleStyle(.checkbox).font(.callout).disabled(blocked).accessibilityIdentifier("harness.reviewed")
             }
             HStack {
                 if showingReview {
@@ -351,7 +350,7 @@ struct HarnessManagementView: View {
         let state = manager.result["state"].string
         return VStack(alignment: .leading, spacing: 8) {
             Label(resultTitle(state), systemImage: state == "saved" || state == "discarded" ? "checkmark.circle" : "info.circle")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.body.weight(.semibold))
             Text(resultDescription(state)).font(.callout).foregroundStyle(.secondary)
             if state == "saved-handoff-pending" {
                 Button("Check box update") { run(.review) }.disabled(blocked)
@@ -382,11 +381,11 @@ struct HarnessManagementView: View {
     static let shared = HarnessSetupWindows()
     private var windows: [String: HarnessManagementWindow] = [:]
     func close(connection: UUID) {
-        for key in Array(windows.keys) where key.hasPrefix(connection.uuidString + ":") { windows.removeValue(forKey: key)?.window.close() }
+        for key in Array(windows.keys) where key.hasPrefix(connection.uuidString + ":") { windows.removeValue(forKey: key)?.presentation.close() }
         HarnessConsoleWindows.shared.close(connection: connection)
     }
     func closeAll() {
-        for controller in Array(windows.values) { controller.window.close() }
+        for controller in Array(windows.values) { controller.presentation.close() }
         windows.removeAll(); HarnessConsoleWindows.shared.closeAll()
     }
     @discardableResult
@@ -398,7 +397,7 @@ struct HarnessManagementView: View {
         let key = generation.uuidString + ":" + harness.id
         if let existing = windows[key] {
             if let sourceBoxID { existing.selectSource(sourceBoxID) }
-            existing.window.makeKeyAndOrderFront(nil); return true
+            existing.presentation.show(); return true
         }
         let host = connections?.sessions.first { $0 === workspace }
         let manager = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: harness.id)
@@ -413,28 +412,25 @@ struct HarnessManagementView: View {
                     commands?.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 }
             }, console: { HarnessConsoleWindows.shared.open(harness, workspace: workspace) }, onClose: { [weak self] in self?.windows.removeValue(forKey: key) })
-        windows[key] = controller; controller.window.makeKeyAndOrderFront(nil)
+        windows[key] = controller; controller.presentation.show()
         return true
     }
 }
 
-@MainActor private final class HarnessManagementWindow: NSObject, NSWindowDelegate {
-    let window: NSWindow
+@MainActor private final class HarnessManagementWindow {
+    let presentation: AuxiliaryWindow
     private let manager: HarnessManagement
-    private let onClose: () -> Void
     init(workspace: ConnectionSession, harness: Harness, manager: HarnessManagement, computer: String, computerID: String?, connections: Connections?, commands: WorkspaceCommands?, openBox: @escaping (String) -> Void, console: @escaping () -> Void, onClose: @escaping () -> Void) {
-        self.manager = manager; self.onClose = onClose
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        super.init()
-        window.title = harness.name + " · Shared login and settings"; window.isReleasedWhenClosed = false; window.delegate = self
-        window.contentMinSize = NSSize(width: 620, height: 560)
-        var root = AnyView(HarnessManagementHost(harness: harness, manager: manager, computer: computer, computerID: computerID, openBox: openBox, console: console, close: { [weak self] in self?.window.close() }).environment(workspace))
+        self.manager = manager
+        presentation = AuxiliaryWindow(kind: .harness, title: harness.name + " · Shared login and settings") {
+            manager.close(); onClose()
+        }
+        var root = AnyView(HarnessManagementHost(harness: harness, manager: manager, computer: computer, computerID: computerID, openBox: openBox, console: console, close: { [weak presentation] in presentation?.requestClose() }).environment(workspace))
         if let connections { root = AnyView(root.environment(connections)) }
         if let commands { root = AnyView(root.environment(commands)) }
-        window.contentView = NSHostingView(rootView: root); window.center()
+        presentation.content = root
     }
     func selectSource(_ id: String) { manager.requestReview(box: id) }
-    func windowWillClose(_ notification: Notification) { manager.close(); onClose() }
 }
 
 private struct HarnessManagementHost: View {

@@ -28,6 +28,6 @@ struct BoxMaintenanceIndicators: View {
                     .accessibilityHint(tooltip)
                     .accessibilityIdentifier("box.maintenance.upgrade")
             }
-        }.font(.system(size: 12, weight: .medium)).fixedSize()
+        }.font(.callout.weight(.medium)).fixedSize()
     }
 }

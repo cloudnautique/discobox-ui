@@ -388,7 +388,7 @@ struct ApprovalNotificationSettings: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 12) {
                         Image(systemName: statusSymbol)
-                            .font(.system(size: 21, weight: .regular))
+                            .font(.title2.weight(.regular))
                             .foregroundStyle(notifications.permissionBlocked || notifications.bannersDisabled ? Color.orange : .secondary)
                             .frame(width: 26)
                             .accessibilityHidden(true)

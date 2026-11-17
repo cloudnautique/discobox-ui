@@ -65,8 +65,8 @@ struct HarnessUsageSection: View {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 7) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold)).frame(width: 12)
-                        Text("Harness usage").font(.system(size: 11, weight: .semibold))
+                            .font(.caption2.weight(.semibold)).frame(width: 12)
+                        Text("Harness usage").font(.caption.weight(.semibold))
                         Text("\(computers.count) \(computers.count == 1 ? "computer" : "computers")")
                             .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         Spacer()

@@ -167,7 +167,7 @@ struct BoxWorkspaceView: View {
                         ForEach(layout.companionIDs, id: \.self) { id in
                             HStack(spacing: 7) {
                                 Button { layout.open(id) } label: { Label(title(id), systemImage: symbol(id)).lineLimit(1) }.buttonStyle(.plain)
-                                Button { close(id) } label: { Image(systemName: "xmark").font(.system(size: 8)) }
+                                Button { close(id) } label: { Image(systemName: "xmark").font(.caption2) }
                                     .buttonStyle(.plain).help("Close " + title(id)).accessibilityLabel("Close " + title(id))
                             }.padding(.horizontal, 10).padding(.vertical, 7)
                                 .background(layout.selected == id ? DiscoboxAppearance.surface : .clear, in: RoundedRectangle(cornerRadius: 5))
@@ -379,7 +379,7 @@ private struct ToolPaneFocus: NSViewRepresentable {
 
 private extension View {
     func workspacePaneHeader() -> some View {
-        self.font(.system(size: 12)).buttonStyle(.borderless)
+        self.font(.callout).buttonStyle(.borderless)
             .padding(.horizontal, 14).frame(height: 42).background(DiscoboxAppearance.chrome)
     }
     func studioTerminalFrame() -> some View {

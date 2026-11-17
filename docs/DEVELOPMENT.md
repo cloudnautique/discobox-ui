@@ -165,6 +165,14 @@ shipping dependency graph. `make verify` also checks its binary for leaked smoke
 runners/flags. The smoke target requires a debug build for `@testable` access to UI
 internals; a release build of that target only prints the debug build instruction.
 
+`--native-window-smoke` uses the production auxiliary `WindowGroup` scenes to
+check window reuse, independent ownership, console close cancellation/confirmation,
+and cleanup on disconnect or before a window mounts. It also checks native alert
+defaults without clipboard or credential access. `--recovery-smoke` checks that
+warnings reserve space above the native navigation split in both appearances.
+These checks need WindowServer access; launching inside a sandbox that blocks
+application registration can abort before any fixture code runs.
+
 ## Xcode
 
 After `make build`, open `Package.swift` in Xcode and select the executable target.

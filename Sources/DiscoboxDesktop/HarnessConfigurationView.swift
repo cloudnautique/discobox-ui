@@ -13,15 +13,15 @@ struct HarnessSavedFiles: View {
                         HarnessReadOnlyConfigText(text: file["content"].string)
                             .frame(height: 180).background(DiscoboxAppearance.surface, in: RoundedRectangle(cornerRadius: 4))
                     } label: {
-                        Text(file["path"].string).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file["path"].string)
+                        Text(file["path"].string).font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file["path"].string)
                     }
                 }
             }.padding(.top, 10)
         } label: {
             HStack {
-                Text(title).font(.system(size: 12))
+                Text(title).font(.callout)
                 Spacer()
-                Text(files.isEmpty ? "None" : "\(files.count)").font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                Text(files.isEmpty ? "None" : "\(files.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
         }.disabled(files.isEmpty).padding(14)
     }
@@ -63,9 +63,9 @@ struct HarnessFileChangeView: View {
                         HStack(spacing: 14) {
                             Text("− Removed").foregroundStyle(DiscoboxAppearance.danger)
                             Text("+ Added").foregroundStyle(DiscoboxAppearance.success)
-                        }.font(.system(size: 10))
+                        }.font(.caption2)
                         ScrollView([.horizontal, .vertical]) {
-                            Text(diffText(diff)).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                            Text(diffText(diff)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                         }.frame(height: min(300, max(100, CGFloat(diff.lines.count) * 17 + 20)))
                             .background(DiscoboxAppearance.surface, in: RoundedRectangle(cornerRadius: 4))
@@ -74,9 +74,9 @@ struct HarnessFileChangeView: View {
             }.padding(.top, 12)
         } label: {
             HStack(spacing: 12) {
-                Text(file["path"].string).font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file["path"].string)
+                Text(file["path"].string).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file["path"].string)
                 Spacer(minLength: 8)
-                Text(status).font(.system(size: 10, weight: .medium)).foregroundStyle(status == "Removed" ? DiscoboxAppearance.danger : Color.secondary)
+                Text(status).font(.caption2.weight(.medium)).foregroundStyle(status == "Removed" ? DiscoboxAppearance.danger : Color.secondary)
             }
         }
         .task(id: expanded) {

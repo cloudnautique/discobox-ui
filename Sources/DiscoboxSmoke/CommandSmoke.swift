@@ -45,6 +45,7 @@ import DiscoboxCore
                 }, uniquingKeysWith: { first, _ in first })
             }
             let fixedToolbar = toolbarFrames()
+            let originalWindowWidth = window.contentLayoutRect.width
             guard fixedToolbar.count >= 2,
                   let rightEdge = fixedToolbar.values.map(\.maxX).max(),
                   rightEdge > window.contentView!.bounds.width - 60 else {
@@ -53,12 +54,20 @@ import DiscoboxCore
             for (hidden, inspector) in [(true, false), (true, true), (false, true), (false, false)] {
                 commands.focusMode = hidden
                 commands.showInspector = inspector
-                try await Task.sleep(for: .milliseconds(450))
+                try await Task.sleep(for: .milliseconds(1000))
                 window.contentView!.layoutSubtreeIfNeeded()
-                for (id, original) in fixedToolbar {
-                    guard let current = toolbarFrames()[id], abs(current.minX - original.minX) < 1 else {
-                        throw Failure("toolbar control moved when toggling panels: \(id), \(original), \(String(describing: toolbarFrames()[id]))")
+                // The system owns the sidebar toggle and window title. Our
+                // workspace actions must stay anchored to the trailing edge.
+                for (id, original) in fixedToolbar where id == "workspace.actions" {
+                    guard let current = toolbarFrames()[id], abs((current.minX - original.minX) - (id == "workspace.actions" ? window.contentLayoutRect.width - originalWindowWidth : 0)) < 1 else {
+                        throw Failure("toolbar control moved when toggling panels: \(id), \(original), \(String(describing: toolbarFrames()[id])), content=\(window.contentLayoutRect)")
                     }
+                }
+                guard let table = descendants(window.contentView!).compactMap({ $0 as? NSTableView }).first,
+                      let sidebarSplit = splits(window.contentView!).first(where: { split in
+                          split.isVertical && split.arrangedSubviews.count == 2 && table.isDescendant(of: split.arrangedSubviews[0])
+                      }), sidebarSplit.isSubviewCollapsed(sidebarSplit.arrangedSubviews[0]) == hidden else {
+                    throw Failure("Native sidebar visibility did not follow the workspace command")
                 }
                 let rect = harness.convert(harness.bounds, to: nil)
                 guard abs(rect.minY - (window.contentLayoutRect.minY + 31 + DiscoboxAppearance.terminalInset)) < 1 else {
