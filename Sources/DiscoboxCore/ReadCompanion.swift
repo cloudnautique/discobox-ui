@@ -1,18 +1,13 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#else
-import Glibc
-#endif
 
 /// One persistent `--read-server` companion: concurrent read-only requests
 /// over one process and HTTP transport, framed as `Companion/internal/readserver`
 /// documents. Writes, shells and transfers never come here. Requests carry a
 /// transport correlation ID of their own (never `requestID`, which names an
 /// approval); replies may arrive in any order. Cancelling or timing out one
-/// read sends a cancel frame for that read only. Pipe I/O runs on a serial
-/// writer queue and a dedicated reader thread, never the main actor or the
-/// cooperative pool. The helper ends, failing every waiter exactly once, when
+/// read sends a cancel frame for that read only. `CompanionProcess` owns the
+/// process: launch and writes on its serial queue, reads on its own thread,
+/// never the main actor or the cooperative pool. The helper ends, failing every waiter exactly once, when
 /// it exits, breaks the framing, or its owner closes it; a closed companion is
 /// never reused (`ReadCompanionSlot` starts a fresh one).
 final class ReadCompanion: @unchecked Sendable {
@@ -31,27 +26,19 @@ final class ReadCompanion: @unchecked Sendable {
 
     let endpoint: String
     private let lock = NSLock()
-    private let process = Process()
-    private let input = Pipe()
-    private let output = Pipe()
-    private let writer = DispatchQueue(label: "Discobox read companion writer")
+    private let child: CompanionProcess
+    private let frames = FrameReader()
     private var waiters: [UInt64: Waiter] = [:]
-    private var launched = false
     private var ended: (any Error)?
 
     init(executable: URL, endpoint: String) {
         self.endpoint = endpoint
-        process.executableURL = executable
-        process.arguments = ["--read-server", "--endpoint", endpoint]
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
+        child = CompanionProcess(executable: executable, arguments: ["--read-server", "--endpoint", endpoint], readerName: "Discobox read companion")
         Self.registry.withLock { $0[ObjectIdentifier(self)] = Weak(value: self) }
     }
     deinit {
         _ = Self.registry.withLock { $0.removeValue(forKey: ObjectIdentifier(self)) }
-        lock.withLock { if process.isRunning { process.terminate() } }
-        try? input.fileHandleForWriting.close()
+        child.close()
     }
     var isUsable: Bool { lock.withLock { ended == nil } }
 
@@ -142,66 +129,52 @@ final class ReadCompanion: @unchecked Sendable {
 
     // MARK: Lifetime
 
+    /// The first frame launches the helper (on the child's writer queue), so
+    /// an idle connection never starts one.
     private func send(_ frame: Data) {
-        writer.async { [self] in
-            guard launch() else { return }
-            do { try input.fileHandleForWriting.write(contentsOf: frame) }
-            catch { end(DiscoboxError("The companion exited unexpectedly.", connectionRetryable: true)) }
-        }
+        guard isUsable else { return }
+        child.write(frame, launching: handlers())
     }
 
-    /// On the writer queue only: the first frame launches the helper, so an
-    /// idle connection never starts one.
-    private func launch() -> Bool {
-        if let ready: Bool = lock.withLock({ ended != nil ? false : (launched ? true : nil) }) { return ready }
-        do {
-            try lock.withLock {
-                guard ended == nil else { throw CancellationError() }
-                process.terminationHandler = { [weak self] process in
-                    self?.end(DiscoboxError("The companion exited unexpectedly (\(process.terminationStatus)).", connectionRetryable: true))
-                }
-                try process.run()
-                launched = true
-            }
-        } catch is CancellationError {
-            return false
-        } catch {
-            end(DiscoboxError("Could not launch the companion. Build the app with scripts/build-app.sh. \(error.localizedDescription)"))
-            return false
-        }
-        startReader()
-        return true
-    }
-
-    private func startReader() {
-        Self.ignoreBrokenPipes(input.fileHandleForWriting)
-        // The thread holds only the read handle and a weak owner, so
-        // releasing the companion still closes its stdin and ends the helper.
-        let handle = output.fileHandleForReading
-        let thread = Thread { [weak self] in
-            var frames = Frames()
-            // read(2), not FileHandle.read(upToCount:), which on Linux waits
-            // for the whole count and would hold a short reply indefinitely.
-            var buffer = [UInt8](repeating: 0, count: 64 << 10)
-            while true {
-                let count = buffer.withUnsafeMutableBytes { read(handle.fileDescriptor, $0.baseAddress, $0.count) }
-                if count < 0 && errno == EINTR { continue }
-                guard count > 0 else { break }
+    /// Callbacks hold this companion weakly: releasing it still closes the
+    /// child's stdin and ends the helper.
+    private func handlers() -> CompanionProcess.Handlers {
+        let frames = frames
+        return .init(
+            output: { [weak self] data in
+                guard let self else { return false }
                 do {
-                    for (id, reply) in try frames.append(Data(buffer[0..<count])) { self?.deliver(id, reply) }
+                    for (id, reply) in try frames.append(data) { deliver(id, reply) }
+                    return true
                 } catch {
-                    self?.end(error); return
+                    end(error); return false
                 }
-            }
-            // EOF: report the exit status like a one-shot request when the
-            // helper has exited; a helper that closed its output is ended.
-            guard let self, self.isUsable else { return }
-            for _ in 0..<100 where self.process.isRunning { usleep(10_000) }
-            let status = self.process.isRunning ? "" : " (\(self.process.terminationStatus))"
-            self.end(DiscoboxError("The companion exited unexpectedly\(status).", connectionRetryable: true))
+            },
+            // EOF normally means exit; the exit callback reports its status
+            // like a one-shot request, and this ends a helper that only
+            // closed its output.
+            outputEnded: { [weak self] in self?.endAfterGrace() },
+            exited: { [weak self] status in
+                self?.end(DiscoboxError("The companion exited unexpectedly (\(status)).", connectionRetryable: true))
+            },
+            failed: { [weak self] failure in
+                switch failure {
+                case .launch(let error): self?.end(DiscoboxError("Could not launch the companion. Build the app with scripts/build-app.sh. \(error.localizedDescription)"))
+                case .write: self?.end(DiscoboxError("The companion exited unexpectedly.", connectionRetryable: true))
+                }
+            })
+    }
+
+    private func endAfterGrace() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.end(DiscoboxError("The companion exited unexpectedly.", connectionRetryable: true))
         }
-        thread.name = "Discobox read companion"
-        thread.start()
+    }
+
+    /// Reply framing state, used only on the reader thread.
+    private final class FrameReader: @unchecked Sendable {
+        private var frames = Frames()
+        func append(_ data: Data) throws -> [(id: UInt64, reply: Reply)] { try frames.append(data) }
     }
 
     private func deliver(_ id: UInt64, _ reply: Reply) {
@@ -224,11 +197,10 @@ final class ReadCompanion: @unchecked Sendable {
         let failed: [Waiter] = lock.withLock {
             guard ended == nil else { return [] }
             ended = error
-            if process.isRunning { process.terminate() }
             defer { waiters.removeAll() }
             return Array(waiters.values)
         }
-        writer.async { [input] in try? input.fileHandleForWriting.close() }
+        child.close()
         for waiter in failed { waiter.resolve(.failure(error)) }
     }
 
@@ -240,15 +212,6 @@ final class ReadCompanion: @unchecked Sendable {
     // that was sent to a different helper or generation.
     private static let ids = Locked<UInt64>(0)
     private static func nextID() -> UInt64 { ids.withLock { $0 += 1; return $0 } }
-
-    /// A helper that dies mid-write must not kill the app with SIGPIPE.
-    private static func ignoreBrokenPipes(_ handle: FileHandle) {
-        #if canImport(Darwin)
-        _ = fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1)
-        #else
-        _ = signal(SIGPIPE, SIG_IGN)
-        #endif
-    }
 
     /// One read's continuation, resumed exactly once by whichever comes first:
     /// its reply, cancellation, its deadline, or the helper ending.

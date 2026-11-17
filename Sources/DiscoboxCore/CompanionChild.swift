@@ -10,15 +10,16 @@ import Glibc
 ///
 /// - Its stdin stays open and is never written: EOF is the child's
 ///   parent-death signal, including when the app itself exits unexpectedly.
-/// - stdout is read on a dedicated thread (see `BlockingThread`), never the
+/// - stdout is read on a dedicated thread (`CompanionProcess`), never the
 ///   main actor or the cooperative pool. Lines are bounded by `maxLineBytes`
 ///   and decoded there; `events` delivers them in order.
 /// - `close()` is idempotent and also runs on deinit: it closes stdin, sends
 ///   SIGTERM, then SIGKILL if the child outlives `killAfter`. After close no
 ///   further events are delivered and `events` finishes.
 ///
-/// Request/response companion calls keep their own per-request processes
-/// (`CompanionClient`); terminal PTY children are owned by Ghostty.
+/// Reads share `ReadCompanion`; other request/response calls keep their own
+/// per-request processes (`CompanionClient`); terminal PTY children are owned
+/// by Ghostty.
 public final class CompanionChild<Message: Decodable & Sendable>: @unchecked Sendable {
     public enum Event: Sendable {
         case message(Message)
@@ -35,121 +36,83 @@ public final class CompanionChild<Message: Decodable & Sendable>: @unchecked Sen
 
     public let events: AsyncStream<Event>
     private let state: CompanionChildState<Message>
-    private let process = Process()
-    private let input = Pipe()
-    private let output: Pipe
+    private let child: CompanionProcess
     private let maxLineBytes: Int
-    private let killAfter: Duration
 
     public init(executable: URL, arguments: [String], maxLineBytes: Int = 1024 * 1024, killAfter: Duration = .seconds(2)) {
         let (events, continuation) = AsyncStream.makeStream(of: Event.self)
-        let output = Pipe()
         self.events = events
-        self.output = output
-        state = CompanionChildState(continuation: continuation, output: output.fileHandleForReading)
+        state = CompanionChildState(continuation: continuation)
         self.maxLineBytes = maxLineBytes
-        self.killAfter = killAfter
-        process.executableURL = executable
-        process.arguments = arguments
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
+        child = CompanionProcess(executable: executable, arguments: arguments, killAfter: killAfter,
+                                 readerName: "Discobox companion output", readerQoS: .userInitiated)
     }
 
-    public var isRunning: Bool { state.withLock { !$0.closed && !$0.exited && $0.started } }
+    public var isRunning: Bool { state.withLock { !$0.closed && $0.started } && !child.hasExited }
     /// For tests: the launched child's pid, or 0.
-    var processIdentifier: Int32 { state.withLock { $0.pid } }
+    var processIdentifier: Int32 { child.processIdentifier }
 
     /// Launches the child. Throws if it cannot start or was already started or
     /// closed; a child that failed to launch is closed.
     public func start() throws {
-        let state = state, limit = maxLineBytes
+        let state = state, lines = LineReader(limit: maxLineBytes, state: state)
+        state.withLock { _ in state.onOverflow = { [weak self] in self?.close() } }
         do {
-            try state.withLock { flags in
-                guard !flags.closed, !flags.started else { throw CancellationError() }
-                flags.started = true
-                state.onOverflow = { [weak self] in self?.close() }
-                // A child whose stdout a sibling inherited (possible on Linux
-                // Foundation) never delivers EOF; its exit still ends the
-                // stream, after a short grace for output it already wrote.
-                process.terminationHandler = { _ in
-                    state.withLock { $0.exited = true }
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) { state.finish(.exited) }
-                }
-                try process.run()
-                flags.pid = process.processIdentifier
-            }
+            try child.start(.init(
+                output: { lines.append($0) },
+                outputEnded: { state.finish(.exited) },
+                // A child whose stdout a sibling inherited never delivers
+                // EOF; its exit still ends the stream, after a short grace
+                // for output it already wrote.
+                exited: { _ in DispatchQueue.global().asyncAfter(deadline: .now() + 1) { state.finish(.exited) } }))
         } catch {
             close()
             throw error
         }
-        // The parent's copy of the write end would hold EOF back forever.
-        try? output.fileHandleForWriting.close()
-        let thread = Thread { CompanionChild.readLines(limit: limit, state: state) }
-        thread.name = "Discobox companion output"
-        thread.qualityOfService = .userInitiated
-        thread.start()
-    }
-
-    /// Runs on its own thread and never retains the CompanionChild, so
-    /// dropping the owner still reaches deinit, which closes the child.
-    private static func readLines(limit: Int, state: CompanionChildState<Message>) {
-        var pending = Data()
-        let decoder = JSONDecoder()
-        // FileHandle.read(upToCount:) waits for the full count or EOF; a POSIX
-        // read returns whatever a line-at-a-time child has written so far.
-        let descriptor = state.output.fileDescriptor
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
-            if count < 0 && errno == EINTR { continue }
-            guard count > 0 else { break }
-            pending.append(contentsOf: buffer[..<count])
-            while let end = pending.firstIndex(of: 10) {
-                let line = Data(pending[pending.startIndex..<end])
-                pending.removeSubrange(pending.startIndex...end)
-                guard line.count <= limit else { state.overflowed(); return }
-                do { state.deliver(.message(try decoder.decode(Message.self, from: line))) }
-                catch { state.deliver(.invalidLine(error.localizedDescription)) }
-            }
-            guard pending.count <= limit else { state.overflowed(); return }
-            if state.isFinished { return }
-        }
-        state.finish(.exited)
+        state.withLock { $0.started = true }
     }
 
     /// Idempotent. Closes stdin (the child's parent-death signal), sends
     /// SIGTERM, and SIGKILL if the child is still running after `killAfter`.
     public func close() {
-        guard let pid = state.close() else { return }
-        try? input.fileHandleForWriting.close()
-        let state = state
-        guard !state.withLock({ $0.exited }) else { return }
-        kill(pid, SIGTERM)
-        let grace = killAfter.components
-        let delay = Double(grace.seconds) + Double(grace.attoseconds) / 1e18
-        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-            if !state.withLock({ $0.exited }) { kill(pid, SIGKILL) }
-        }
+        state.close()
+        child.close()
     }
 
     deinit { close() }
+
+    /// Splits output into bounded lines and decodes them, on the reader thread.
+    private final class LineReader: @unchecked Sendable {
+        private var pending = Data()
+        private let decoder = JSONDecoder()
+        private let limit: Int
+        private let state: CompanionChildState<Message>
+        init(limit: Int, state: CompanionChildState<Message>) { self.limit = limit; self.state = state }
+        func append(_ data: Data) -> Bool {
+            pending.append(data)
+            while let end = pending.firstIndex(of: 10) {
+                let line = Data(pending[pending.startIndex..<end])
+                pending.removeSubrange(pending.startIndex...end)
+                guard line.count <= limit else { state.overflowed(); return false }
+                do { state.deliver(.message(try decoder.decode(Message.self, from: line))) }
+                catch { state.deliver(.invalidLine(error.localizedDescription)) }
+            }
+            guard pending.count <= limit else { state.overflowed(); return false }
+            return !state.isFinished
+        }
+    }
 }
 
 private final class CompanionChildState<Message: Decodable & Sendable>: @unchecked Sendable {
     struct Flags {
-        var started = false, closed = false, finished = false, exited = false
-        var pid: Int32 = 0
+        var started = false, closed = false, finished = false
     }
     private let lock = NSLock()
     private var flags = Flags()
     private let continuation: AsyncStream<CompanionChild<Message>.Event>.Continuation
-    let output: FileHandle
     /// Closes the owning child after its output overflowed; set under the lock.
     var onOverflow: (@Sendable () -> Void)?
-    init(continuation: AsyncStream<CompanionChild<Message>.Event>.Continuation, output: FileHandle) {
-        self.continuation = continuation; self.output = output
-    }
+    init(continuation: AsyncStream<CompanionChild<Message>.Event>.Continuation) { self.continuation = continuation }
 
     func withLock<T>(_ body: (inout Flags) throws -> T) rethrows -> T {
         lock.lock(); defer { lock.unlock() }
@@ -172,13 +135,11 @@ private final class CompanionChildState<Message: Decodable & Sendable>: @uncheck
         withLock { $0.closed ? nil : onOverflow }?()
     }
     /// Marks the child closed, ending `events` without a further event.
-    /// Returns its pid the first time if it was launched.
-    func close() -> Int32? {
+    func close() {
         withLock { flags in
-            guard !flags.closed else { return nil }
+            guard !flags.closed else { return }
             flags.closed = true
             if !flags.finished { flags.finished = true; continuation.finish() }
-            return flags.pid > 0 ? flags.pid : nil
         }
     }
 }
