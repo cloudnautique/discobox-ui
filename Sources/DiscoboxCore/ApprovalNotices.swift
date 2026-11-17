@@ -16,15 +16,16 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
         guard workspace.isConnected, workspace.connectionID == connection else {
             throw DiscoboxError("The computer reconnected or disconnected. Open the current request in Discobox.")
         }
-        try await workspace.validateApproval(item, connection: connection)
-        if action == .open { return false }
-        let payload: JSONValue
-        if action == .deny { payload = .object([:]) }
-        else {
-            guard let quick = item.notificationApprovalPayload else { return false }
-            payload = quick
+        let answer: ApprovalAnswer
+        switch action {
+        case .later: return false
+        case .deny: answer = .deny
+        case .approve where item.notificationApprovalAnswer != nil: answer = item.notificationApprovalAnswer!
+        case .approve, .open:
+            try await workspace.validateApproval(item, connection: connection)
+            return false
         }
-        try await workspace.answer(item, action: action.rawValue, payload: payload, onAccepted: onAccepted)
+        try await workspace.answer(item, answer, connection: connection, onAccepted: { _ in onAccepted() })
         return true
     }
 }
@@ -32,7 +33,7 @@ public struct ApprovalNotice: Identifiable, Sendable, Equatable {
 extension ApprovalItem {
     /// Notifications open the review form. A banner cannot describe the full
     /// policy, delivery and existing-access effects needed for informed consent.
-    public var notificationApprovalPayload: JSONValue? { nil }
+    public var notificationApprovalAnswer: ApprovalAnswer? { nil }
 }
 
 /// In-memory deduplication only. No credentials or approval policies are written

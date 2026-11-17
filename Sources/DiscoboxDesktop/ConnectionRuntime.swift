@@ -133,10 +133,11 @@ struct ConnectedWorkspace: View {
 @MainActor private struct PollingPresenceReporter: ViewModifier {
     let connections: Connections
     let commands: WorkspaceCommands
+    @State private var id = UUID()
     func body(content: Content) -> some View {
         content
             .onAppear { report() }
-            .onDisappear { connections.presence = .hidden }
+            .onDisappear { connections.withdrawPresence(from: id) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in report() }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in report() }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { _ in report() }
@@ -145,6 +146,6 @@ struct ConnectedWorkspace: View {
     }
     private func report() {
         let onScreen = commands.window.map { $0.occlusionState.contains(.visible) && !$0.isMiniaturized } ?? true
-        connections.presence = !onScreen ? .hidden : NSApp.isActive ? .focused : .visible
+        connections.reportPresence(!onScreen ? .hidden : NSApp.isActive ? .focused : .visible, from: id)
     }
 }

@@ -74,7 +74,7 @@ struct ComputersSidebar: View {
         // Derive the visible rows and bulk availability once per body, not per row.
         let snapshot = connections.browserSnapshot, pins = self.pins
         let items = visibleItems(snapshot, pins: pins)
-        let selectionPin = connections.browserSelectionPin
+        let selectionPin = connections.browserSelectionPin(in: snapshot)
         let selectedIDs = browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
         let selected = items.filter { selectedIDs.contains($0.location) }
         let context = SidebarRowContext(showComputer: browser.computerID == nil, archived: browser.filter == .archived, selection: selectedIDs,

@@ -180,7 +180,7 @@ private let studioProfile = ConnectionProfile(name: "Studio", endpoint: "https:/
     #expect(await remoteClient.count(.createBox) == 1)
     #expect(await localClient.count(.createBox) == 0)
     #expect(local.workspace.sandboxes.count == originalLocalBoxes)
-    try await target.answer(request, action: "deny", payload: .object([:]))
+    try await target.answerWithReceipt(request, action: "deny", payload: .object([:]))
     #expect(await remoteClient.count(.answer) == 1)
     #expect(await localClient.count(.answer) == 0)
     #expect(local.workspace.approvals.count == 1)

@@ -206,16 +206,16 @@ func runManaged(endpoint string, allowInput, allowShell, allowManage bool, input
 	b.allowShell = allowShell
 	b.allowManage = allowManage
 	defer b.client.CloseIdleConnections()
-	op, ok := operations[req.Operation]
-	if !ok {
-		return errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
+	op, err := lookupOperation(req.Operation)
+	if err != nil {
+		return err
 	}
 	op.configure(b.client)
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, op.deadlineFor(req))
 	defer cancel()
-	result, err := b.execute(ctx, req)
+	result, err := b.dispatch(ctx, op, req)
 	if err != nil {
 		return err
 	}

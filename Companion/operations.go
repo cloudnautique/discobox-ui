@@ -145,11 +145,24 @@ var permissionRefusals = map[permission]string{
 	permissionInput:  "terminal input requires explicit permission",
 }
 
-func (b *bridge) execute(ctx context.Context, req request) (response, error) {
-	op, ok := operations[req.Operation]
+func lookupOperation(name string) (operation, error) {
+	op, ok := operations[name]
 	if !ok {
-		return response{}, errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
+		return operation{}, errors.New("unsupported operation; lifecycle and arbitrary HTTP requests are not exposed")
 	}
+	return op, nil
+}
+
+func (b *bridge) execute(ctx context.Context, req request) (response, error) {
+	op, err := lookupOperation(req.Operation)
+	if err != nil {
+		return response{}, err
+	}
+	return b.dispatch(ctx, op, req)
+}
+
+// dispatch checks op's permission flag, then runs it.
+func (b *bridge) dispatch(ctx context.Context, op operation, req request) (response, error) {
 	if !b.allows(op.permission) {
 		return response{}, errors.New(permissionRefusals[op.permission])
 	}

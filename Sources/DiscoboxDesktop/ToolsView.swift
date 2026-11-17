@@ -12,7 +12,13 @@ struct ToolsSheet: View {
     @State private var loading = true
     @State private var reviewExpanded: Bool
 
-    init(initiallyExpanded: Bool = false) {
+    /// The box and connection the sheet was presented for; nil falls back to
+    /// the selection at first appearance (fixtures).
+    private let box: String?
+    private let connection: UUID?
+
+    init(box: String? = nil, connection: UUID? = nil, initiallyExpanded: Bool = false) {
+        self.box = box; self.connection = connection
         _reviewExpanded = State(initialValue: initiallyExpanded)
     }
 
@@ -52,7 +58,8 @@ struct ToolsSheet: View {
         }.frame(height: 640).interactiveDismissDisabled(busy)
         .task {
             defer { loading = false }
-            do { tools = try await workspace.tools(box: workspace.sandboxID ?? "", connection: workspace.connectionID) }
+            guard let box = box ?? workspace.sandboxID else { error = "Select a box to see its tools."; return }
+            do { tools = try await workspace.tools(box: box, connection: connection ?? workspace.connectionID) }
             catch { self.error = error.localizedDescription }
         }
     }

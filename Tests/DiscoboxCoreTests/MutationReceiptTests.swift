@@ -27,7 +27,7 @@ import Testing
     await client.holdRefresh()
     var accepted = false, returned = false
     let task = Task {
-        try await workspace.answer(item, action: "deny", payload: .object([:]), onAccepted: {
+        try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:]), onAccepted: { _ in
             #expect(!workspace.approvals.contains { $0.id == item.id })
             accepted = true
         })

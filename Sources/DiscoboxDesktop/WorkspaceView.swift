@@ -514,7 +514,7 @@ private struct WorkspaceHostDialogs: View {
         @Bindable var commands = commands
         Color.clear.frame(width: 0, height: 0)
             .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: nil).environment(workspace) }
-            .sheet(isPresented: $commands.showTools) { ToolsSheet().environment(workspace) }
+            .sheet(isPresented: $commands.showTools) { ToolsSheet(box: workspace.sandboxID, connection: workspace.connectionID).environment(workspace) }
             .sheet(isPresented: $commands.showApprovals) { ApprovalInboxView(boxID: nil).environment(workspace) }
     }
 }

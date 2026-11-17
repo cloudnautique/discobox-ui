@@ -69,10 +69,12 @@ public extension Connections {
     var browserBoxes: [ConnectedBox] { browserSnapshot.boxes }
     /// Keep a selected box that stops matching activity visible as context,
     /// without adding it to the filter results or inflating either count.
-    var browserSelectionPin: ConnectedBox? {
+    var browserSelectionPin: ConnectedBox? { browserSelectionPin(in: browserSnapshot) }
+    /// For callers that already hold this render's snapshot.
+    func browserSelectionPin(in snapshot: BrowserSnapshot) -> ConnectedBox? {
         guard browser.filter != .archived, let filter = browser.activityFilter, let selected = active.workspace.sandboxID else { return nil }
         let id = activeID
-        return browserCandidates.first { item in
+        return snapshot.candidates.first { item in
             item.location.connection == id && item.box.id == selected &&
                 !filter.matches(item.activity ?? AgentActivity(box: item.box), box: item.box)
         }

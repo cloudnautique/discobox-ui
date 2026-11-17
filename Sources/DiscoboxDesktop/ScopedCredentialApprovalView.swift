@@ -264,13 +264,13 @@ struct ScopedCredentialApprovalView: View {
         }
     }
     private func reload(selectDefault: Bool = true) async {
-        guard !closed, !resolved else { return }
+        guard !closed, !resolved, let connection else { return }
         let token = UUID(); reviewRequest = token
         let requestedDraft = draftKey
         loading = true; error = nil
         defer { if token == reviewRequest { loading = false } }
         do {
-            let result = try await workspace.approvalContext(for: item, candidate: payload, connection: connection ?? workspace.connectionID)
+            let result = try await workspace.approvalContext(for: item, candidate: payload, connection: connection)
             guard !closed, workspace.connectionID == connection, token == reviewRequest, !Task.isCancelled else { return }
             guard result["request"] == request else { throw DiscoboxError("The request changed. Reopen it from the current inbox.") }
             context = result

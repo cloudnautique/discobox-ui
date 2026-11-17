@@ -87,7 +87,7 @@ import Testing
     await workspace.connect(client: client, label: "fixture")
     await workspace.refreshApprovals()
     let item = try #require(workspace.approvals.first)
-    do { try await workspace.answer(item, action: "deny", payload: .object([:])); Issue.record("Lost response accepted") } catch { }
+    do { try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:])); Issue.record("Lost response accepted") } catch { }
     await client.setOnline(false); await workspace.refresh()
     await client.setOnline(true); await workspace.retryConnection()
     #expect(await client.count(.answer) == 1)

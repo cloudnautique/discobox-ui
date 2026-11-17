@@ -15,14 +15,16 @@ public struct ActivityClock: Equatable, Sendable {
         self.now = now; self.inventoryIsCurrent = inventoryIsCurrent
     }
     public func advanced(to current: Date, inventoryObservedAt: Date?, boxes: [Sandbox]) -> ActivityClock {
+        advanced(to: current, inventoryObservedAt: inventoryObservedAt, reportDates: Self.reportDates(boxes))
+    }
+    public func advanced(to current: Date, inventoryObservedAt: Date?, reportDates: [Date]) -> ActivityClock {
         let next = ActivityClock(now: current, inventoryIsCurrent: inventoryObservedAt.map { Self.isFresh($0, at: current) } ?? false)
         if next.inventoryIsCurrent != inventoryIsCurrent || current < now || current.timeIntervalSince(now) >= Self.heartbeat { return next }
-        for box in boxes {
-            for text in [box.runtime.stateReportedAt ?? "", (box.runtime.agentStatus ?? .null)["observedAt"].string] {
-                if let date = ServerDate.parse(text), Self.isFresh(date, at: now) != Self.isFresh(date, at: current) { return next }
-            }
-        }
-        return self
+        return reportDates.contains { Self.isFresh($0, at: now) != Self.isFresh($0, at: current) } ? next : self
+    }
+    /// The report timestamps whose freshness the clock tracks.
+    static func reportDates(_ boxes: [Sandbox]) -> [Date] {
+        boxes.flatMap { [$0.runtime.stateReportedAt ?? "", ($0.runtime.agentStatus ?? .null)["observedAt"].string].compactMap(ServerDate.parse) }
     }
     /// The rule `AgentActivity` and `BoxPowerStatus` apply to these timestamps.
     static func isFresh(_ date: Date, at now: Date) -> Bool { abs(now.timeIntervalSince(date)) <= BoxPowerStatus.maximumReportAge }

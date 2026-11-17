@@ -19,7 +19,7 @@ import Testing
     await workspace.refreshApprovals()
     let item = try #require(workspace.approvals.first)
     #expect(item.boxID == "demo-ui")
-    try await workspace.answer(item, action: "deny", payload: .object([:]))
+    try await workspace.answerWithReceipt(item, action: "deny", payload: .object([:]))
     #expect(workspace.approvals.isEmpty)
     #expect(await client.answers == 1)
     workspace.disconnect()
@@ -52,6 +52,6 @@ private actor InboxFixture: DiscoboxClient {
         #expect(item.boxID == "requester")
         #expect(item.request["futurePolicy"] == .bool(true))
         #expect(item.supported == (kind != "future"))
-        if kind != "credential" { #expect(item.notificationApprovalPayload == nil) }
+        if kind != "credential" { #expect(item.notificationApprovalAnswer == nil) }
     }
 }

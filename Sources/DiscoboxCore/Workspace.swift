@@ -61,9 +61,17 @@ public final class Workspace {
     /// so unchanged reports still age out without republishing every tick.
     public private(set) var activityClock = ActivityClock()
     var activityObservationTime: Date { activityClock.now }
-    private func advanceActivityClock() {
-        let next = activityClock.advanced(to: now(), inventoryObservedAt: boxesObservedAt, boxes: sandboxes)
+    func advanceActivityClock() {
+        let next = activityClock.advanced(to: now(), inventoryObservedAt: boxesObservedAt, reportDates: reportDates)
         if next != activityClock { activityClock = next }
+    }
+    /// Parsed once per box list, not on every approvals poll.
+    @ObservationIgnored private var reportDatesCache: (boxes: [Sandbox], dates: [Date])?
+    private var reportDates: [Date] {
+        if let cache = reportDatesCache, cache.boxes == sandboxes { return cache.dates }
+        let dates = ActivityClock.reportDates(sandboxes)
+        reportDatesCache = (sandboxes, dates)
+        return dates
     }
 
     @ObservationIgnored private var client: (any DiscoboxClient)?
@@ -479,9 +487,6 @@ public final class Workspace {
             throw DiscoboxError("This computer reconnected before the reply arrived. Reopen this view and check the current state before trying again.")
         }
         return data.isEmpty ? .object([:]) : try JSONDecoder().decode(JSONValue.self, from: data)
-    }
-    func answer(_ item: ApprovalItem, action: String, payload: JSONValue, onAccepted: () -> Void = {}) async throws {
-        _ = try await answerWithReceipt(item, action: action, payload: payload, onAccepted: { _ in onAccepted() })
     }
     /// Publish the acknowledgment and remove this request before an unrelated
     /// inbox refresh can stall. A committed response is never submitted twice.

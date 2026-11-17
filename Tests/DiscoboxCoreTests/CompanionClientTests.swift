@@ -58,9 +58,11 @@ import Testing
     // time out; this does not depend on how fast the machine is. Only just
     // over the pool width, so the test itself adds little process pressure.
     let count = ProcessInfo.processInfo.activeProcessorCount + 2
+    // The helper never reads stdin: the small request fits in the pipe buffer,
+    // and on Linux siblings can inherit each other's stdin, so waiting for EOF
+    // there could hold a helper back from the barrier.
     let fixture = try FixtureExecutable(script: """
     #!/bin/sh
-    /bin/cat >/dev/null
     mkdir -p "$0.running"; : > "$0.running/$$"
     i=0
     while [ "$(ls "$0.running" | wc -l)" -lt \(count) ]; do

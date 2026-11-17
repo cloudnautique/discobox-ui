@@ -118,3 +118,22 @@ private actor CadenceFixture: DiscoboxClient {
         return try await demo.perform(request)
     }
 }
+
+@MainActor @Test func presenceFollowsTheMostVisibleWorkspaceWindow() {
+    let hub = Connections(polling: false)
+    let first = UUID(), second = UUID()
+    hub.reportPresence(.focused, from: first)
+    hub.reportPresence(.hidden, from: second)
+    #expect(hub.presence == .focused)
+    hub.reportPresence(.visible, from: first)
+    #expect(hub.presence == .visible)
+    // One window closing never hides another that is still on screen.
+    hub.withdrawPresence(from: second)
+    #expect(hub.presence == .visible)
+    hub.reportPresence(.hidden, from: first)
+    #expect(hub.presence == .hidden)
+    hub.reportPresence(.focused, from: second)
+    hub.withdrawPresence(from: second)
+    hub.withdrawPresence(from: first)
+    #expect(hub.presence == .hidden)
+}

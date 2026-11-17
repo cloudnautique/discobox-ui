@@ -42,7 +42,7 @@ import Testing
     #expect(await client.answers.isEmpty)
     try await workspace.validateApproval(item, connection: workspace.connectionID)
     let decision = try LegacyCredentialDecision.payload(request: item.request, secretID: "", duration: ApprovalDuration.automatic, maximum: 1800)
-    try await workspace.answer(item, action: "approve", payload: decision)
+    try await workspace.answerWithReceipt(item, action: "approve", payload: decision)
     #expect(await client.grantedSeconds == 1800)
     let answer = try #require(await client.answers.first)
     #expect(answer.payload?["grantTTLSeconds"] == .null)
@@ -60,7 +60,7 @@ import Testing
         let item = try #require(workspace.approvals.first)
         var fields = try ApprovalDuration.fields(duration, kind: "credential", maximum: 1800)
         fields["policy"] = item.request["policy"]
-        try await workspace.answer(item, action: "approve", payload: .object(fields))
+        try await workspace.answerWithReceipt(item, action: "approve", payload: .object(fields))
         #expect(await client.grantedSeconds == (duration == ApprovalDuration.automatic ? 1800 : 900))
     }
 }
