@@ -43,7 +43,19 @@ import Observation
         links = LinkService(connection: connection)
         pools.refresh = { [weak self] in await self?.refresh() }
         commands.refresh = { [weak self] in await self?.refresh() }
+        let observers = lifecycleObservers
+        let emit: @MainActor (ConnectionLifecycleEvent) -> Void = { observers.emit($0) }
+        connection.lifecycle = emit; inventory.lifecycle = emit; pending.lifecycle = emit
+        selection.lifecycle = emit; approvalStore.lifecycle = emit
     }
+    /// Per-host native resources follow these explicit transitions instead of
+    /// observing views; see ConnectionLifecycleEvent. Handlers run
+    /// synchronously on the main actor as the state changes.
+    @ObservationIgnored private let lifecycleObservers = ConnectionLifecycleObservers()
+    @discardableResult public func observeLifecycle(_ handler: @escaping @MainActor (ConnectionLifecycleEvent) -> Void) -> UUID {
+        lifecycleObservers.add(handler)
+    }
+    public func removeLifecycleObserver(_ id: UUID) { lifecycleObservers.remove(id) }
     /// Existing refreshes advance this only when an age check could change,
     /// so unchanged reports still age out without republishing every tick.
     public private(set) var activityClock = ActivityClock()
@@ -60,7 +72,11 @@ import Observation
         reportDatesCache = (inventory.sandboxes, dates)
         return dates
     }
-    public func update(_ profile: ConnectionProfile) { self.profile = profile }
+    public func update(_ profile: ConnectionProfile) {
+        guard profile != self.profile else { return }
+        self.profile = profile
+        lifecycleObservers.emit(.profileChanged)
+    }
     typealias Poll = PollingLoop
     @ObservationIgnored var pollSleep: @Sendable (Poll, Double) async throws -> Void = { _, delay in
         try await Task.sleep(for: .seconds(delay))
@@ -228,10 +244,12 @@ import Observation
     }
 
     private func resetConnection() {
+        let previous = connectionState.connectionID
         connectionState.invalidate()
         selection.reset()
         inventory.reset(); approvalStore.reset(); catalog.reset(); pools.reset(); pending.reset()
         usage = HarnessUsage()
         activityClock = ActivityClock(); reportDatesCache = nil
+        lifecycleObservers.emit(.generationEnded(previous: previous))
     }
 }

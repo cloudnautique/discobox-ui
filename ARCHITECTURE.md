@@ -644,8 +644,13 @@ computer unchanged. Polling is cancelled per host on disconnect and globally at
 app termination.
 
 ConnectionRuntimes owns separate terminal, forwarding, and desktop stores for
-each session. Always-mounted ConnectionLifecycle observers release only that
-host’s resources on reconnect/disconnect or authoritative inventory changes.
+each session. Each ConnectionSession emits explicit `ConnectionLifecycleEvent`s
+synchronously as its stores change (generation ended, transport replaced, box
+actions began, boxes/terminal inventory changed, approvals, profile), so no
+intermediate state is coalesced away. Each runtime subscribes once, when
+ConnectionRuntimes attaches to Connections, and releases only that host’s
+resources on reconnect/disconnect or authoritative inventory changes; no view
+has to stay mounted for teardown or approval notification sync.
 ConnectedWorkspace rebinds keyboard commands and view environments on active-host
 changes, while retained Ghostty surfaces and per-connection tab layouts survive.
 Harness setup windows close by connection generation rather than globally.

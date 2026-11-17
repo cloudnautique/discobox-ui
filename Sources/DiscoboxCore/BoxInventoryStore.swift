@@ -3,11 +3,13 @@ import Observation
 
 @MainActor @Observable
 public final class BoxInventoryStore {
-    public private(set) var sandboxes: [Sandbox] = []
+    public private(set) var sandboxes: [Sandbox] = [] { didSet { if sandboxes != oldValue { lifecycle(.boxesChanged) } } }
     public private(set) var boxesObservedAt: Date?
     public private(set) var lastRefresh: Date?
     @ObservationIgnored private var listRequest = LatestRequest()
     @ObservationIgnored private var confirmedPurges: Set<String> = []
+    /// Lifecycle transitions, wired by ConnectionSession (see ConnectionLifecycleEvent).
+    @ObservationIgnored var lifecycle: @MainActor (ConnectionLifecycleEvent) -> Void = { _ in }
     public init() {}
     func refresh(using connection: ConnectionStore, now: () -> Date) async throws -> UUID? {
         let access = try connection.capture(), request = listRequest.begin()
@@ -27,7 +29,7 @@ public final class BoxInventoryStore {
         }
     }
     func complete(_ request: UUID, at date: Date) {
-        if listRequest.owns(request) { lastRefresh = date }
+        if listRequest.owns(request) { lastRefresh = date; lifecycle(.inventoryRefreshed) }
     }
     func acknowledgePurge(_ id: String) {
         confirmedPurges.insert(id)

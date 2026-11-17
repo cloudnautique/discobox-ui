@@ -5,7 +5,7 @@ import Observation
 public final class ConnectionStore {
     public private(set) var connectionID = UUID()
     public private(set) var projectID: String?
-    public private(set) var isConnected = false
+    public private(set) var isConnected = false { didSet { if isConnected != oldValue { lifecycle(.connectivityChanged) } } }
     public private(set) var isConnecting = false
     public private(set) var isDemo = false
     public private(set) var endpointLabel = ""
@@ -17,6 +17,8 @@ public final class ConnectionStore {
     public private(set) var recoveryCount = 0
     @ObservationIgnored var client: (any DiscoboxClient)?
     @ObservationIgnored var recoveryInFlight = false
+    /// Lifecycle transitions, wired by ConnectionSession (see ConnectionLifecycleEvent).
+    @ObservationIgnored var lifecycle: @MainActor (ConnectionLifecycleEvent) -> Void = { _ in }
     public var canReconnect: Bool { client != nil }
     /// True while `generation` (a captured connectionID) is still this
     /// connection's lifetime and the calling task has not been cancelled.
@@ -68,7 +70,11 @@ public final class ConnectionStore {
         let current = connectionID
         let endpoint = try await client.prepareConnection()
         guard isCurrent(current) else { throw CancellationError() }
-        if let endpoint, endpoint != transportEndpoint { transportEndpoint = endpoint }
+        if let endpoint, endpoint != transportEndpoint {
+            let previous = transportEndpoint
+            transportEndpoint = endpoint
+            if !previous.isEmpty { lifecycle(.transportReplaced(previous: previous)) }
+        }
     }
     func didRefresh() {
         connectionError = nil; connectionErrorKind = nil

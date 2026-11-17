@@ -3,9 +3,11 @@ import Observation
 
 @MainActor @Observable
 public final class ApprovalStore {
-    public private(set) var approvals: [ApprovalItem] = []
+    public private(set) var approvals: [ApprovalItem] = [] { didSet { if approvals != oldValue { lifecycle(.approvalsChanged) } } }
     public private(set) var approvalError: String?
     @ObservationIgnored private var approvalRequest = LatestRequest()
+    /// Lifecycle transitions, wired by ConnectionSession (see ConnectionLifecycleEvent).
+    @ObservationIgnored var lifecycle: @MainActor (ConnectionLifecycleEvent) -> Void = { _ in }
     func reset() { approvalRequest.invalidate(); approvals = []; approvalError = nil }
     let connectionState: ConnectionStore
     init(connection: ConnectionStore) { self.connectionState = connection }

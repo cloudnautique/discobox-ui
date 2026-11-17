@@ -4,7 +4,9 @@ import Observation
 @MainActor @Observable
 public final class BoxSelectionStore {
     public private(set) var execs: [Exec] = []
-    public private(set) var terminalInventory: TerminalInventory?
+    public private(set) var terminalInventory: TerminalInventory? {
+        didSet { if let terminalInventory, terminalInventory != oldValue { lifecycle(.terminalInventoryChanged(terminalInventory)) } }
+    }
     public private(set) var services: [Service] = []
     public private(set) var sandboxID: String?
     public private(set) var execID: String?
@@ -15,6 +17,8 @@ public final class BoxSelectionStore {
     public private(set) var isOpeningSession = false
     public var commandError: String?
     @ObservationIgnored var selectionRevision = UUID()
+    /// Lifecycle transitions, wired by ConnectionSession (see ConnectionLifecycleEvent).
+    @ObservationIgnored var lifecycle: @MainActor (ConnectionLifecycleEvent) -> Void = { _ in }
     @ObservationIgnored private var detailsRequest = LatestRequest()
     @ObservationIgnored private var recentBoxes: [String: RecentBox] = [:]
     @ObservationIgnored private var inventoryLoadedAt: Date?

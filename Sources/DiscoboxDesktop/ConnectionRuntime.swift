@@ -6,60 +6,79 @@ import DiscoboxCore
     let forwards = ServiceForwards()
     let desktops = DesktopWindows()
     func close() { terminals.closeAll(); forwards.closeAll(); desktops.closeAll() }
+
+    /// Releases this computer's native resources as its session reports
+    /// transitions (see ConnectionLifecycleEvent). Registered once, so it works
+    /// whether or not any view of this computer is mounted.
+    func follow(_ session: ConnectionSession, connections: Connections) {
+        desktops.computerName = session.profile.displayName
+        ApprovalNotifications.shared.synchronize(session)
+        session.observeLifecycle { [weak self, weak session, weak connections] event in
+            guard let self, let session, let connections else { return }
+            self.handle(event, session: session, connections: connections)
+        }
+    }
+    private func handle(_ event: ConnectionLifecycleEvent, session: ConnectionSession, connections: Connections) {
+        let connection = session.connectionState.connectionID
+        switch event {
+        case .profileChanged:
+            desktops.computerName = session.profile.displayName
+        case .generationEnded(let previous):
+            close()
+            HarnessSetupWindows.shared.close(connection: previous)
+            ApprovalNotifications.shared.synchronize(session)
+            connections.reconcileCreations()
+        case .connectivityChanged, .approvalsChanged:
+            ApprovalNotifications.shared.synchronize(session)
+        case .transportReplaced:
+            terminals.closeAll(); forwards.closeAll()
+        case .boxActionsBegan(let boxes):
+            for box in boxes { forwards.close(box: box); desktops.close(box: box) }
+        case .boxesChanged:
+            let boxes = session.inventory.sandboxes
+            terminals.retainRunningBoxes(boxes, connection: connection)
+            forwards.retainRunningBoxes(boxes)
+            desktops.retainRunningBoxes(boxes)
+            connections.reconcileCreations()
+        case .terminalInventoryChanged(let inventory):
+            terminals.retainExecs(inventory, connection: connection)
+            recoverTerminals(inventory, session: session)
+        case .inventoryRefreshed:
+            if let inventory = session.selection.terminalInventory { recoverTerminals(inventory, session: session) }
+        }
+    }
+    private func recoverTerminals(_ inventory: BoxSelectionStore.TerminalInventory, session: ConnectionSession) {
+        guard session.connectionState.connectionError == nil, session.selection.detailError == nil else { return }
+        terminals.recoverInterrupted(inventory, connection: session.connectionState.connectionID)
+    }
 }
 @MainActor @Observable final class ConnectionRuntimes {
     private var hosts: [String: ConnectionRuntime] = [:]
+    @ObservationIgnored private weak var connections: Connections?
+    @ObservationIgnored private var followed: Set<ObjectIdentifier> = []
     func runtime(_ id: String) -> ConnectionRuntime {
         if let existing = hosts[id] { return existing }
         let runtime = ConnectionRuntime(); hosts[id] = runtime; return runtime
     }
-    func closeAll() { for host in hosts.values { host.close() } }
-}
-
-/// Always mounted, including for computers whose workspace is off screen.
-struct ConnectionLifecycle: View {
-    let connections: Connections
-    let session: ConnectionSession
-    let runtime: ConnectionRuntime
-    var body: some View {
-        let workspace = session
-        Color.clear.frame(width: 0, height: 0)
-            .onAppear { runtime.desktops.computerName = session.profile.displayName }
-            .onChange(of: session.profile) { runtime.desktops.computerName = session.profile.displayName }
-            .onChange(of: workspace.connectionState.connectionID) { old, _ in
-                runtime.close()
-                HarnessSetupWindows.shared.close(connection: old)
-                ApprovalNotifications.shared.synchronize(session)
-                connections.reconcileCreations()
-            }
-            .onChange(of: workspace.approvalStore.approvals, initial: true) { ApprovalNotifications.shared.synchronize(session) }
-            .onChange(of: workspace.connectionState.isConnected) { ApprovalNotifications.shared.synchronize(session) }
-            .onChange(of: workspace.connectionState.transportEndpoint) { old, new in
-                if !old.isEmpty, old != new { runtime.terminals.closeAll(); runtime.forwards.closeAll() }
-            }
-            .onChange(of: workspace.inventory.lastRefresh) {
-                guard workspace.connectionState.connectionError == nil, workspace.selection.detailError == nil,
-                      let inventory = workspace.selection.terminalInventory else { return }
-                runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
-            }
-            .onChange(of: workspace.pending.pendingBoxActions) {
-                for box in workspace.pending.pendingBoxActions { runtime.forwards.close(box: box); runtime.desktops.close(box: box) }
-            }
-            .onChange(of: workspace.selection.terminalInventory) {
-                if let inventory = workspace.selection.terminalInventory {
-                    runtime.terminals.retainExecs(inventory, connection: workspace.connectionState.connectionID)
-                    if workspace.connectionState.connectionError == nil, workspace.selection.detailError == nil {
-                        runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
-                    }
-                }
-            }
-            .onChange(of: workspace.inventory.sandboxes) {
-                runtime.terminals.retainRunningBoxes(workspace.inventory.sandboxes, connection: workspace.connectionState.connectionID)
-                runtime.forwards.retainRunningBoxes(workspace.inventory.sandboxes)
-                runtime.desktops.retainRunningBoxes(workspace.inventory.sandboxes)
-                connections.reconcileCreations()
-            }
+    /// Idempotent. Every computer of `connections`, including ones added
+    /// later, gets its runtime and lifecycle subscription at once rather than
+    /// when a view first renders it.
+    func attach(_ connections: Connections) {
+        guard self.connections !== connections else { return }
+        self.connections = connections
+        followSessions()
     }
+    private func followSessions() {
+        guard let connections else { return }
+        let sessions = withObservationTracking { connections.sessions } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.followSessions() }
+        }
+        for session in sessions where !followed.contains(ObjectIdentifier(session)) {
+            followed.insert(ObjectIdentifier(session))
+            runtime(session.id).follow(session, connections: connections)
+        }
+    }
+    func closeAll() { for host in hosts.values { host.close() } }
 }
 
 struct ComputerPicker: View {
@@ -76,6 +95,11 @@ struct ConnectedWorkspace: View {
     let connections: Connections
     let runtimes: ConnectionRuntimes
     let commands: WorkspaceCommands
+    @MainActor init(connections: Connections, runtimes: ConnectionRuntimes, commands: WorkspaceCommands) {
+        self.connections = connections; self.runtimes = runtimes; self.commands = commands
+        // Lifecycle subscriptions belong to the runtimes, not to this view.
+        runtimes.attach(connections)
+    }
     @State private var notifications = ApprovalNotifications.shared
     @State private var boxActions = BoxActionPresentation()
     @State private var inbox = ApprovalInboxPresentation()
@@ -94,9 +118,6 @@ struct ConnectedWorkspace: View {
             .environment(runtime.desktops)
             .environment(commands)
             .tint(DiscoboxAppearance.accent)
-            .background {
-                ZStack { ForEach(connections.sessions) { host in ConnectionLifecycle(connections: connections, session: host, runtime: runtimes.runtime(host.id)) } }
-            }
             .onChange(of: connections.activeID, initial: true) { old, new in
                 if old != new {
                     commands.showTools = false
