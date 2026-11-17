@@ -6,7 +6,8 @@ import Glibc
 #endif
 
 /// The process plumbing shared by long-lived companion children
-/// (`CompanionChild`'s line-JSON events, `ReadCompanion`'s framed reads);
+/// (`CompanionChild`'s line-JSON events, `ReadCompanion`'s framed reads,
+/// the Iroh helper's startup handshake);
 /// neither constructs a Process, Pipe or thread itself.
 ///
 /// - stdin stays open for the child's whole life: EOF is its parent-death

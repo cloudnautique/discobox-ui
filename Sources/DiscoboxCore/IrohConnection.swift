@@ -25,7 +25,7 @@ public actor IrohConnection {
         if startup == nil {
             let process = makeProcess()
             guard slot.install(process) else { throw CancellationError() }
-            startup = (UUID(), Task.detached { try await BlockingThread.run(name: "Discobox Iroh startup") { try process.start() } })
+            startup = (UUID(), Task.detached { try await process.start() })
         }
         let attempt = startup!
         do {
@@ -51,13 +51,15 @@ public actor IrohConnection {
         let process = IrohProcess(executable: executable, arguments: ["--iroh-identity"], seed: seed, relayURLs: [], directOnly: false)
         defer { process.close() }
         return try await withTaskCancellationHandler {
-            let ready = try await BlockingThread.run(name: "Discobox Iroh identity") { try process.start() }
+            let ready = try await process.start()
             guard let id = ready.peerID, id.hasPrefix("d1-") else { throw DiscoboxError("The companion returned an invalid peer ID.") }
             return id
         } onCancel: { process.close() }
     }
 }
 
+/// close() can interrupt a pending startup without waiting for the actor. An
+/// explicitly closed connection never creates another helper.
 /// close() can interrupt a pending startup without waiting for the actor. An
 /// explicitly closed connection never creates another helper.
 private final class IrohProcessSlot: @unchecked Sendable {
@@ -81,50 +83,52 @@ private final class IrohProcessSlot: @unchecked Sendable {
     }
 }
 
+/// One Iroh helper on `CompanionProcess`: the startup configuration is written
+/// to stdin once, which then stays open as the parent-death signal, and the
+/// first newline-terminated line (at most 8192 bytes, within 20 seconds) is
+/// its `Ready` report. Nothing blocks a thread while it starts.
 private final class IrohProcess: @unchecked Sendable {
     private struct Startup: Encodable { let seed: Data; let relayURLs: [String]; let directOnly: Bool }
     private let lock = NSLock()
-    private let process = Process()
-    private let input = Pipe()
-    private let output = Pipe()
-    private var cancelled = false
+    private let child: CompanionProcess
     private let configuration: Startup
-    var isRunning: Bool { lock.withLock { !cancelled && process.isRunning } }
+    private var cancelled = false
+    private var line = Data()
+    // The startup line (or what arrived before EOF/exit), resolved once.
+    private var outcome: Result<Data, any Error>?
+    private var waiter: CheckedContinuation<Data, any Error>?
+    var isRunning: Bool { !lock.withLock { cancelled } && child.hasStarted && !child.hasExited }
 
     init(executable: URL, arguments: [String], seed: Data, relayURLs: [String], directOnly: Bool) {
-        process.executableURL = executable
-        process.arguments = arguments
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
+        child = CompanionProcess(executable: executable, arguments: arguments, readerName: "Discobox Iroh helper")
         configuration = Startup(seed: seed, relayURLs: relayURLs, directOnly: directOnly)
     }
     func close() {
-        lock.withLock {
-            guard !cancelled else { return }
+        let first = lock.withLock { () -> Bool in
+            guard !cancelled else { return false }
             cancelled = true
-            try? input.fileHandleForWriting.close()
-            if process.isRunning { process.terminate() }
+            return true
         }
+        guard first else { return }
+        child.close()
+        // A pending startup ends as cancelled (checked below).
+        resolve(.success(lock.withLock { line }))
     }
-    func start() throws -> IrohConnection.Ready {
+    func start() async throws -> IrohConnection.Ready {
         let deadline = DispatchWorkItem { [weak self] in self?.close() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: deadline)
         defer { deadline.cancel() }
         do {
-            try lock.withLock {
-                if cancelled { throw CancellationError() }
-                try process.run()
-                var data = try JSONEncoder().encode(configuration)
-                data.append(10)
-                try input.fileHandleForWriting.write(contentsOf: data)
-                // Keep stdin open: EOF is the helper's parent-death signal.
-            }
-            var line = Data()
-            while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty {
-                if byte[0] == 10 { break }
-                line.append(byte)
-                guard line.count <= 8192 else { throw DiscoboxError("Invalid Iroh startup response.") }
+            if lock.withLock({ cancelled }) { throw CancellationError() }
+            var data = try JSONEncoder().encode(configuration)
+            data.append(10)
+            child.write(data, launching: handlers())
+            let line = try await withCheckedThrowingContinuation { continuation in
+                let ready: Result<Data, any Error>? = lock.withLock {
+                    if outcome == nil { waiter = continuation }
+                    return outcome
+                }
+                if let ready { continuation.resume(with: ready) }
             }
             guard !lock.withLock({ cancelled }) else { throw DiscoboxError("Iroh connection setup was cancelled or timed out.", connectionRetryable: true) }
             guard let ready = try? JSONDecoder().decode(IrohConnection.Ready.self, from: line) else {
@@ -134,10 +138,46 @@ private final class IrohProcess: @unchecked Sendable {
             return ready
         } catch { close(); throw error }
     }
-    deinit {
-        close()
-        try? input.fileHandleForReading.close()
-        try? output.fileHandleForReading.close()
-        try? output.fileHandleForWriting.close()
+
+    private func handlers() -> CompanionProcess.Handlers {
+        .init(
+            output: { [weak self] data in
+                guard let self else { return false }
+                // Only the first line is read; the helper writes nothing else.
+                let (complete, overflow): (Data?, Bool) = lock.withLock {
+                    if let end = data.firstIndex(of: 10) {
+                        line.append(data[data.startIndex..<end])
+                        return line.count <= 8192 ? (line, false) : (nil, true)
+                    }
+                    line.append(data)
+                    return (nil, line.count > 8192)
+                }
+                if overflow { resolve(.failure(DiscoboxError("Invalid Iroh startup response."))); return false }
+                if let complete { resolve(.success(complete)); return false }
+                return true
+            },
+            outputEnded: { [weak self] in self?.resolvePartialLine() },
+            // A sibling that inherited stdout can hold EOF back; the exit still
+            // ends the startup, after a grace for a line already written.
+            exited: { [weak self] _ in self?.resolvePartialLineAfterGrace() },
+            failed: { [weak self] failure in
+                switch failure {
+                case .launch(let error), .write(let error): self?.resolve(.failure(error))
+                }
+            })
     }
+    private func resolvePartialLine() { resolve(.success(lock.withLock { line })) }
+    private func resolvePartialLineAfterGrace() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in self?.resolvePartialLine() }
+    }
+    private func resolve(_ result: Result<Data, any Error>) {
+        let continuation: CheckedContinuation<Data, any Error>?? = lock.withLock {
+            guard outcome == nil else { return nil }
+            outcome = result
+            defer { waiter = nil }
+            return .some(waiter)
+        }
+        if case .some(let waiting?) = continuation { waiting.resume(with: result) }
+    }
+    deinit { close() }
 }

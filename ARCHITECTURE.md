@@ -513,7 +513,7 @@ line reader on a dedicated thread, and an idempotent SIGTERM-then-SIGKILL close
 that also runs on deinit. That plumbing lives in one lower-level Core type,
 `CompanionProcess` (spawn, optional serial stdin writer without SIGPIPE, read(2)
 loop, exit reported apart from stdout EOF, close escalation), which the
-persistent read companion (`ReadCompanion`) also builds on.
+persistent read companion (`ReadCompanion`) and the Iroh helper also build on.
 HTTP/HTTPS links use the reported local binding, never the sandbox's port number
 by assumption. Ghostty's open-URL callback resolves loopback/wildcard HTTP(S) links
 against the originating terminal's box, preserving the path, query, and fragment.
