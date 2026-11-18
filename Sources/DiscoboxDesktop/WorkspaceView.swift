@@ -78,12 +78,12 @@ struct WorkspaceView: View {
                     HStack { Notice(text: error, symbol: "exclamationmark.triangle"); Button("Dismiss") { workspace.selection.commandError = nil }.padding(.trailing) }
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                NavigationSplitView(columnVisibility: Binding(
-                    get: { commands.focusMode ? .detailOnly : .all },
-                    set: { commands.focusMode = $0 == .detailOnly }
-                )) {
-                    sidebar.navigationSplitViewColumnWidth(min: 220, ideal: 282, max: 360)
-                } detail: {
+                // This column displays live agent status while the terminal has
+                // focus. Reserve space for it even in a narrow workspace.
+                HSplitView {
+                    if !commands.focusMode {
+                        sidebar.frame(minWidth: 220, idealWidth: sidebarWidth, maxWidth: 360)
+                    }
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Group {
@@ -108,7 +108,6 @@ struct WorkspaceView: View {
 
                     }.id(workspace.connectionState.connectionID)
                 }
-                .navigationSplitViewStyle(.balanced)
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in contentWidth = width; fitInspector() }
                 })
@@ -139,6 +138,14 @@ struct WorkspaceView: View {
                 }
                 .navigationTitle([connections.active.profile.displayName, workspace.selection.selectedBox?.displayName].compactMap { $0 }.joined(separator: " › "))
                 .toolbar {
+                    ToolbarItem(id: "workspace.sidebar", placement: .navigation) {
+                        Button { commands.focusMode.toggle() } label: {
+                            Label(commands.focusMode ? "Show sidebar" : "Hide sidebar", systemImage: "sidebar.left")
+                        }
+                        .keyboardShortcut("s", modifiers: [.control, .command])
+                        .help(commands.focusMode ? "Show sidebar" : "Hide sidebar")
+                        .accessibilityIdentifier("workspace.toggleSidebar")
+                    }.studioPlainBackground()
                     ToolbarItemGroup(placement: .automatic) { Spacer() }
                     ToolbarItem(id: "workspace.actions", placement: .automatic) {
                         HStack(spacing: 12) {

@@ -18,8 +18,10 @@ present native NSAlert sheets asynchronously, including the console-close prompt
 No dialog starts an app-modal event loop. Each flow retains its own validation,
 default action, and mutation ownership.
 
-`NavigationSplitView` owns sidebar visibility and column sizing. The two terminal
-splits remain `HSplitView` editing panes: the agent stays visible beside shells.
+The agent list occupies a resizable, docked column in the workspace’s horizontal
+split. It opens by default and stays visible when the terminal takes focus or the
+window narrows. The sidebar toolbar button explicitly hides or restores it.
+Within the detail column the agent terminal stays visible beside open shells.
 Connection notices occupy explicit rows above navigation, not safe-area overlays.
 Refresh is a visible sidebar button and Command-R; there is no scroll-event monitor
 for pull-to-refresh. Menu fields use SwiftUI `Picker` with native drawing and focus.
@@ -227,7 +229,7 @@ no registered Discobox URL schemes. Its startup never connects saved/live hosts.
 ## Swift conventions
 
 - Swift Package Manager, Swift 6 strict concurrency, macOS 14 minimum.
-- SwiftUI scenes, NavigationSplitView, system toolbar, inspector, Settings,
+- SwiftUI scenes, native split panes, system toolbar, inspector, Settings,
   semantic colors, keyboard shortcuts, accessibility labels, and native text.
 - Main-actor observable stores own connection, inventory, selection, approvals,
   and harness catalog state. `ConnectionSession` composes them and owns polling

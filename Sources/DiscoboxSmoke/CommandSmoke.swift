@@ -56,18 +56,17 @@ import DiscoboxCore
                 commands.showInspector = inspector
                 try await Task.sleep(for: .milliseconds(1000))
                 window.contentView!.layoutSubtreeIfNeeded()
-                // The system owns the sidebar toggle and window title. Our
-                // workspace actions must stay anchored to the trailing edge.
+                // Workspace actions stay anchored when the sidebar is toggled.
                 for (id, original) in fixedToolbar where id == "workspace.actions" {
                     guard let current = toolbarFrames()[id], abs((current.minX - original.minX) - (id == "workspace.actions" ? window.contentLayoutRect.width - originalWindowWidth : 0)) < 1 else {
                         throw Failure("toolbar control moved when toggling panels: \(id), \(original), \(String(describing: toolbarFrames()[id])), content=\(window.contentLayoutRect)")
                     }
                 }
-                guard let table = descendants(window.contentView!).compactMap({ $0 as? NSTableView }).first,
-                      let sidebarSplit = splits(window.contentView!).first(where: { split in
-                          split.isVertical && split.arrangedSubviews.count == 2 && table.isDescendant(of: split.arrangedSubviews[0])
-                      }), sidebarSplit.isSubviewCollapsed(sidebarSplit.arrangedSubviews[0]) == hidden else {
-                    throw Failure("Native sidebar visibility did not follow the workspace command")
+                let sidebarVisible = descendants(window.contentView!).contains {
+                    $0 is NSTableView && !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty
+                }
+                guard sidebarVisible == !hidden else {
+                    throw Failure("Sidebar visibility did not follow the explicit toggle")
                 }
                 let rect = harness.convert(harness.bounds, to: nil)
                 guard abs(rect.minY - (window.contentLayoutRect.minY + 31 + DiscoboxAppearance.terminalInset)) < 1 else {
