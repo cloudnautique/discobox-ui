@@ -587,7 +587,6 @@ struct BoxRow: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
-    @State private var showInbox = false
     var body: some View {
         let state = presentation ?? workspace.rowPresentation(for: box)
         let activity = state.activity, power = state.power
@@ -600,7 +599,7 @@ struct BoxRow: View {
                     Text(state.title).font(.callout.weight(.medium)).lineLimit(2)
                     Spacer(minLength: 0)
                     if activity.approvalCount > 0 {
-                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { showInbox = true }
+                        Button(activity.approvalCount == 1 ? "Review" : "Review \(activity.approvalCount)") { commands?.reviewApprovals(for: box.id, on: workspace) }
                             .buttonStyle(.borderless).font(.caption2.weight(.medium)).foregroundStyle(tint)
                             .disabled(!state.canAct)
                             .accessibilityIdentifier("box.activity.review." + box.id)
@@ -628,7 +627,6 @@ struct BoxRow: View {
         }.padding(.vertical, 8)
         .accessibilityValue([power.label, activity.label, box.needsRepair ? "Needs repair" : nil, box.upgradeAvailable ? "Upgrade available" : nil].compactMap { $0 }.joined(separator: ", "))
         .help([box.displayName, "Box: " + power.label, power.message, "Agent: " + activity.label, activity.message, box.repository, box.harnessName, box.branch, box.runtime.errorMessage, box.repairTooltip, box.upgradeTooltip].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
-        .sheet(isPresented: $showInbox) { ApprovalInboxView(boxID: box.id).environment(workspace) }
     }
     private func openAgent() {
         let generation = workspace.connectionState.connectionID

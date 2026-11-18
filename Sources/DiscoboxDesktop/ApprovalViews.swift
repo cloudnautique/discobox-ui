@@ -44,9 +44,9 @@ private struct ApprovalQueueContent: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let error = workspace.approvalStore.approvalError { Notice(text: "Could not refresh requests: " + error, symbol: "wifi.exclamationmark") }
                         if !queue.valid {
-                            ContentUnavailableView("Connection changed", systemImage: "network", description: Text("Reopen the inbox on this computer."))
+                            inboxMessage("Connection changed", symbol: "network", detail: "Reopen the inbox on this computer.")
                         } else if queue.requests.isEmpty {
-                            ContentUnavailableView("No pending requests", systemImage: "checkmark.circle", description: Text("There is nothing left to answer in this inbox."))
+                            inboxMessage("No pending requests", symbol: "checkmark.circle", detail: "There is nothing left to answer in this inbox.")
                         } else {
                             Text("Review each request to allow or deny it. Closing this window leaves requests pending.").font(.callout).foregroundStyle(.secondary)
                             List(selection: $queue.selection) {
@@ -88,6 +88,16 @@ private struct ApprovalQueueContent: View {
         .onChange(of: workspace.approvalStore.approvals) { queue.synchronize() }
         .onChange(of: workspace.connectionState.connectionID) { queue.back() }
     }
+    // ContentUnavailableView reads toolbar preferences while fitting its
+    // content. In a macOS sheet this can cycle back through the sheet's size.
+    private func inboxMessage(_ title: String, symbol: String, detail: String) -> some View {
+        VStack(spacing: 8) {
+            Label(title, systemImage: symbol).font(.headline)
+            Text(detail).font(.callout).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func refresh() {
         guard !refreshing else { return }
         refreshing = true

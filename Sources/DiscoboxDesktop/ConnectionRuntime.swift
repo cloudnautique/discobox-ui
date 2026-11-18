@@ -80,6 +80,7 @@ struct ConnectedWorkspace: View {
     @State private var boxActions = BoxActionPresentation()
     private var workspace: ConnectionSession { connections.active }
     var body: some View {
+        @Bindable var commands = commands
         let runtime = runtimes.runtime(connections.activeID)
         WorkspaceView()
             // Keep the shared List and its native swipe controls alive when
@@ -116,6 +117,16 @@ struct ConnectedWorkspace: View {
                     .environment(runtime.forwards)
                     .environment(runtime.desktops)
                     .id(target.id)
+            }
+            // A successful decision can immediately remove the requesting row
+            // from Needs you. Keep its sheet on the window through the receipt.
+            .sheet(item: $commands.boxInbox) { target in
+                if target.connection == target.host.connectionState.connectionID {
+                    ApprovalInboxView(boxID: target.box).environment(target.host).environment(connections)
+                } else {
+                    StudioMessageSheet(title: "Connection changed", symbol: "network",
+                        message: "Reopen the inbox on this computer.", confirmTitle: "Close") { commands.boxInbox = nil }
+                }
             }
             .sheet(item: $notifications.presentation) { target in
                 ApprovalSheet(item: target.item).environment(target.workspace).environment(connections)

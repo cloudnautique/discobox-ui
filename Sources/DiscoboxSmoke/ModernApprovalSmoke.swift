@@ -66,6 +66,50 @@ import DiscoboxCore
         }
         print("MODERN_APPROVAL_SMOKE_OK: footer-only use/sharing/combined approval and denial, inline credential creation without a grant, preserved selection after preview failure, and one explicit decision per request")
     }
+    static func verifyWorkspace(connections: Connections, commands: WorkspaceCommands) async throws {
+        let client = RemoteApprovalFixture(mode: "use")
+        let session = try await connections.connect(.thisComputer, demo: true) { client }
+        await session.approvalStore.refreshApprovals()
+        try await session.commands.performBoxAction(.start, boxID: "demo-api", connection: session.connectionState.connectionID)
+        await connections.selectBox(.init(connection: session.id, box: "demo-api"))
+        // Keep a different terminal selected so the answered row disappears
+        // instead of moving to the pinned selection section.
+        connections.browser.searchText = "Native macOS workspace"
+        connections.browser.activityFilter = .needsYou
+        try await wait { commands.window?.contentView != nil }
+        let window = commands.window!
+        window.makeKeyAndOrderFront(nil)
+        // The fixture has one matching box, after the pinned terminal and group header.
+        func reviewButton() -> NSButton? {
+            guard connections.browserBoxes.map(\.box.id) == ["demo-ui"] else { return nil }
+            guard let table = views(window.contentView!).compactMap({ $0 as? NSTableView }).first,
+                  table.numberOfRows > 0,
+                  let row = table.rowView(atRow: table.numberOfRows - 1, makeIfNecessary: false) else { return nil }
+            return views(row).compactMap { $0 as? NSButton }.first { $0.isEnabled }
+        }
+        try await wait { reviewButton() != nil }
+        reviewButton()?.performClick(nil)
+        try await wait { window.attachedSheet.flatMap(action)?.isEnabled == true }
+        let sheet = window.attachedSheet!
+        action(sheet)?.performClick(nil)
+        try await wait { menus(sheet).contains { $0.numberOfItems == 3 && $0.isEnabled } }
+        menus(sheet).first { $0.numberOfItems == 3 }?.menu?.performActionForItem(at: 2)
+        try await wait { footer(sheet).count == 4 && action(sheet)?.isEnabled == true }
+        action(sheet)?.performClick(nil)
+        try await waitAsync { await client.answers == 1 }
+        try await wait { !connections.browserBoxes.contains(where: { $0.box.id == "demo-ui" }) && session.approvalStore.approvals.isEmpty }
+        try await wait { window.attachedSheet == nil || footer(sheet).count == 2 && action(sheet)?.isEnabled == true }
+        guard window.attachedSheet === sheet else { throw DiscoboxError("Removing the answered box row dismissed its receipt") }
+        action(sheet)?.performClick(nil)
+        try await wait { window.attachedSheet === sheet && sheet.defaultButtonCell == nil }
+        guard let close = views(sheet.contentView!).compactMap({ $0 as? NSButton }).first(where: { $0.keyEquivalent == "\u{1b}" }) else {
+            throw DiscoboxError("Empty inbox has no Close button")
+        }
+        close.performClick(nil)
+        try await wait { window.attachedSheet == nil }
+        guard await client.answers == 1 else { throw DiscoboxError("Approval was submitted more than once") }
+    }
+
     private static func capture(_ window: NSWindow, name: String) throws {
         guard let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"], let root = window.contentView,
               let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return }
@@ -90,9 +134,9 @@ import DiscoboxCore
         return views(root).compactMap { $0 as? NSButton }.filter { abs($0.convert($0.bounds, to: root).midY - y) < 2 }
             .sorted { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }
     }
-    private static func wait(_ condition: () -> Bool) async throws {
+    private static func wait(line: Int = #line, _ condition: () -> Bool) async throws {
         for _ in 0..<160 { if condition() { return }; try await Task.sleep(for: .milliseconds(50)) }
-        throw DiscoboxError("Remote approval controls did not recover")
+        throw DiscoboxError("Remote approval controls did not recover at line \(line)")
     }
     private static func waitAsync(_ condition: () async -> Bool) async throws {
         for _ in 0..<160 { if await condition() { return }; try await Task.sleep(for: .milliseconds(50)) }
@@ -147,6 +191,13 @@ private actor RemoteApprovalFixture: DiscoboxClient {
                 }
             }
             answers += 1
+            if mode == "use" {
+                let grant: JSONValue = .object(["mode": .string("replace"), "delivery": .string("proxy"),
+                    "routeLists": .array([.object(["source": .string("request"), "routes": ask["use"]["routes"]]),
+                                          .object(["source": .string("credential"), "routes": .array([])])])])
+                return try JSONEncoder().encode(JSONValue.object(["use": .object(["outcome": .string("approved"),
+                    "approvedScope": .string("routes"), "grant": grant])]))
+            }
             return Data("{}".utf8)
         }
         return try await demo.perform(request)

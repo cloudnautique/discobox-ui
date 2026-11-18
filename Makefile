@@ -4,7 +4,7 @@ SHELL := /bin/bash
 # SwiftPM and packaging share an output directory. Keep even `make -j ci`
 # sequential to avoid competing builds or partially copied bundles.
 .NOTPARALLEL:
-.PHONY: upstream brand-tokens help build smoke ghostty test lint vet fmt-go verify ci
+.PHONY: upstream brand-tokens help build smoke smoke-approvals ghostty test lint vet fmt-go verify ci
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -20,6 +20,13 @@ build: ## Build and ad-hoc sign dist/Discobox.app (does not launch it)
 
 smoke: ## Build the isolated debug smoke executable and fixture app bundle
 	bash scripts/build-smoke.sh
+
+# SwiftUI can recover from a cycle before the fixture assertions run. Treat
+# its diagnostic as a failure too, and bound the run if the UI never recovers.
+smoke-approvals: smoke ## Exercise native approval sheets and check for layout cycles
+	@set -o pipefail; AG_PRINT_CYCLES=1 perl -e 'alarm 120; exec @ARGV or die $$!' \
+	    .build/DiscoboxSmoke.app/Contents/MacOS/DiscoboxSmoke --approval-workflow-smoke 2>&1 | \
+	    awk '/AttributeGraph: cycle detected/ { if (!cycles++) print; next } { print } END { if (cycles) exit 1 }'
 
 ghostty: ## Build the pinned Ghostty SDK (first-time setup; requires Zig/Metal)
 	bash scripts/build-ghostty-sdk.sh

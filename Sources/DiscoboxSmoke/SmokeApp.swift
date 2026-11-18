@@ -46,7 +46,7 @@ import DiscoboxCore
             ("--terminal-recovery-smoke", { await TerminalRecoverySmoke.run() }),
             ("--terminal-input-smoke", { await TerminalInputSmoke.run() }),
             ("--box-link-smoke", { await BoxLinkSmoke.run() }),
-            ("--approval-workflow-smoke", { await ApprovalWorkflowSmoke.run() }),
+            ("--approval-workflow-smoke", { await ApprovalWorkflowSmoke.run(connections: connections, commands: commands) }),
             ("--binding-conflict-smoke", { await BindingConflictSmoke.run() }),
             ("--agent-activity-smoke", { await AgentActivitySmoke.run() }),
             ("--approval-queue-smoke", { await ApprovalQueueSmoke.run() }),

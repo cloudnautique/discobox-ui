@@ -7,6 +7,16 @@ import DiscoboxCore
     var appShortcuts: AppShortcuts
     var showTools = false
     var showFiles = false
+    struct BoxInbox: Identifiable {
+        let id = UUID()
+        let host: ConnectionSession
+        let box: String
+        let connection: UUID
+    }
+    var boxInbox: BoxInbox?
+    func reviewApprovals(for box: String, on host: ConnectionSession) {
+        boxInbox = BoxInbox(host: host, box: box, connection: host.connectionState.connectionID)
+    }
     var showApprovals = false
     var showAudit = false
     var tab = WorkspaceTab.terminal

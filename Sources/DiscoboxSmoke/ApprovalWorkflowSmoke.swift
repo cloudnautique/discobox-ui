@@ -4,11 +4,13 @@ import AppKit
 import SwiftUI
 import DiscoboxCore
 
-/// Native controls against injected, offline fixtures only. No live server,
-/// Keychain identity, OS notification, or terminal renderer is initialized.
+/// Exercises native approval controls and the workspace using offline fixtures.
 @MainActor enum ApprovalWorkflowSmoke {
-    static func run() async {
+    static func run(connections: Connections, commands: WorkspaceCommands) async {
         do {
+            try await ModernApprovalSmoke.verifyWorkspace(connections: connections, commands: commands)
+            print("WORKSPACE_APPROVAL_SMOKE_OK: receipt survives removal of the requesting row and closes after one decision")
+            fflush(stdout)
             try await ApprovalDurationSmoke.verify()
             try await ApprovalQueueSmoke.verify()
             try await ModernApprovalSmoke.verify()

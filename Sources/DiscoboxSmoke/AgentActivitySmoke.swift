@@ -47,20 +47,20 @@ import DiscoboxCore
         // host's two requests without answering either of them.
         guard let box = host.inventory.sandboxes.first(where: { $0.id == "approval" }) else { throw DiscoboxError("Approval fixture missing") }
         let review = NSWindow(contentRect: .init(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
-        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host))
+        let commands = WorkspaceCommands(defaults: defaults)
+        review.contentView = NSHostingView(rootView: BoxRow(box: box).padding(12).frame(width: 380).environment(host).environment(commands))
         review.makeKeyAndOrderFront(nil)
         defer { review.orderOut(nil) }
         try await wait { buttons(review).count == 1 && buttons(review)[0].isEnabled }
         buttons(review)[0].performClick(nil)
-        try await wait { review.attachedSheet?.defaultButtonCell != nil }
+        try await wait { commands.boxInbox?.box == box.id && commands.boxInbox?.host === host }
         guard host.approvalStore.approvals.count == 2, await client.writes == 0 else { throw DiscoboxError("Review sent an answer or used another inbox") }
-        if let sheet = review.attachedSheet { review.endSheet(sheet) }
+        commands.boxInbox = nil
         // Open on a row from another computer must activate that computer and
         // its agent without changing the computer filter or the original box.
         let remote = try await hub.connect(.init(name: "Build server", endpoint: "https://activity.example.invalid"), demo: true, select: false) { ActivityDesktopFixture() }
         hub.browser.computerID = host.id
         guard let question = remote.inventory.sandboxes.first(where: { $0.id == "question" }) else { throw DiscoboxError("Question fixture missing") }
-        let commands = WorkspaceCommands(defaults: defaults)
         let open = NSWindow(contentRect: .init(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
         open.contentView = NSHostingView(rootView: BoxRow(box: question).padding(12).frame(width: 380)
             .environment(remote).environment(hub).environment(commands))
