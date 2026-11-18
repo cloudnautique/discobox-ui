@@ -35,7 +35,7 @@ public struct BoxPowerStatus: Sendable, Equatable {
 
 public extension ConnectionSession {
     var hasCurrentBoxInventory: Bool {
-        connectionState.isConnected && connectionState.connectionError == nil && activityClock.inventoryIsCurrent
+        connectionState.isConnected && connectionState.connectionError == nil && !inventory.replayingReset && (eventsCurrent || activityClock.inventoryIsCurrent)
     }
     func powerStatus(for box: Sandbox) -> BoxPowerStatus {
         BoxPowerStatus(box: box, reachable: hasCurrentBoxInventory, now: activityObservationTime)

@@ -9,6 +9,7 @@ import Darwin
     private let directory: URL
     private var source: DispatchSourceRead?
     private var pending = Data()
+    private var markedVisible = false
 
     init() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("discobox-terminal-" + UUID().uuidString)
@@ -49,6 +50,18 @@ import Darwin
             struct Record: Decodable { let state: String; let error: String? }
             if let value = try? JSONDecoder().decode(Record.self, from: line),
                ["connecting", "connected", "reconnecting", "reconnected", "disconnected", "ended", "output-stalled"].contains(value.state) { receive?(value.state, value.error) }
+        }
+    }
+
+    /// The helper samples this only on transport loss. Pane visibility never
+    /// enters the terminal byte stream or causes a network request.
+    func setVisible(_ visible: Bool) {
+        guard source != nil, visible != markedVisible else { return }
+        let marker = path + ".visible"
+        if visible {
+            markedVisible = FileManager.default.createFile(atPath: marker, contents: nil, attributes: [.posixPermissions: 0o600])
+        } else if unlink(marker) == 0 || errno == ENOENT {
+            markedVisible = false
         }
     }
 

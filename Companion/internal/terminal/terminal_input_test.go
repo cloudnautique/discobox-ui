@@ -33,7 +33,7 @@ func (*latencyReplay) AfterReplay()     {}
 func TestTerminalInputRoundTripWithoutNewline(t *testing.T) {
 	if address := os.Getenv("DISCOBOX_TEST_LATENCY_ENDPOINT"); address != "" {
 		defer diagnostics.StartWithSink(diagnostics.Event{}, func([]byte) error { return nil })()
-		if err := Attach(address, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: "e"}, ""); err != nil {
+		if err := Attach(address, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: "e"}, "", true); err != nil {
 			t.Fatal(err)
 		}
 		return

@@ -13,7 +13,14 @@ const ProtocolVersion = 2
 
 // Request is one bounded request. Each field has one meaning across
 // operations; see ARCHITECTURE.md ("Components").
+type UsagePage struct {
+	Host  string `json:"host"`
+	After string `json:"after,omitempty"`
+	Limit int    `json:"limit"`
+}
+
 type Request struct {
+	UsagePage   *UsagePage      `json:"usagePage,omitempty"`
 	DiscoboxAPI *bool           `json:"discoboxAPI,omitempty"`
 	RemotePath  string          `json:"remotePath,omitempty"`
 	LocalPath   string          `json:"localPath,omitempty"`

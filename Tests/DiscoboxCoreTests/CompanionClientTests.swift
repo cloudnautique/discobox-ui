@@ -205,3 +205,49 @@ private func protocolManifest() throws -> ProtocolManifest {
         }
     }
 }
+
+@MainActor @Test func disablingScheduledReadsCancelsOnlyTheirHelpersAndClosesTheDispatchGate() async throws {
+    let fixture = try FixtureExecutable(script: """
+    #!/bin/sh
+    if [ "$DISCOBOX_UI_READ_TRIGGER" = scheduled ]; then exec /bin/sleep 30; fi
+    /bin/cat >/dev/null
+    printf '%s' '{"version":\(BridgeRequest.protocolVersion),"status":200,"body":"e30="}'
+    """)
+    defer { fixture.remove() }
+    let client = CompanionClient(executable: fixture.url, endpoint: "unix://")
+    let metrics = ReadMetrics(), generation = UUID()
+    func scheduled() async throws -> Data {
+        try await GuestReadDiagnostics.$context.withValue(.init(generation: generation, loop: .details, metrics: metrics)) {
+            try await GuestReadDiagnostics.$scheduled.withValue(true) { try await client.perform(.init(.execs)) }
+        }
+    }
+    let started = Task { try await scheduled() }
+    for _ in 0..<10000 where metrics.inFlight == 0 { await Task.yield() }
+    #expect(metrics.inFlight == 1)
+    var policy = RefreshPolicy()
+    policy.pauseDetails = true
+    metrics.apply(policy)
+    await #expect(throws: CancellationError.self) { try await started.value }
+    await #expect(throws: CancellationError.self) { try await scheduled() }
+    #expect(metrics.inFlight == 0 && metrics.started == 1 && metrics.cancelled == 1)
+    #expect(try await client.perform(.init(.execs)) == Data("{}".utf8))
+}
+
+@MainActor @Test func projectEventProcessDeliversFramesBeforeExitAndPassesTheAppliedCursor() async throws {
+    let fixture = try FixtureExecutable(script: """
+    #!/bin/sh
+    [ "$1" = --events ] && [ "$3" = unix:///fixture.sock ] && [ "$5" = proj ] && [ "$9" = 42 ] || exit 2
+    printf '%s' '{"version":1,"kind":"check'
+    printf '%s\n' 'point","id":45}' '{"version":1,"kind":"heartbeat"}'
+    """)
+    defer { fixture.remove() }
+    let client = CompanionClient(executable: fixture.url, endpoint: "unix:///fixture.sock")
+    var delivered: [ProjectEventFrame] = []
+    await #expect(throws: DiscoboxError.self) {
+        try await client.readEvents(endpoint: "unix:///fixture.sock", project: "proj", generation: UUID(), after: 42) {
+            delivered += $0
+        }
+    }
+    #expect(delivered.map(\.kind) == [.checkpoint, .heartbeat])
+    #expect(delivered.first?.id == 45)
+}

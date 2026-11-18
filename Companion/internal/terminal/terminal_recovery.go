@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics"
@@ -14,11 +15,18 @@ import (
 	"golang.org/x/term"
 )
 
-func runTerminalRecovery(ctx context.Context, endpoint string, req wire.Request, tty *localTerminal, sizes <-chan frame.ResizePayload, status func(string, string)) error {
+func runTerminalRecovery(ctx context.Context, endpoint string, req wire.Request, tty *localTerminal, sizes <-chan frame.ResizePayload, status func(string, string), statusPath string, autoReconnect bool) error {
+	var wait func(context.Context, time.Duration) error
+	if autoReconnect {
+		wait = func(ctx context.Context, delay time.Duration) error {
+			status("reconnecting", fmt.Sprintf("Next connection attempt in %s.", delay.Round(time.Second)))
+			return waitForRecovery(ctx, delay)
+		}
+	}
 	stalls := 0
 	for {
 		attemptCtx, cancel := context.WithCancel(ctx)
-		c, err := openAttach(attemptCtx, endpoint, req, func(e resume.Event) { status(string(e.State), "") })
+		c, err := openAttach(attemptCtx, endpoint, req, func(e resume.Event) { status(string(e.State), "") }, statusPath, wait)
 		if err != nil {
 			cancel()
 			return err
@@ -38,6 +46,9 @@ func runTerminalRecovery(ctx context.Context, endpoint string, req wire.Request,
 		err = pumpTerminal(attemptCtx, c, terminalDelivery{read: tty.read, write: tty.write, waitForInput: true}, sizes)
 		cancel()
 		c.Close()
+		if !autoReconnect && err != nil {
+			return fmt.Errorf("Automatic reconnect is paused. Reconnect to resume this terminal: %w", err)
+		}
 		if !errors.Is(err, errTerminalStalled) {
 			return err
 		}

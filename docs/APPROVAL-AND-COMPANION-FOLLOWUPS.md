@@ -53,6 +53,13 @@ lifecycle verification, not an environment prerequisite.
 
 ## Review finding 5: bounded helper processes per inventory refresh
 
+The detailed [polling and event implementation plan](POLLING-AND-EVENTS-PLAN.md)
+supersedes the implementation outline below. It prioritizes guest-read
+demand/backoff, small A/B instrumentation, a dedicated event helper and
+incremental usage. The persistent reader is conditional on measured overhead
+at those lower request rates; it does not block event support. This section
+retains the original investigation; the approval-model work above remains separate.
+
 Confirmed with a qualification: `ConnectionSession.refresh()` reads `.sandboxes`,
 then `BoxSelectionStore.refreshDetails()` reads `.execs` and `.services` concurrently
 when a box is selected. `CompanionClient.perform()` creates a `ProcessRequest` for
@@ -68,7 +75,7 @@ reuse. The polling-cadence changes reduce frequency but do not change this desig
 The process count is established from the code; the actual CPU/latency cost has
 not yet been measured, so it should not be presented as the cause of a freeze.
 
-### Implementation
+### Original implementation outline (superseded; optional after measurement)
 
 1. Start with a persistent **read-only** companion owned by one connection
    generation. Reuse its HTTP transport and, for Iroh, the existing proxy endpoint.

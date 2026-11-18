@@ -67,7 +67,23 @@ import Observation
     }
     /// Set by Connections from window presence and the active computer. A change
     /// wakes sleeping loops so they recompute their deadline from the last poll.
-    @ObservationIgnored var cadence = PollingCadence() { didSet { if cadence != oldValue { schedule.wake() } } }
+    public let readMetrics = ReadMetrics()
+    @ObservationIgnored var usageQueue = ScheduledUsageQueue()
+    @ObservationIgnored private var scheduledReads: [Poll: Task<Void, Never>] = [:]
+    func applyRefreshPolicy(_ value: RefreshPolicy) {
+        readMetrics.apply(value)
+        for (kind, task) in scheduledReads where !value.allows(kind) { task.cancel() }
+        if value.manual { hydrateTask?.cancel(); hydrateTask = nil }
+        schedule.wake()
+    }
+    @ObservationIgnored var cadence = PollingCadence() {
+        didSet {
+            if cadence != oldValue {
+                for (kind, task) in scheduledReads where cadence.interval(kind) == nil { task.cancel() }
+                schedule.wake()
+            }
+        }
+    }
     @ObservationIgnored private let schedule = PollingSchedule()
     func startPolling() {
         stopPolling()
@@ -99,8 +115,55 @@ import Observation
         }
         observeRecovery(attempt)
     }
+    @ObservationIgnored private let events = ProjectEventSubscription()
+    @ObservationIgnored private var hydrateTask: Task<Void, Never>?
+    private(set) var eventsCurrent = false
+
+    private func setEventsCurrent(_ value: Bool) {
+        if value != eventsCurrent { eventsCurrent = value; schedule.wake() }
+    }
+    private func stopEvents() {
+        events.stop()
+        hydrateTask?.cancel(); hydrateTask = nil
+        inventory.resumeListing()
+        setEventsCurrent(false)
+    }
+    private func ensureEvents() {
+        guard let source = connectionState.client as? any ProjectEventSource,
+              let project = connectionState.projectID else { return }
+        let endpoint = connectionState.transportEndpoint
+        let owner = connectionState.connectionID
+        events.start(source: source, project: project, endpoint: endpoint, connection: owner) { [weak self] changes, current in
+            guard let self, self.connectionState.connectionID == owner,
+                  self.connectionState.transportEndpoint == endpoint else { throw CancellationError() }
+            self.setEventsCurrent(current)
+            guard let changes else { self.inventory.resumeListing(); return }
+            if self.inventory.apply(changes) { self.hydrateNewBoxes(owner) }
+            if !changes.isEmpty {
+                self.selection.reconcileInventory()
+                self.advanceActivityClock()
+            }
+        }
+    }
+
+    private func hydrateNewBoxes(_ owner: UUID) {
+        guard hydrateTask == nil, readMetrics.policy.allows(.inventory) else { return }
+        hydrateTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            guard let self, self.connectionState.connectionID == owner else { return }
+            self.hydrateTask = nil
+            guard self.connectionState.connectionError == nil, !self.connectionState.isConnecting else { return }
+            await self.poll(.inventory)
+        }
+    }
     private enum PollWait { case due, after(Double), paused }
     private func pollWait(_ kind: Poll, since last: Date?) -> PollWait {
+        guard readMetrics.policy.allows(kind) else { return .paused }
+        if kind == .inventory, eventsCurrent, connectionState.connectionError == nil, let last {
+            let interval: Double = cadence.presence == .hidden || !cadence.isActiveHost ? 300 : 60
+            let remaining = interval - now().timeIntervalSince(last)
+            return remaining <= 0 ? .due : .after(remaining)
+        }
         let retryIn = kind == .inventory ? connectionState.recovery.nextRetryAt?.timeIntervalSince(now()) : nil
         guard let delay = cadence.delay(kind, sinceLastPoll: last.map { .seconds(now().timeIntervalSince($0)) }, retryIn: retryIn) else { return .paused }
         let seconds = Double(delay.components.seconds) + Double(delay.components.attoseconds) / 1e18
@@ -118,21 +181,47 @@ import Observation
             }
         }
     }
-    private func poll(_ kind: Poll) async {
+    func handleNetworkHint() async { await poll(.inventory, networkHint: true) }
+    private func poll(_ kind: Poll, networkHint: Bool = false) async {
+        guard !Task.isCancelled, readMetrics.policy.allows(kind), scheduledReads[kind] == nil else { return }
+        let context = ScheduledReadContext(generation: connectionState.connectionID, loop: kind, metrics: readMetrics, budget: selection.guestBudget)
+        let task = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.readMetrics.policy.allows(kind) else { return }
+            await GuestReadDiagnostics.$context.withValue(context) {
+                await GuestReadDiagnostics.$scheduled.withValue(true) { await self.dispatchPoll(kind, networkHint: networkHint) }
+            }
+        }
+        let owner = attempt
+        scheduledReads[kind] = task
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if attempt == owner { scheduledReads[kind] = nil }
+    }
+    private func dispatchPoll(_ kind: Poll, networkHint: Bool) async {
         guard !connectionState.isConnecting, !connectionState.recovery.isAttempting else { return }
+        if networkHint { await retryConnection(includeDetails: false); return }
         if kind == .inventory, connectionState.recovery.nextRetryAt != nil {
             await retryConnection(automatically: true); return
         }
         guard connectionState.isConnected, connectionState.connectionError == nil else { return }
         switch kind {
-        case .inventory: await refresh()
+        case .inventory: await refresh(includeDetails: false)
+        case .details: await selection.reconcileDetails(cadence: cadence)
         case .approvals: await approvalStore.refreshApprovals(); advanceActivityClock()
         case .resources: await pools.refreshResources()
-        case .usage: await refreshUsage()
+        case .usage:
+            let queue = usageQueue
+            guard await queue.enter() else { return }
+            defer { queue.leave() }
+            guard !Task.isCancelled, cadence.interval(.usage) != nil else { return }
+            await refreshUsage()
         }
     }
-    func stopPolling() { attempt = UUID(); polling.forEach { $0.cancel() }; polling.removeAll() }
-    deinit { polling.forEach { $0.cancel() } }
+    func stopPolling() {
+        scheduledReads.values.forEach { $0.cancel() }
+        scheduledReads.removeAll()
+        attempt = UUID(); polling.forEach { $0.cancel() }; polling.removeAll()
+    }
+    deinit { hydrateTask?.cancel(); polling.forEach { $0.cancel() } }
     public func connect(client: any DiscoboxClient, label: String, demo: Bool = false) async {
         resetConnection()
         connectionState.begin(client: client, label: label, demo: demo)
@@ -141,6 +230,7 @@ import Observation
         do {
             let project = try await connectionState.resolveProject()
             connectionState.accept(project)
+            ensureEvents()
             catalog.acceptProject(project)
             prefetchCatalog(current)
             await refresh()
@@ -159,7 +249,9 @@ import Observation
         }
     }
 
-    public func refresh() async {
+    public func refresh() async { await refresh(includeDetails: true) }
+
+    private func refresh(includeDetails: Bool) async {
         guard connectionState.isConnected else { return }
         if connectionState.connectionError != nil && !connectionState.recoveryInFlight && !connectionState.isConnecting {
             await retryConnection(); return
@@ -168,9 +260,10 @@ import Observation
         do {
             guard let request = try await inventory.refresh(using: connectionState, now: now), current == connectionState.connectionID else { return }
             connectionState.didRefresh()
+            ensureEvents()
             advanceActivityClock()
             selection.reconcileInventory()
-            await selection.refreshDetails()
+            if includeDetails { await selection.refreshDetails() }
             guard connectionState.isCurrent(current) else { return }
             inventory.complete(request, at: now())
         } catch {
@@ -190,7 +283,7 @@ import Observation
         }
     }
 
-    public func retryConnection(automatically: Bool = false) async {
+    public func retryConnection(automatically: Bool = false, includeDetails: Bool = true) async {
         guard let current = connectionState.beginRecovery(automatically: automatically, now: now()) else { return }
         let wasConnected = connectionState.isConnected
         defer { connectionState.finishRecovery(current, now: now()) }
@@ -204,8 +297,9 @@ import Observation
                 return
             }
             connectionState.accept(project)
+            ensureEvents()
             catalog.acceptProject(project)
-            await refresh()
+            await refresh(includeDetails: !automatically && includeDetails)
             guard connectionState.isCurrent(current) else { return }
             if connectionState.recovered(wasConnected: wasConnected) { prefetchCatalog(current) }
         } catch {
@@ -214,12 +308,12 @@ import Observation
         }
     }
 
-    public func refreshUsage() async {
+    public func refreshUsage(force: Bool = false) async {
         guard let client = connectionState.client, let projectID = connectionState.projectID, connectionState.isConnected else { return }
         let connection = connectionState.connectionID
         let catalog = (try? await catalog.harnesses()) ?? catalog.cachedHarnesses
         guard connection == connectionState.connectionID, !Task.isCancelled else { return }
-        await usage.refresh(client: client, project: projectID, boxes: inventory.sandboxes, configuredHarnesses: catalog)
+        await usage.refresh(client: client, project: projectID, boxes: inventory.sandboxes, configuredHarnesses: catalog, force: force)
     }
 
     public func disconnect() {
@@ -228,6 +322,7 @@ import Observation
     }
 
     private func resetConnection() {
+        stopEvents()
         connectionState.invalidate()
         selection.reset()
         inventory.reset(); approvalStore.reset(); catalog.reset(); pools.reset(); pending.reset()

@@ -13,6 +13,7 @@ import (
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/console"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/desktop"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics"
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/events"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/forward"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/iroh"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/terminal"
@@ -25,8 +26,11 @@ func main() {
 	endpoint := flag.String("endpoint", "unix://", "An existing Discobox endpoint")
 	desktopMode := flag.Bool("desktop", false, "Embed the existing desktop viewer with a native clipboard bridge")
 	desktopURL := flag.String("desktop-url", "", "Existing local desktop forward")
+	eventMode := flag.Bool("events", false, "Subscribe to project events")
+	afterEvent := flag.Int64("after-event-id", -1, "Last applied project event")
 	forwardMode := flag.Bool("forward", false, "Forward the selected box’s reported ports to local loopback")
 	harnessConsole := flag.Bool("harness-console", false, "Open the console's harness screen for --project")
+	noAutoReconnect := flag.Bool("no-auto-reconnect", false, "Stop after a terminal transport loss")
 	attachMode := flag.Bool("attach", false, "Stream an existing live terminal through the local PTY")
 	attachStatus := flag.String("attach-status", "", "Private FIFO for terminal connection state")
 	project := flag.String("project", "", "Project ID")
@@ -38,14 +42,30 @@ func main() {
 	diagnosticConnection := flag.String("diagnostic-connection", "", "Opaque UI connection generation for diagnostics")
 	flag.Parse()
 	finishDiagnostics := func() {}
-	if *attachMode || *irohProxy {
+	if *attachMode || *irohProxy || *eventMode {
 		component := "terminal"
 		if *irohProxy {
 			component = "iroh_proxy"
+		} else if *eventMode {
+			component = "project_events"
 		}
 		finishDiagnostics = diagnostics.Start(component, *endpoint, *diagnosticConnection, wire.Request{ProjectID: *project, SandboxID: *box, ExecID: *execID})
 	}
 	defer finishDiagnostics()
+	if *eventMode {
+		if policy := os.Getenv("DISCOBOX_UI_AUTOMATIC_GUEST_READS"); policy == "paused" || policy == "enabled" {
+			diagnostics.Emit(diagnostics.Event{Event: "launch_guest_read_policy", Reason: policy})
+		}
+		if *afterEvent >= 0 {
+			diagnostics.Emit(diagnostics.Event{Event: "event_resume"})
+		}
+		if err := events.Run(*endpoint, *project, *afterEvent, os.Stdin, os.Stdout); err != nil {
+			diagnostics.Emit(diagnostics.Event{Event: "event_stream_ended", Reason: diagnostics.Reason(err)})
+			finishDiagnostics()
+			os.Exit(1)
+		}
+		return
+	}
 	if *harnessConsole {
 		if err := console.RunHarnesses(*endpoint, *project); err != nil {
 			fmt.Fprintf(os.Stderr, "\r\nSetup failed: %s\r\n", err)
@@ -88,7 +108,7 @@ func main() {
 		return
 	}
 	if *attachMode {
-		if err := terminal.Attach(*endpoint, wire.Request{ProjectID: *project, SandboxID: *box, ExecID: *execID}, *attachStatus); err != nil {
+		if err := terminal.Attach(*endpoint, wire.Request{ProjectID: *project, SandboxID: *box, ExecID: *execID}, *attachStatus, !*noAutoReconnect); err != nil {
 			if *attachStatus == "" {
 				fmt.Fprintf(os.Stderr, "\r\nTerminal disconnected: %s\r\n", err)
 			}

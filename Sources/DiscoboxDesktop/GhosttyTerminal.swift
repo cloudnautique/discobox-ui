@@ -123,6 +123,9 @@ struct TerminalIdentity: Hashable {
     var error: String?
     var connectionState = "connecting"
     var connectionMessage: String?
+    var canReconnect: Bool {
+        ended || error != nil || ["reconnecting", "disconnected", "ended", "output-stalled"].contains(connectionState)
+    }
     let previousOutput: String?
     private(set) var hasConnected = false
     private let status: TerminalAttachStatus?
@@ -130,6 +133,7 @@ struct TerminalIdentity: Hashable {
     convenience init(identity: TerminalIdentity, previousOutput: String? = nil) {
         let status = identity.demo ? nil : try? TerminalAttachStatus()
         var args = identity.demo ? ["--terminal-demo"] : ["--attach", "--endpoint", identity.endpoint, "--project", identity.project, "--box", identity.box, "--exec", identity.exec, "--diagnostic-connection", identity.connection.uuidString]
+        if !identity.demo && GuestReadDiagnostics.recoveryDisabled { args.append("--no-auto-reconnect") }
         if let status { args += ["--attach-status", status.path] }
         self.init(arguments: args, status: status, previousOutput: previousOutput)
         if identity.demo { connectionState = "connected"; hasConnected = true }
@@ -138,6 +142,7 @@ struct TerminalIdentity: Hashable {
         self.status = status
         self.previousOutput = previousOutput
         view = GhosttyTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        view.attachStatus = status
         view.ended = { [weak self] in self?.ended = true; self?.view.readOnly = true }
         view.failed = { [weak self] message in self?.error = message }
         status?.receive = { [weak self] state, message in
@@ -228,7 +233,11 @@ struct TerminalIdentity: Hashable {
             window.makeFirstResponder(view)
         }
     }
-    func reconnect(_ identity: TerminalIdentity) {
+    func reconnect(_ identity: TerminalIdentity, session: TerminalSession) {
+        guard sessions[identity] === session, session.canReconnect else { return }
+        release(identity)
+    }
+    func release(_ identity: TerminalIdentity) {
         recoveryAfter.removeValue(forKey: identity)
         retire(identity)
     }
@@ -250,6 +259,7 @@ struct TerminalIdentity: Hashable {
     /// Reattach only an ended stream whose concrete exec was just confirmed
     /// live. No process is created in the box and no terminal input is replayed.
     func recoverInterrupted(_ inventory: BoxSelectionStore.TerminalInventory, connection: UUID) {
+        guard !GuestReadDiagnostics.recoveryDisabled else { return }
         let now = Date()
         recoveryAfter = recoveryAfter.filter { $0.value > now }
         for identity in Array(sessions.keys) where identity.connection == connection && identity.project == inventory.project && identity.box == inventory.box && inventory.execIDs.contains(identity.exec) {
@@ -306,10 +316,10 @@ struct LiveTerminal: View {
         VStack(spacing: 0) {
             if let error = session.error { Notice(text: error, symbol: "exclamationmark.triangle") }
             TerminalSurface(view: session.view, focused: focused, onFocus: onFocus).id(identity)
-            if session.ended || session.error != nil || session.connectionState == "reconnecting" || session.connectionState == "connecting" || session.connectionState == "output-stalled" {
+            if session.canReconnect || session.connectionState == "connecting" {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        if session.ended || session.error != nil { Label("Terminal disconnected · output is read-only", systemImage: "exclamationmark.triangle") }
+                        if session.ended || session.error != nil || ["disconnected", "ended"].contains(session.connectionState) { Label("Terminal disconnected · output is read-only", systemImage: "exclamationmark.triangle") }
                         else if session.connectionState == "output-stalled" { Label("Terminal output stalled · output is read-only", systemImage: "pause.circle") }
                         else { HStack { ProgressView().controlSize(.mini); Text(session.connectionState == "connecting" ? "Connecting terminal…" : "Reconnecting terminal…") } }
                         if let message = session.connectionMessage { Text(message).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled) }
@@ -317,7 +327,7 @@ struct LiveTerminal: View {
                     Spacer()
                     Button("Copy Text") { session.view.copyOutput() }
                     if session.previousOutput != nil { Button("Previous Output…") { showingPreviousOutput = true } }
-                    if session.ended || session.error != nil || session.connectionState == "output-stalled" { Button("Reconnect") { store.reconnect(identity) } }
+                    if session.canReconnect { Button("Reconnect now") { store.reconnect(identity, session: session) } }
                 }.font(.caption).padding(8)
             } else if session.previousOutput != nil {
                 HStack { Spacer(); Button("Previous Output…") { showingPreviousOutput = true } }.font(.caption).padding(6)
@@ -377,7 +387,7 @@ struct TerminalSurface: NSViewRepresentable {
     }
 }
 
-@MainActor fileprivate final class TerminalContainerView: NSView {
+@MainActor final class TerminalContainerView: NSView {
     var requestedFocus = false
     private var terminal: GhosttyTerminalView?
     func bind(_ view: GhosttyTerminalView) {
@@ -389,8 +399,14 @@ struct TerminalSurface: NSViewRepresentable {
         mount()
     }
     private func mount() {
-        guard window != nil, let terminal, terminal.presentationContainer === self,
-              terminal.superview !== self else { return }
+        guard window != nil, bounds.width > 0, bounds.height > 0, let terminal,
+              terminal.presentationContainer === self else { return }
+        if terminal.superview === self {
+            // A cached representable can return with a child sized for the
+            // previous pane. Autoresizing only applies subsequent size deltas.
+            if terminal.frame != bounds { terminal.frame = bounds }
+            return
+        }
         for child in subviews { child.removeFromSuperview() }
         terminal.removeFromSuperview()
         terminal.frame = bounds
@@ -422,6 +438,7 @@ struct TerminalSurface: NSViewRepresentable {
 
 @MainActor final class GhosttyTerminalView: NSView, @preconcurrency NSTextInputClient, NSUserInterfaceValidations {
     fileprivate weak var presentationContainer: TerminalContainerView?
+    weak var attachStatus: TerminalAttachStatus?
     private(set) var surface: ghostty_surface_t?
     var ended: (() -> Void)?
     var onFocus: (() -> Void)?
@@ -490,8 +507,21 @@ struct TerminalSurface: NSViewRepresentable {
     }
     override func layout() { super.layout(); scheduleResize() }
     override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); scheduleResize() }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window { NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: window) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+    @objc private func updateAttachVisibility() {
+        attachStatus?.setVisible(window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor)
+    }
+    override func viewDidHide() { super.viewDidHide(); updateAttachVisibility() }
+    override func viewDidUnhide() { super.viewDidUnhide(); updateAttachVisibility() }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if attachStatus != nil, let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(updateAttachVisibility), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        updateAttachVisibility()
         if let surface {
             ghostty_surface_set_occlusion(surface, window != nil)
             if window == nil { ghostty_surface_set_focus(surface, false) }

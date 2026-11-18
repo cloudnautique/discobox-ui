@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -53,7 +54,7 @@ func (c *attachFrames) WriteFrame(t byte, p []byte) error {
 	return frame.Write(c.Conn, t, p)
 }
 
-func openAttach(ctx context.Context, endpoint string, req wire.Request, event func(resume.Event)) (*resume.Conn, error) {
+func openAttach(ctx context.Context, endpoint string, req wire.Request, event func(resume.Event), statusPath string, recoveryWait func(context.Context, time.Duration) error) (*resume.Conn, error) {
 	for _, id := range []string{req.ProjectID, req.SandboxID, req.ExecID} {
 		if err := bridge.ValidID(id); err != nil {
 			return nil, err
@@ -121,18 +122,51 @@ func openAttach(ctx context.Context, endpoint string, req wire.Request, event fu
 		return nil, err
 	}
 	ctx = diagnostics.ObserveAttachActions(ctx)
-	c, err := resume.New(ctx, initial, resume.Options{
-		Dial: dial,
-		Done: func(ctx context.Context) (bool, error) {
-			return attachDone(ctx, b, req)
-		},
+	// resume serializes recovery callbacks. Done precedes Dial on each attempt,
+	// including retries after an unsuccessful replay handshake.
+	var observationErr error
+	attempt := 0
+	quickFirst := false
+	established := time.Now()
+	opts := resume.Options{
 		Event: func(e resume.Event) {
+			switch e.State {
+			case resume.ConnectionReconnecting:
+				if time.Since(established) >= 30*time.Second {
+					attempt = 0
+				}
+			case resume.ConnectionReconnected:
+				established = time.Now()
+			}
 			diagnostics.Emit(diagnostics.Event{Event: "attach_" + string(e.State), Reason: diagnostics.Reason(e.Err)})
 			if event != nil {
 				event(e)
 			}
 		},
-	})
+	}
+	if recoveryWait != nil {
+		opts.Done = func(ctx context.Context) (bool, error) {
+			if attempt == 0 {
+				quickFirst = attachmentVisible(statusPath)
+			}
+			attempt = min(attempt+1, 6)
+			delay := recoveryDelay(attempt, quickFirst)
+			diagnostics.Emit(diagnostics.Event{Event: "attach_wait", Retry: attempt, DurationMS: delay.Milliseconds()})
+			if err := recoveryWait(ctx, delay); err != nil {
+				return true, err
+			}
+			done, err := attachDone(ctx, b, req)
+			observationErr = err
+			return done, err
+		}
+		opts.Dial = func(ctx context.Context) (execstream.Conn, error) {
+			if observationErr != nil {
+				return nil, observationErr
+			}
+			return dial(ctx)
+		}
+	}
+	c, err := resume.New(ctx, initial, opts)
 	if err != nil {
 		_ = initial.Close()
 	}
@@ -182,12 +216,49 @@ func attachDone(ctx context.Context, b *bridge.Bridge, req wire.Request) (bool, 
 			return true, fmt.Errorf("box is %s; detaching", state.Runtime.State)
 		}
 	}
+	if readErr == nil && terminal.Status != http.StatusOK {
+		readErr = fmt.Errorf("terminal observation returned HTTP %d", terminal.Status)
+	}
 	return false, readErr
+}
+
+// The UI owns this marker alongside its private status FIFO. Missing status
+// (including standalone helpers) keeps the conservative hidden-session policy.
+func attachmentVisible(statusPath string) bool {
+	if statusPath == "" {
+		return false
+	}
+	info, err := os.Lstat(statusPath + ".visible")
+	return err == nil && info.Mode().IsRegular()
+}
+
+// Give an on-screen terminal one fast retry per stable connection. Later
+// attempts use the same jittered backoff as a retained off-screen session.
+func recoveryDelay(attempt int, quickFirst bool) time.Duration {
+	if quickFirst {
+		if attempt == 1 {
+			return time.Second + time.Duration(rand.Int64N(int64(250*time.Millisecond)+1))
+		}
+		attempt--
+	}
+	floor := min(30*time.Second<<(max(1, min(attempt, 5))-1), 270*time.Second)
+	return floor + time.Duration(rand.Int64N(int64(floor/9)+1))
+}
+
+func waitForRecovery(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Attach streams the terminal req names until it ends or the parent leaves.
 // statusPath, when set, is the FIFO that receives connection state.
-func Attach(endpoint string, req wire.Request, statusPath string) (resultErr error) {
+func Attach(endpoint string, req wire.Request, statusPath string, autoReconnect bool) (resultErr error) {
 	status, closeStatus := attachStatusWriter(statusPath)
 	defer closeStatus()
 	status("connecting", "")
@@ -241,7 +312,7 @@ func Attach(endpoint string, req wire.Request, statusPath string) (resultErr err
 			}
 		}
 	}()
-	return runTerminalRecovery(ctx, endpoint, req, tty, sizes, status)
+	return runTerminalRecovery(ctx, endpoint, req, tty, sizes, status, statusPath, autoReconnect)
 }
 
 // One watcher owns the previous size and the latest-only queue. Polling reads
@@ -306,6 +377,11 @@ func Demo() error {
 				fmt.Print("\x1b[?1l\x1b[>1uExtended keyboard protocol enabled\r\n")
 			case 6:
 				fmt.Print("\x1b[<uExtended keyboard protocol disabled\r\n")
+			case 7:
+				cols, rows, err := term.GetSize(fd)
+				if err == nil {
+					fmt.Printf("<PTY:%dx%d>", cols, rows)
+				}
 			case 10:
 				fmt.Print("<LF>")
 			case 27:

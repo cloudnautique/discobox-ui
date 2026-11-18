@@ -228,6 +228,7 @@ private actor FailingInventoryClient: DiscoboxClient {
     let client = GateClient(operation: .services)
     let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
+    workspace.selection.showServices(for: "demo-ui", token: UUID())
     let pending = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
     // Services remain blocked throughout this check. Allow the independent
@@ -247,6 +248,7 @@ private actor FailingInventoryClient: DiscoboxClient {
     let client = GateClient(operation: .services)
     let workspace = ConnectionSession()
     await workspace.connect(client: client, label: "fixture")
+    workspace.selection.showServices(for: "demo-ui", token: UUID())
     let pending = Task { await workspace.selection.selectBox("demo-ui") }
     await client.waitUntilBlocked()
     await workspace.selection.selectBox("demo-api")

@@ -129,6 +129,7 @@ struct WorkspaceView: View {
                             .lineLimit(1).truncationMode(.middle)
                     }
                     Spacer()
+                    RefreshOverrideBadge()
                     ConnectionStatusBadge(workspace: workspace)
                     Text(connections.active.profile.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(workspace.connectionState.endpointLabel)
                     Button { Task { await workspace.reconnect() } } label: { Image(systemName: "arrow.clockwise") }

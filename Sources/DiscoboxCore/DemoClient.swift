@@ -67,7 +67,10 @@ public actor DemoClient: DiscoboxClient {
             return Data("{}".utf8)
         case .usageHeaders: return Data(#"{"headers":{}}"#.utf8)
         case .usage:
-            return try JSONSerialization.data(withJSONObject: ["records": [["id": "demo-quota", "poolId": "local", "sandboxId": "demo-ui", "createdAt": "2026-10-27T17:00:00Z", "provider": "codex"]], "missing": []])
+            if request.usagePage?.host != "chatgpt.com" || request.usagePage?.after != nil {
+                return try JSONSerialization.data(withJSONObject: ["records": [], "through": request.usagePage?.after ?? "", "full": false])
+            }
+            return try JSONSerialization.data(withJSONObject: ["records": [["id": "demo-quota", "poolId": "local", "sandboxId": "demo-ui", "createdAt": "2026-10-27T17:00:00Z", "provider": "codex"]], "through": "http_1", "full": false])
         case .auditBody where request.recordID == "demo-quota":
             return try JSONSerialization.data(withJSONObject: ["text": #"{"rate_limit":{"primary_window":{"used_percent":70,"limit_window_seconds":18000,"reset_at":1793124000},"secondary_window":{"used_percent":30,"limit_window_seconds":604800}}}"#, "truncated": false])
         case .auditBody, .saveAuditBody: return Data(#"{"text":"Offline response"}"#.utf8)

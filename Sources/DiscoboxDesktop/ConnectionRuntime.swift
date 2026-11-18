@@ -37,7 +37,7 @@ struct ConnectionLifecycle: View {
             .onChange(of: workspace.connectionState.transportEndpoint) { old, new in
                 if !old.isEmpty, old != new { runtime.terminals.closeAll(); runtime.forwards.closeAll() }
             }
-            .onChange(of: workspace.inventory.lastRefresh) {
+            .onChange(of: workspace.selection.terminalObservation) {
                 guard workspace.connectionState.connectionError == nil, workspace.selection.detailError == nil,
                       let inventory = workspace.selection.terminalInventory else { return }
                 runtime.terminals.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
@@ -134,6 +134,7 @@ struct ConnectedWorkspace: View {
     @State private var id = UUID()
     func body(content: Content) -> some View {
         content
+            .environment(\.usageWindowID, id)
             .onAppear { report() }
             .onDisappear { connections.withdrawPresence(from: id) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in report() }

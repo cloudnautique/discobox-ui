@@ -15,7 +15,12 @@ import DiscoboxCore
     }
 }
 
+extension EnvironmentValues {
+    @Entry var usageWindowID: UUID? = nil
+}
+
 struct HarnessUsageSection: View {
+    @Environment(\.usageWindowID) private var windowID
     @Environment(Connections.self) private var connections: Connections
     @AppStorage("harnessUsageExpanded") private var expanded = true
     @AppStorage("harnessUsageShelfHeight") private var height = 150.0
@@ -84,6 +89,10 @@ struct HarnessUsageSection: View {
         }
         .background(DiscoboxAppearance.sidebar)
         .tint(DiscoboxAppearance.accent)
+        .onChange(of: expanded || showDetails, initial: true) { _, visible in
+            if let windowID { connections.reportUsageSurface(visible: visible, from: windowID) }
+        }
+        .onDisappear { if let windowID { connections.reportUsageSurface(visible: false, from: windowID) } }
         .sheet(isPresented: $showDetails) { HarnessUsageDetails() }
     }
     private struct ShelfResize {
@@ -208,7 +217,7 @@ struct HarnessUsageDetails: View {
                         }
                         DisclosureGroup("About these readings") {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Reads recorded quota responses once a minute while connected. Does not request fresh usage from providers. Readings stay separate for each computer and harness.")
+                                Text("While usage is visible, Discobox checks new quota recordings about once a minute. Readings stay separate for each computer and harness.")
                                 ForEach(computers) { computer in
                                     let notices = Array(Set(computer.usage.notices)).sorted()
                                     if !notices.isEmpty {
@@ -222,7 +231,13 @@ struct HarnessUsageDetails: View {
                 }
             }
         } footer: {
-            HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction) }
+            HStack {
+                Button("Refresh usage") {
+                    Task { for host in connections.sessions where host.connectionState.isConnected { await host.refreshUsage(force: true) } }
+                }.disabled(computers.isEmpty || computers.contains { $0.usage.isLoading })
+                Spacer()
+                Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction)
+            }
         }.frame(height: 600)
     }
 }

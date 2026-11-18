@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,12 @@ import (
 )
 
 func TestAttachStreamReconnectAndDetach(t *testing.T) {
+	t.Run("visible", func(t *testing.T) { checkAttachReconnect(t, true, true) })
+	t.Run("hidden", func(t *testing.T) { checkAttachReconnect(t, true, false) })
+	t.Run("paused", func(t *testing.T) { checkAttachReconnect(t, false, true) })
+}
+
+func checkAttachReconnect(t *testing.T, automatic, visible bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	applied := make(chan frame.Frame, 8)
@@ -33,6 +41,7 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		return nil
 	}})
 	var count atomic.Int32
+	var execReads atomic.Int32
 	var failNextExecRead atomic.Bool
 	var transientFailures atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +54,7 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		case "/projects/p/sandboxes/b":
 			io.WriteString(w, `{"runtime":{"runtimeState":"running"}}`)
 		case "/api/projects/p/sandboxes/b/execs/e":
+			execReads.Add(1)
 			if failNextExecRead.Swap(false) {
 				transientFailures.Add(1)
 				http.Error(w, "pool recovering", http.StatusServiceUnavailable)
@@ -70,7 +80,33 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := openAttach(ctx, server.URL, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: "e"}, nil)
+	statusPath := filepath.Join(t.TempDir(), "status")
+	if visible {
+		if err := os.WriteFile(statusPath+".visible", nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var waits atomic.Int32
+	wait := func(_ context.Context, delay time.Duration) error {
+		attempt := waits.Add(1)
+		minDelay := time.Duration(attempt) * 30 * time.Second
+		maxDelay := minDelay + minDelay/9
+		if visible {
+			if attempt == 1 {
+				minDelay, maxDelay = time.Second, 1250*time.Millisecond
+			} else {
+				minDelay, maxDelay = 30*time.Second, 30*time.Second+30*time.Second/9
+			}
+		}
+		if delay < minDelay || delay > maxDelay {
+			t.Errorf("attempt %d waited %v", attempt, delay)
+		}
+		return nil
+	}
+	if !automatic {
+		wait = nil
+	}
+	c, err := openAttach(ctx, server.URL, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: "e"}, nil, statusPath, wait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +132,17 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 	// One physical transport loss must preserve the logical input stream.
 	failNextExecRead.Store(true)
 	first.Close()
+	if !automatic {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatal("paused recovery did not detach")
+		}
+		if execReads.Load() != 1 || count.Load() != 1 {
+			t.Fatal("paused attachment attempted an automatic observation or dial")
+		}
+		return
+	}
 	select {
 	case <-accepted:
 	case <-ctx.Done():
@@ -118,7 +165,7 @@ func TestAttachStreamReconnectAndDetach(t *testing.T) {
 	if count.Load() != 2 {
 		t.Fatalf("attach count %d", count.Load())
 	}
-	if transientFailures.Load() != 1 {
+	if transientFailures.Load() != 1 || waits.Load() != 2 {
 		t.Fatal("did not exercise the temporary metadata outage")
 	}
 	// The initial resize was consumed and asserted above. A reconnect may
@@ -169,7 +216,7 @@ func TestAttachRefusesStoppedCachedAndVirtualTerminals(t *testing.T) {
 			if state == "primary" {
 				id = state
 			}
-			_, err := openAttach(t.Context(), server.URL, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: id}, nil)
+			_, err := openAttach(t.Context(), server.URL, wire.Request{ProjectID: "p", SandboxID: "b", ExecID: id}, nil, "", nil)
 			if err == nil || upgrades.Load() != 0 {
 				t.Fatalf("refusal: err=%v upgrades=%d", err, upgrades.Load())
 			}

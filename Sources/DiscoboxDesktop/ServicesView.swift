@@ -4,6 +4,7 @@ import DiscoboxCore
 
 struct ServicesView: View {
     let box: Sandbox
+    @State private var demandID = UUID()
     @Environment(ConnectionSession.self) private var workspace
     @Environment(ServiceForwards.self) private var forwards
     @Environment(DesktopWindows.self) private var desktops
@@ -20,6 +21,7 @@ struct ServicesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if let error = workspace.selection.serviceError { Notice(text: error, symbol: "exclamationmark.triangle") }
                 if !live {
                     Text("Saved service state. Start this box to open its ports.").font(.callout).foregroundStyle(.secondary)
                 }
@@ -73,7 +75,11 @@ struct ServicesView: View {
         }
         .task(id: "\(workspace.connectionState.connectionID)-\(workspace.connectionState.projectID ?? "")-\(box.id)-\(live)") {
             if live { _ = forwards.session(box: box.id, workspace: workspace) }
+            let selection = workspace.selection
+            selection.showServices(for: box.id, token: demandID)
+            await selection.refreshVisibleServices()
         }
+        .onDisappear { workspace.selection.hideServices(demandID) }
     }
     private func serviceHeading(_ title: String, symbol: String) -> some View {
         Label(title, systemImage: symbol).font(.callout.weight(.semibold))

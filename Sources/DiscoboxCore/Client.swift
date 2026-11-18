@@ -25,7 +25,7 @@ extension DiscoboxClient {
 /// from the backend. Each operation passes only its own permission flag.
 public actor CompanionClient: DiscoboxClient {
     public nonisolated static func cancelAllRequests() { ProcessRequest.cancelAll() }
-    private let executable: URL
+    let executable: URL
     private let endpoint: String
     private nonisolated let remote: IrohConnection?
     private let approvalTimeout: TimeInterval
@@ -62,11 +62,22 @@ public actor CompanionClient: DiscoboxClient {
         let job = ProcessRequest(executable: executable, endpoint: destination, timeout: deadline,
                                  timeoutMessage: request.operation == .serverPeer ? "The computer did not report its identity in time." : timeoutMessage,
                                  permission: request.operation.permission, payload: payload, progress: progress)
-        let data = try await withTaskCancellationHandler {
+        let context = GuestReadDiagnostics.context
+        let token: UUID?
+        if let context { token = try await context.metrics.begin(context.loop) { job.cancel() } }
+        else { token = nil }
+        let data: Data
+        do {
+            data = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await BlockingThread.run(name: "Discobox companion request") { try job.run() }
+            } onCancel: { job.cancel() }
             try Task.checkCancellation()
-            return try await BlockingThread.run(name: "Discobox companion request") { try job.run() }
-        } onCancel: { job.cancel() }
-        try Task.checkCancellation()
+            if let token { await context?.metrics.end(token, cancelled: false) }
+        } catch {
+            if let token { await context?.metrics.end(token, cancelled: error is CancellationError || Task.isCancelled) }
+            throw error
+        }
         let response: BridgeResponse
         do { response = try JSONDecoder().decode(BridgeResponse.self, from: data) }
         catch { throw DiscoboxError("The companion returned an invalid response. Rebuild the app and companion together.") }
@@ -78,7 +89,7 @@ public actor CompanionClient: DiscoboxClient {
             }
             let problem = response.body.flatMap { try? JSONDecoder().decode(APIProblem.self, from: $0) }
             let detail = problem?.detail ?? problem?.error ?? problem?.message ?? "The request was refused."
-            throw DiscoboxError("HTTP \(response.status): \(detail)", connectionRetryable: [408, 425, 429, 500, 502, 503, 504].contains(response.status))
+            throw DiscoboxError("HTTP \(response.status): \(detail)", kind: [408, 425, 429, 500, 502, 503, 504].contains(response.status) ? .transport : .other, httpStatus: response.status)
         }
         return response.body ?? Data()
     }
@@ -129,6 +140,10 @@ private final class ProcessRequest: @unchecked Sendable {
         case .manage: ["--allow-manage"]
         case .shell: ["--allow-shell"]
         }
+        var environment = ProcessInfo.processInfo.environment
+        environment["DISCOBOX_UI_READ_TRIGGER"] = GuestReadDiagnostics.scheduled ? "scheduled" : "requested"
+        environment["DISCOBOX_UI_GENERATION"] = GuestReadDiagnostics.context?.generation.uuidString
+        process.environment = environment
         process.arguments = ["--endpoint", endpoint] + flag
         self.payload = payload
     }

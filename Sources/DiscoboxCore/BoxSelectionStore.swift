@@ -4,18 +4,57 @@ import Observation
 @MainActor @Observable
 public final class BoxSelectionStore {
     public private(set) var execs: [Exec] = []
+    public private(set) var terminalObservation: UUID?
     public private(set) var terminalInventory: TerminalInventory?
     public private(set) var services: [Service] = []
     public private(set) var sandboxID: String?
     public private(set) var execID: String?
     public private(set) var inventoryObservedAt: String?
     public private(set) var servicesObservedAt: String?
+    public private(set) var serviceError: String?
     public private(set) var detailError: String?
     public private(set) var isOpeningShell = false
     public private(set) var isOpeningSession = false
     public var commandError: String?
     @ObservationIgnored var selectionRevision = UUID()
-    @ObservationIgnored private var detailsRequest = LatestRequest()
+    @ObservationIgnored var guestBudget = GuestReadBudget()
+    @ObservationIgnored private var execReads = DetailRead()
+    @ObservationIgnored private var serviceReads = DetailRead()
+    private struct DetailRead {
+        var request: UUID?
+        var completed: Date?
+        var failures = 0
+        func due(at now: Date, interval: TimeInterval) -> Bool {
+            guard request == nil else { return false }
+            guard let completed else { return true }
+            let backoff = failures == 0 ? 0 : min(300, 30 * pow(2, Double(failures - 1)))
+            return now.timeIntervalSince(completed) >= max(interval, backoff)
+        }
+        mutating func finish(at now: Date, success: Bool) {
+            completed = now
+            request = nil
+            failures = success ? 0 : min(failures + 1, 5)
+        }
+    }
+    @ObservationIgnored private var serviceViews: [UUID: String] = [:]
+    public func showServices(for box: String, token: UUID) {
+        serviceViews[token] = box
+    }
+    public func hideServices(_ token: UUID) { serviceViews.removeValue(forKey: token) }
+    public func refreshVisibleServices() async {
+        guard let box = sandboxID, serviceViews.values.contains(box),
+              serviceReads.due(at: now(), interval: 30) else { return }
+        await readServices()
+    }
+    func reconcileDetails(cadence: PollingCadence) async {
+        guard cadence.isActiveHost, cadence.presence != .hidden,
+              let box = selectedBox, box.isRunning else { return }
+        let focused = cadence.presence == .focused
+        let needsExecs = execReads.due(at: now(), interval: focused ? 30 : 60)
+        let needsServices = serviceViews.values.contains(box.id)
+            && serviceReads.due(at: now(), interval: focused ? 60 : 120)
+        await refreshDetails(execs: needsExecs, services: needsServices, scheduled: true)
+    }
     @ObservationIgnored private var recentBoxes: [String: RecentBox] = [:]
     @ObservationIgnored private var inventoryLoadedAt: Date?
     @ObservationIgnored private var selectionLoad: Task<Void, Never>?
@@ -78,7 +117,9 @@ public final class BoxSelectionStore {
             servicesObservedAt = cached.servicesObservedAt
             inventoryLoadedAt = cached.loadedAt
         }
-        let load = Task { await refreshDetails() }
+        let load = Task {
+            await refreshDetails(execs: true, services: id.map { serviceViews.values.contains($0) } ?? false)
+        }
         selectionLoad = load
         await load.value
     }
@@ -89,16 +130,33 @@ public final class BoxSelectionStore {
     }
 
     public func refreshDetails() async {
-        guard let client = connectionState.client, let projectID = connectionState.projectID, let sandboxID else { return }
-        let current = selectionRevision
-        let request = detailsRequest.begin()
+        await refreshDetails(execs: true, services: true)
+    }
+
+    private func refreshDetails(execs: Bool, services: Bool, scheduled: Bool = false) async {
+        let revision = selectionRevision
+        async let first: Void = readExecsIfNeeded(execs, revision: revision, scheduled: scheduled)
+        if services { await readServices(scheduled: scheduled) }
+        await first
+    }
+
+    private func readExecsIfNeeded(_ needed: Bool, revision: UUID, scheduled: Bool) async {
+        guard needed, revision == selectionRevision, !Task.isCancelled,
+              let client = connectionState.client, let projectID = connectionState.projectID, let sandboxID else { return }
+        let pool = selectedBox?.poolId ?? ""
+        let budget = guestBudget
+        guard !scheduled || budget.begin(pool: pool, project: projectID, at: now()) else { return }
+        var outcome: Result<Void, Error>?
+        defer { if scheduled { budget.finish(pool: pool, project: projectID, at: now(), result: outcome) } }
+        let request = UUID()
+        execReads.request = request
         do {
-            async let execResult = client.decode(.init(.execs, projectID: projectID, sandboxID: sandboxID), as: ExecsResponse.self)
-            async let serviceResult = client.decode(.init(.services, projectID: projectID, sandboxID: sandboxID), as: ServicesResponse.self)
-            // Publish terminal inventory as soon as it arrives. Service discovery
-            // can be slow and must not delay mounting an interactive terminal.
-            let terminals = try await execResult
-            guard current == selectionRevision, detailsRequest.owns(request) else { return }
+            let terminals = try await client.decode(.init(.execs, projectID: projectID, sandboxID: sandboxID), as: ExecsResponse.self)
+            guard execReads.request == request else { return }
+            execReads.request = nil
+            guard !Task.isCancelled else { return }
+            outcome = .success(())
+            execReads.finish(at: now(), success: true)
             let updatedExecs = terminals.execs.filter(\.tty).sorted {
                 if ($0.primary == true) != ($1.primary == true) { return $0.primary == true }
                 return $0.id < $1.id
@@ -107,6 +165,7 @@ public final class BoxSelectionStore {
                 let inventory = TerminalInventory(project: projectID, box: sandboxID,
                     execIDs: Set(updatedExecs.filter(\.acceptsInput).map(\.id)))
                 if terminalInventory != inventory { terminalInventory = inventory }
+                terminalObservation = request
             }
             if execs != updatedExecs { execs = updatedExecs }
             inventoryLoadedAt = now()
@@ -115,13 +174,43 @@ public final class BoxSelectionStore {
             if !execs.contains(where: { $0.id == execID }) {
                 await selectExec(execs.first(where: { $0.primary == true })?.id ?? execs.first?.id)
             }
-            let serviceList = try await serviceResult
-            guard current == selectionRevision, detailsRequest.owns(request) else { return }
-            if services != serviceList.services { services = serviceList.services }
-            if servicesObservedAt != serviceList.observedAt { servicesObservedAt = serviceList.observedAt }
         } catch {
-            guard current == selectionRevision, detailsRequest.owns(request) else { return }
+            guard execReads.request == request else { return }
+            execReads.request = nil
+            guard !Task.isCancelled else { return }
+            outcome = .failure(error)
+            execReads.finish(at: now(), success: false)
             detailError = error.localizedDescription
+        }
+    }
+
+    private func readServices(scheduled: Bool = false) async {
+        guard !Task.isCancelled, let client = connectionState.client,
+              let projectID = connectionState.projectID, let sandboxID else { return }
+        let pool = selectedBox?.poolId ?? ""
+        let budget = guestBudget
+        guard !scheduled || budget.begin(pool: pool, project: projectID, at: now()) else { return }
+        var outcome: Result<Void, Error>?
+        defer { if scheduled { budget.finish(pool: pool, project: projectID, at: now(), result: outcome) } }
+        let request = UUID()
+        serviceReads.request = request
+        do {
+            let result = try await client.decode(.init(.services, projectID: projectID, sandboxID: sandboxID), as: ServicesResponse.self)
+            guard serviceReads.request == request else { return }
+            serviceReads.request = nil
+            guard !Task.isCancelled else { return }
+            outcome = .success(())
+            serviceReads.finish(at: now(), success: true)
+            if services != result.services { services = result.services }
+            if servicesObservedAt != result.observedAt { servicesObservedAt = result.observedAt }
+            serviceError = nil
+        } catch {
+            guard serviceReads.request == request else { return }
+            serviceReads.request = nil
+            guard !Task.isCancelled else { return }
+            outcome = .failure(error)
+            serviceReads.finish(at: now(), success: false)
+            serviceError = error.localizedDescription
         }
     }
 
@@ -154,7 +243,7 @@ public final class BoxSelectionStore {
         let payload: JSONValue? = base.isEmpty ? nil : .object(["base": .string(base), "head": .string(head)])
         let created = try await client.decode(.init(tool == nil ? .newAgent : .openTool, projectID: projectID, sandboxID: sandboxID, toolID: tool, action: base.isEmpty ? nil : "review", payload: payload), as: Exec.self)
         guard selection == selectionRevision else { return }
-        await refreshDetails()
+        await refreshDetails(execs: true, services: false)
         guard selection == selectionRevision else { return }
         if !execs.contains(where: { $0.id == created.id }) { execs.append(created) }
         await selectExec(created.id)
@@ -170,7 +259,7 @@ public final class BoxSelectionStore {
         guard current == selectionRevision else { return }
         execs.removeAll { $0.id == id }
         await selectExec(execs.first?.id)
-        await refreshDetails()
+        await refreshDetails(execs: true, services: false)
     }
 
     public func openShell() async {
@@ -187,7 +276,7 @@ public final class BoxSelectionStore {
         do {
             let created = try await client.decode(.init(.newShell, projectID: projectID, sandboxID: sandboxID), as: Exec.self)
             guard current == selectionRevision else { return }
-            await refreshDetails()
+            await refreshDetails(execs: true, services: false)
             guard current == selectionRevision else { return }
             if !execs.contains(where: { $0.id == created.id }) { execs.append(created) }
             await selectExec(created.id)
@@ -203,6 +292,9 @@ public final class BoxSelectionStore {
     func clearSelection() {
         selectionLoad?.cancel()
         selectionLoad = nil
+        execReads = DetailRead()
+        serviceReads = DetailRead()
+        serviceError = nil
         inventoryLoadedAt = nil
         selectionRevision = UUID()
         isOpeningSession = false; isOpeningShell = false

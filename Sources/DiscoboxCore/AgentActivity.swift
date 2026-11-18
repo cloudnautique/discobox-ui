@@ -54,17 +54,19 @@ public struct AgentActivity: Equatable, Sendable {
         let process = session["execStatus"].string
         let report = session["programStatus"]
         let completed = ["done", "error"].contains(report["state"].string) && ["exited", "failed"].contains(process)
-        guard process.isEmpty || process == "running" || completed, session["observedAt"] == .null else {
+        guard box.projectProgram != nil || ((process.isEmpty || process == "running" || completed) && session["observedAt"] == .null) else {
             state = .unavailable; label = "Activity unavailable"; message = "Terminal is not running"; return
         }
-        message = Self.text(report["msg"].string, limit: 240)
-        switch report["state"].string {
+        let reportedState = box.projectProgram?.state ?? report["state"].string
+        let kind = box.projectProgram.map { $0.kind ?? "" } ?? report["kind"].string
+        message = reportedState == report["state"].string && kind == report["kind"].string ? Self.text(report["msg"].string, limit: 240) : ""
+        switch reportedState {
         case "working": state = .working; label = "Working"
         case "idle": state = .idle; label = "Idle"
         case "done": state = .finished; label = "Finished"
         case "error": state = .failed; label = "Agent failed"
         case "blocked":
-            switch report["kind"].string {
+            switch kind {
             case "permission": state = .approval; label = "Needs approval"
             case "question": state = .question; label = "Needs an answer"
             case "auth": state = .signIn; label = "Needs sign-in"

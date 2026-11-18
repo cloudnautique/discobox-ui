@@ -24,7 +24,7 @@ private actor PollTicks {
         await withCheckedContinuation { waiting[kind, default: []].append($0) }
     }
     func waitForAll() async {
-        while waiting.values.reduce(0, { $0 + $1.count }) != 4 { await Task.yield() }
+        while waiting.values.reduce(0, { $0 + $1.count }) != PollingLoop.allCases.count { await Task.yield() }
     }
     func release(_ kind: ConnectionSession.Poll) { waiting.removeValue(forKey: kind)?.forEach { $0.resume() } }
     func releaseAll() { let values = waiting.values.flatMap { $0 }; waiting.removeAll(); values.forEach { $0.resume() } }
@@ -44,12 +44,15 @@ private actor SessionRecordingClient: DiscoboxClient {
 
 @MainActor @Test func oneSessionOwnsPollingAndDisconnectStopsFurtherReads() async throws {
     let ticks = PollTicks(), client = SessionRecordingClient(), hub = Connections()
+    let window = UUID()
+    hub.reportPresence(.focused, from: window)
+    hub.reportUsageSurface(visible: true, from: window)
     hub.active.pollSleep = { kind, _ in await ticks.sleep(kind); try Task.checkCancellation() }
     let session = try await hub.connect(.thisComputer, demo: true) { client }
     await ticks.waitForAll()
     #expect(await client.count(.approvals) == 1)
     _ = try await hub.connect(.thisComputer, demo: true) { client }
-    #expect(await ticks.count == 4)
+    #expect(await ticks.count == PollingLoop.allCases.count)
     await ticks.release(.approvals)
     await ticks.waitForAll()
     #expect(await client.count(.approvals) == 2)

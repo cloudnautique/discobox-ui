@@ -102,7 +102,10 @@ import DiscoboxCore
             try await post(window, code: 1, text: "S", plain: "s", flags: .shift)
             try await Task.sleep(for: .milliseconds(100))
             try await post(window, code: 29, text: "0")
-            try await wait { commands.showInspector && commands.inspectorSection == "services" }
+            do { try await wait { commands.showInspector && commands.inspectorSection == "services" } }
+            catch {
+                throw Failure("Services shortcut failed: hint=\(commands.hint ?? "none"), section=\(commands.inspectorSection), key window=\(NSApp.keyWindow?.title ?? "none"), sheet=\(window.attachedSheet?.title ?? "none"), active=\(NSApp.isActive)")
+            }
             commands.showInspector = false
             // Let the inspector's deferred terminal-focus restoration finish
             // before the fixture begins editing an unrelated native text field.

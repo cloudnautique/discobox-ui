@@ -32,6 +32,15 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
 /// workspace, client, caches, polling and connection generation while hidden.
 @MainActor @Observable public final class Connections {
     public let browser = BoxBrowser()
+    @ObservationIgnored private let usageQueue = ScheduledUsageQueue()
+    @ObservationIgnored private let guestBudget = GuestReadBudget()
+    @ObservationIgnored private let preferences: UserDefaults?
+    public var refreshPolicy: RefreshPolicy {
+        didSet {
+            if let data = try? JSONEncoder().encode(refreshPolicy) { preferences?.set(data, forKey: "discoboxRefreshPolicy") }
+            for session in sessions { session.applyRefreshPolicy(refreshPolicy) }
+        }
+    }
     public private(set) var sessions: [ConnectionSession]
     public private(set) var activeID: String { didSet { if activeID != oldValue { updateCadence() } } }
     var creations: [BoxCreation] = []
@@ -46,13 +55,18 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         }
     }
     @ObservationIgnored private var presenceReports: [UUID: PollingPresence] = [:]
+    @ObservationIgnored private var usageWindows: Set<UUID> = []
+    public func reportUsageSurface(visible: Bool, from window: UUID) {
+        if visible { usageWindows.insert(window) } else { usageWindows.remove(window) }
+        updateCadence()
+    }
     /// Each workspace window reports what it shows, from app activation and
     /// occlusion; polling follows the most visible. A closed window withdraws.
     public func reportPresence(_ value: PollingPresence, from window: UUID) {
-        presenceReports[window] = value; presence = combinedPresence
+        presenceReports[window] = value; presence = combinedPresence; updateCadence()
     }
     public func withdrawPresence(from window: UUID) {
-        presenceReports[window] = nil; presence = combinedPresence
+        presenceReports[window] = nil; usageWindows.remove(window); presence = combinedPresence; updateCadence()
     }
     private var combinedPresence: PollingPresence {
         let reports = presenceReports.values
@@ -64,9 +78,14 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         if active.connectionState.isConnected { return activeID }
         return sessions.first(where: { $0.connectionState.isConnected })?.id ?? activeID
     }
-    public init(polling: Bool = true, now: @escaping () -> Date = Date.init) {
+    public init(polling: Bool = true, now: @escaping () -> Date = Date.init, preferences: UserDefaults? = nil) {
+        self.preferences = preferences
+        refreshPolicy = preferences?.data(forKey: "discoboxRefreshPolicy").flatMap { try? JSONDecoder().decode(RefreshPolicy.self, from: $0) } ?? RefreshPolicy()
         let local = ConnectionSession(profile: .thisComputer, now: now)
         sessions = [local]; activeID = local.id; pollingEnabled = polling
+        local.selection.guestBudget = guestBudget
+        local.usageQueue = usageQueue
+        local.applyRefreshPolicy(refreshPolicy)
         updateCadence()
     }
     public func session(_ id: String) -> ConnectionSession? { sessions.first { $0.id == id } }
@@ -74,12 +93,19 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         for profile in profiles {
             let id = ConnectionProfiles.normalizedEndpoint(profile.endpoint)
             if let existing = session(id) { existing.update(profile) }
-            else { sessions.append(ConnectionSession(profile: profile)) }
+            else {
+                let host = ConnectionSession(profile: profile)
+                host.selection.guestBudget = guestBudget
+                host.usageQueue = usageQueue
+                host.applyRefreshPolicy(refreshPolicy)
+                sessions.append(host)
+            }
         }
         updateCadence()
     }
     private func updateCadence() {
-        for host in sessions { host.cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID) }
+        let usageVisible = usageWindows.contains { presenceReports[$0].map { $0 != .hidden } ?? false }
+        for host in sessions { host.cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID, usageVisible: usageVisible) }
     }
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }
@@ -146,7 +172,7 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         await withTaskGroup(of: Void.self) { group in
             for host in sessions where host.connectionState.canReconnect && (probeHealthy || host.connectionState.connectionError != nil) && !host.connectionState.recovery.requiresAction {
                 let workspace = host
-                group.addTask { await workspace.retryConnection() }
+                group.addTask { await workspace.handleNetworkHint() }
             }
         }
     }

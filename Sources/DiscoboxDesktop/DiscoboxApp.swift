@@ -3,7 +3,7 @@ import DiscoboxCore
 
 public struct DiscoboxApplication: App {
     @NSApplicationDelegateAdaptor(DiscoboxApplicationDelegate.self) private var applicationDelegate
-    @State private var connections = Connections()
+    @State private var connections = Connections(preferences: .standard)
     @State private var runtimes = ConnectionRuntimes()
     @AppStorage("savedConnections") private var savedConnections = "[]"
     @AppStorage("computerName") private var computerName = ""
@@ -17,7 +17,11 @@ public struct DiscoboxApplication: App {
     @State private var boxLinks = BoxLinkNavigation()
     @State private var didAttemptStartup = false
 
-    public init() { BrandTypography.register() }
+    public init() {
+        // Capture launch-only policy before Settings can change the next launch.
+        _ = GuestReadDiagnostics.recoveryDisabled
+        BrandTypography.register()
+    }
 
     public var body: some Scene {
         Window("Discobox", id: "workspace") {
@@ -98,6 +102,7 @@ public struct DiscoboxApplication: App {
                 AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintpalette") }
                 ApprovalNotificationSettings().tabItem { Label("Notifications", systemImage: "bell") }
                 ConnectionSettings().tabItem { Label("Connections", systemImage: "network") }
+                RefreshDiagnosticsSettings().tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
                 KeybindingSettings().tabItem { Label("Keybindings", systemImage: "keyboard") }
                 VStack { ComputerPicker().padding([.horizontal, .top]); HarnessSettings().id(connections.activeID) }.tabItem { Label("Harnesses", systemImage: "terminal") }
                 VStack { ComputerPicker().padding([.horizontal, .top]); CredentialSettings().id(connections.activeID) }.tabItem { Label("Credentials", systemImage: "key") }

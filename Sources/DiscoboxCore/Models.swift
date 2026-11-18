@@ -20,6 +20,10 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     public let createdAt: String?
     public let harnessConfig: JSONValue?
     public let discoboxApi: Bool?
+    private enum CodingKeys: String, CodingKey {
+        case id, projectId, displayName, config, runtime, meta, poolId, platform, createdAt, harnessConfig, discoboxApi, preparationStatus
+    }
+    var projectProgram: ProjectBoxEvent.Program? = nil
     public var preparationStatus: String? = nil
 
     public struct Configuration: Codable, Sendable, Equatable {
@@ -190,6 +194,12 @@ public struct BridgeRequest: Encodable, Sendable {
             }
         }
     }
+    public struct UsagePage: Encodable, Sendable {
+        let host: String
+        let after: String?
+        let limit: Int
+    }
+    public let usagePage: UsagePage?
     public let operation: Operation
     public let discoboxAPI: Bool?
     public let projectID: String?
@@ -215,7 +225,8 @@ public struct BridgeRequest: Encodable, Sendable {
     public let payload: JSONValue?
 
     public init(_ operation: Operation, projectID: String? = nil, sandboxID: String? = nil,
-                execID: String? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, name: String? = nil, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, toolID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil) {
+                execID: String? = nil, harnessID: String? = nil, repository: String? = nil, prompt: String? = nil, name: String? = nil, requestID: String? = nil, kind: String? = nil, secretID: String? = nil, recordID: String? = nil, toolID: String? = nil, link: String? = nil, action: String? = nil, payload: JSONValue? = nil, remotePath: String? = nil, localPath: String? = nil, poolID: String? = nil, discoboxAPI: Bool? = nil, usagePage: UsagePage? = nil) {
+        self.usagePage = usagePage
         self.discoboxAPI = discoboxAPI
         self.name = name; self.secretID = secretID; self.recordID = recordID; self.toolID = toolID; self.link = link
         self.poolID = poolID
@@ -246,9 +257,10 @@ public struct DiscoboxError: LocalizedError, Sendable {
         init(wire: String?) { self = wire.flatMap(Self.init(rawValue:)) ?? .other }
     }
     public let message: String
+    let httpStatus: Int?
     public let kind: Kind
     public var connectionRetryable: Bool { kind == .transport }
-    public init(_ message: String, kind: Kind = .other) { self.message = message; self.kind = kind }
+    public init(_ message: String, kind: Kind = .other, httpStatus: Int? = nil) { self.message = message; self.kind = kind; self.httpStatus = httpStatus }
     public init(_ message: String, connectionRetryable: Bool) { self.init(message, kind: connectionRetryable ? .transport : .other) }
     public var errorDescription: String? { message }
 }

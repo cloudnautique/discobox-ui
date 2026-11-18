@@ -293,7 +293,7 @@ struct BoxWorkspaceView: View {
                 return
             }
             let identity = TerminalIdentity(connection: request.connection, endpoint: target.connectionState.transportEndpoint, project: target.connectionState.projectID ?? "", box: request.box, exec: request.terminal.id, demo: target.connectionState.isDemo)
-            do { try await target.selection.closeShell(request.terminal.id); terminals.reconnect(identity) }
+            do { try await target.selection.closeShell(request.terminal.id); terminals.release(identity) }
             catch { target.selection.commandError = error.localizedDescription }
         }
     }

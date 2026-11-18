@@ -96,7 +96,7 @@ func TestStalledPTYDetachesThenReplaysOnlyAfterConsumerResumes(t *testing.T) {
 				if state == "output-stalled" {
 					stalled <- struct{}{}
 				}
-			})
+			}, "", true)
 	}()
 	select {
 	case <-stalled:

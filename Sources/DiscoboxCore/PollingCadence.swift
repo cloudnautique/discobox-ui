@@ -11,7 +11,16 @@ public enum PollingPresence: Sendable, Equatable {
     case hidden
 }
 
-public enum PollingLoop: Sendable, CaseIterable { case inventory, approvals, resources, usage }
+public enum GuestReadDiagnostics {
+    @TaskLocal static var scheduled = false
+    @TaskLocal static var context: ScheduledReadContext?
+
+    /// Capture once so all sessions and their helpers use the same experiment.
+    public static let recoveryDisabled = automaticReadsDisabled || UserDefaults.standard.bool(forKey: "DiscoboxDisableTerminalRecovery")
+    public static let automaticReadsDisabled = UserDefaults.standard.bool(forKey: "DiscoboxDisableAutomaticGuestReads")
+}
+
+public enum PollingLoop: Sendable, CaseIterable { case inventory, approvals, resources, usage, details }
 
 /// Every poll launches a companion process, so cadence follows what can be
 /// seen. Approvals never pause: macOS notifications are the only way a hidden
@@ -20,8 +29,9 @@ public enum PollingLoop: Sendable, CaseIterable { case inventory, approvals, res
 public struct PollingCadence: Sendable, Equatable {
     public var presence: PollingPresence
     public var isActiveHost: Bool
-    public init(presence: PollingPresence = .focused, isActiveHost: Bool = true) {
-        self.presence = presence; self.isActiveHost = isActiveHost
+    public var usageVisible: Bool
+    public init(presence: PollingPresence = .focused, isActiveHost: Bool = true, usageVisible: Bool = true) {
+        self.presence = presence; self.isActiveHost = isActiveHost; self.usageVisible = usageVisible
     }
     /// Nil pauses the loop until the cadence changes.
     public func interval(_ loop: PollingLoop) -> Duration? {
@@ -33,8 +43,9 @@ public struct PollingCadence: Sendable, Equatable {
         case (.hidden, .inventory): .seconds(60)
         case (.hidden, .approvals): .seconds(10)
         case (.hidden, .resources), (.hidden, .usage): nil
+        case (_, .details): isActiveHost && presence != .hidden ? .seconds(presence == .focused ? 30 : 60) : nil
         case (_, .resources): .seconds(30)
-        case (_, .usage): .seconds(60)
+        case (_, .usage): usageVisible ? .seconds(60) : nil
         }
     }
     /// Time left before the next poll, or nil to wait for a cadence change; a

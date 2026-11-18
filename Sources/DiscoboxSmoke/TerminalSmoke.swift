@@ -54,10 +54,21 @@ import DiscoboxCore
             try await Task.sleep(for: .milliseconds(150))
             let detachedSize = ghostty_surface_size(surface)
             guard mountedSize.columns == detachedSize.columns && mountedSize.rows == detachedSize.rows else { throw Failure("detached layout resized PTY") }
-            session.view.frame = mountedFrame
-            window.contentView = session.view
-            try await wait { ghostty_surface_size(surface).columns == mountedSize.columns }
-            print("SMOKE: detached transient geometry ignored")
+            let container = TerminalContainerView(frame: mountedFrame)
+            window.contentView = container
+            container.bind(session.view)
+            // Simulate returning with the retained child already parented but
+            // narrower than the final pane. No window resize or new helper.
+            session.view.setFrameSize(NSSize(width: 320, height: 240))
+            container.bind(session.view)
+            guard session.view.frame == container.bounds else { throw Failure("Retained child missed the final pane layout") }
+            window.makeFirstResponder(session.view)
+            do { try await wait { ghostty_surface_size(surface).columns == mountedSize.columns } }
+            catch { throw Failure("Remounted grid: expected \(mountedSize.columns), found \(ghostty_surface_size(surface).columns), frame \(container.bounds)") }
+            session.view.sendLiteral("\u{7}")
+            do { try await wait { text(session.view).contains("<PTY:\(mountedSize.columns)x\(mountedSize.rows)>") } }
+            catch { throw Failure("Remounted demo PTY dimensions: \(text(session.view).suffix(150))") }
+            print("SMOKE: returning terminal uses the pane and PTY dimensions")
             // Control-A must reach the fixture as byte 1, then arrows must
             // remain navigation events. This child is synthetic, never a shell.
             let controlA = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .control, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "\u{1}", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)!

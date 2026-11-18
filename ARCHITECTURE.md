@@ -336,7 +336,12 @@ Inventory polling never reads screen endpoints. A saved-output pane explicitly
 loads a snapshot; cancellation and generation/selection checks reject stale
 results. Live Ghostty attachments and their replay mechanism remain separate.
 
-Reconnections reuse acknowledged action positions, replay and retained dimensions.
+Automatic reconnections reuse acknowledged action positions, replay and retained dimensions.
+On transport loss, an on-screen terminal gets one expedited retry after 1–1.25 seconds.
+The helper reads pane visibility from a marker next to its private status FIFO.
+Hidden sessions start at the normal 30-second backoff. Further failures back off
+to five minutes. During recovery, **Reconnect now** saves readable output, closes
+the current attachment and starts a fresh attachment to the same exec.
 Live-state checks fail closed, ending retries when the server cannot establish
 that the terminal remains live. There is no lifecycle or CLI invocation.
 
@@ -357,8 +362,7 @@ actual WebSocket/resume boundary and assert detach sends no signal/close-input.
    companion entrypoint within the CLI module; do not duplicate their Git logic.
 4. Add native approval decisions and lifecycle controls with explicit intent,
    observed-state progress, and appropriate confirmation for destructive actions.
-5. Add capability/protocol discovery and server events when their backend
-   contracts exist. Until then poll with cancellation and show stale data.
+5. Adopt stored exec/service inventories for running boxes once the server exposes their revisions. Current project events cover lifecycle, tags and primary program state.
 
 Do not convert a prototype estimate into a claim of full CLI parity. The initial
 delivery is an existing-box workspace; creation, apply, approvals, forwarding,
@@ -597,10 +601,11 @@ budget, sequential bounded recording reads, and at most one attempt per minute.
 Parsing and sorting stay outside MainActor. A single batch of changed results is
 published on MainActor; existing readings remain visible during collection.
 Companion request processes inherit utility QoS for this background workload.
-The session owns usage polling, including while another computer is selected.
-Usage views only render observations; collapsing the shelf does not create or
-cancel a collector. Catalog prefetch is shared with creation and has connection
-lifetime.
+The visible usage shelf and its Details sheet report demand. Closing the last
+visible usage surface cancels scheduled collection. Automatic cycles take turns
+across computers. A cycle reads up to four audit pages across pool/provider
+cursors and up to four recordings. Up to 64 candidates carry forward with their
+cursor. Usage Details can request a fresh cycle explicitly.
 
 The dialog smoke test uses only DemoClient, opens both dialogs twice, edits and
 submits the switcher search through its keyboard delegate, and reports readiness
@@ -610,10 +615,21 @@ timings. It never creates a box or accesses Keychain/backend data.
 
 Connections owns a ConnectionSession per normalized server address, each with its
 own stores and independent inventory, approval, resource, and usage polling tasks.
-Their cadence follows what can be seen (`PollingCadence`): each workspace window
+Each event-capable host also owns one read-only `--events` helper. It subscribes
+to the project SSE route over the effective endpoint. Swift publishes replay at
+its checkpoint and retains listing-only metadata separately. A healthy stream
+allows full listings every 60 seconds on the visible active host and every 300
+seconds elsewhere. Interrupted or unsupported feeds fall back to host listings.
+A box event never requests a live exec or service inventory.
+
+The desktop controls how often it requests guest data and retries an attachment.
+Discobox owns packet routing and NAT inside the platform. The polling plan
+records the reported hairpin NAT diagnosis and the client performance budgets.
+See [Polling and event updates](docs/POLLING-AND-EVENTS-PLAN.md).
+
+Polling cadence follows what can be seen (`PollingCadence`): each workspace window
 reports whether it is focused, visible behind another app or hidden, and the
-computer being viewed polls fastest. Approvals never pause, so notifications
-still arrive while hidden; resources and usage pause until a window shows again.
+computer being viewed polls fastest. By default approvals continue while hidden to support notifications. Manual refresh mode in Settings pauses those checks and keeps project events connected.
 Activity aging uses an `ActivityClock` that advances only when a report's
 freshness would change, so unchanged refreshes publish nothing, and the sidebar
 derives each box's row values once per input change before `BoxBrowser`'s

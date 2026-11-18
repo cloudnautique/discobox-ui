@@ -6,12 +6,12 @@ import Testing
     func intervals(_ presence: PollingPresence, active: Bool = true) -> [Duration?] {
         PollingLoop.allCases.map { PollingCadence(presence: presence, isActiveHost: active).interval($0) }
     }
-    #expect(intervals(.focused) == [.seconds(3), .seconds(2), .seconds(30), .seconds(60)])
-    #expect(intervals(.focused, active: false) == [.seconds(10), .seconds(5), .seconds(30), .seconds(60)])
-    #expect(intervals(.visible) == [.seconds(15), .seconds(5), .seconds(30), .seconds(60)])
-    #expect(intervals(.visible, active: false) == intervals(.visible))
+    #expect(intervals(.focused) == [.seconds(3), .seconds(2), .seconds(30), .seconds(60), .seconds(30)])
+    #expect(intervals(.focused, active: false) == [.seconds(10), .seconds(5), .seconds(30), .seconds(60), nil])
+    #expect(intervals(.visible) == [.seconds(15), .seconds(5), .seconds(30), .seconds(60), .seconds(60)])
+    #expect(intervals(.visible, active: false) == [.seconds(15), .seconds(5), .seconds(30), .seconds(60), nil])
     // Approvals keep feeding notifications while hidden; panels pause.
-    #expect(intervals(.hidden) == [.seconds(60), .seconds(10), nil, nil])
+    #expect(intervals(.hidden) == [.seconds(60), .seconds(10), nil, nil, nil])
     #expect(intervals(.hidden, active: false) == intervals(.hidden))
 }
 
@@ -35,6 +35,8 @@ import Testing
     let host = try await hub.connect(.thisComputer, demo: true) { client }
     defer { hub.disconnectAll() }
     #expect(await settle { await client.count(.approvals) == 1 })
+    // Advance only after the loop has recorded completion against the fake clock.
+    #expect(await settle { time.requested.contains(10) && time.requested.contains(60) })
     let inventory = await client.count(.sandboxes)
     #expect(await client.count(.poolResources) == 0)
 
@@ -43,6 +45,7 @@ import Testing
     time.advance(8)
     hub.presence = .visible
     #expect(await settle { await client.count(.approvals) == 2 })
+    #expect(await settle { time.requested.contains(5) })
     #expect(await settle { await client.count(.poolResources) == 1 })
     #expect(await client.count(.sandboxes) == inventory)
 
@@ -55,7 +58,7 @@ import Testing
     hub.presence = .focused
     #expect(await settle { await client.count(.sandboxes) == inventory + 1 })
     #expect(await settle { await client.count(.approvals) == 3 })
-    #expect(host.cadence == PollingCadence(presence: .focused, isActiveHost: true))
+    #expect(host.cadence == PollingCadence(presence: .focused, isActiveHost: true, usageVisible: false))
 }
 
 @MainActor @Test func activatingAComputerPromotesOnlyThatComputersCadence() async throws {
@@ -139,4 +142,103 @@ private actor CadenceFixture: DiscoboxClient {
     hub.withdrawPresence(from: second)
     hub.withdrawPresence(from: first)
     #expect(hub.presence == .hidden)
+}
+
+@MainActor @Test func detailReadsStayWithinVisiblePaneBudgets() async {
+    var now = Date()
+    let session = ConnectionSession(now: { now }), client = CadenceFixture()
+    await session.connect(client: client, label: "fixture")
+    await session.selection.selectBox("demo-ui")
+    for _ in 0..<200 {
+        now += 3
+        await session.selection.reconcileDetails(cadence: .init())
+    }
+    #expect(await client.count(.execs) == 21) // initial selection + 20 in ten minutes
+    #expect(await client.count(.services) == 0)
+    let view = UUID()
+    session.selection.showServices(for: "demo-ui", token: view)
+    await session.selection.refreshVisibleServices()
+    for _ in 0..<200 {
+        now += 3
+        await session.selection.reconcileDetails(cadence: .init())
+    }
+    #expect(await client.count(.services) == 11) // panel open followed by 10 reconciliations
+    session.selection.hideServices(view)
+    now += 600
+    await session.selection.reconcileDetails(cadence: .init(presence: .hidden))
+    await session.selection.reconcileDetails(cadence: .init(isActiveHost: false))
+    #expect(await client.count(.execs) == 41)
+    #expect(await client.count(.services) == 11)
+    session.disconnect()
+}
+
+@MainActor @Test func guestReadFailuresSlowDownEvenWhenTheHostIsConnected() async {
+    var now = Date()
+    let session = ConnectionSession(now: { now }), client = CadenceFixture()
+    await session.connect(client: client, label: "fixture")
+    await session.selection.selectBox("demo-ui")
+    await client.setOnline(false)
+    for _ in 0..<6 {
+        now += 30
+        await session.selection.reconcileDetails(cadence: .init())
+    }
+    // Attempts at 30, 60, 120, then due again at 240.
+    #expect(await client.count(.execs) == 4)
+    #expect(session.selection.detailError != nil)
+    #expect(session.selection.hasLiveTerminal)
+    #expect(session.connectionState.connectionError == nil)
+    session.disconnect()
+}
+
+@MainActor @Test func poolBudgetIsSharedAcrossProfilesAndAdmitsOneProbeAfterFailures() {
+    let hub = Connections(polling: false), now = Date()
+    hub.syncProfiles([.init(name: "Other route", endpoint: "https://studio.example.invalid")])
+    let budget = hub.sessions[0].selection.guestBudget, other = hub.sessions[1].selection.guestBudget
+    #expect(budget.begin(pool: "p", project: "project", at: now))
+    #expect(budget.begin(pool: "p", project: "project", at: now))
+    #expect(!other.begin(pool: "p", project: "project", at: now))
+    let timeout = Result<Void, Error>.failure(URLError(.timedOut))
+    budget.finish(pool: "p", project: "project", at: now, result: timeout)
+    budget.finish(pool: "p", project: "project", at: now, result: timeout)
+    #expect(!budget.begin(pool: "p", project: "project", at: now))
+    #expect(!other.begin(pool: "p", project: "project", at: now))
+    let later = now.addingTimeInterval(30)
+    #expect(budget.begin(pool: "p", project: "project", at: later))
+    #expect(!budget.begin(pool: "p", project: "project", at: later))
+    budget.finish(pool: "p", project: "project", at: later, result: .success(()))
+    #expect(other.begin(pool: "p", project: "project", at: later))
+    #expect(budget.begin(pool: "p", project: "project", at: later))
+    #expect(!budget.begin(pool: "p", project: "project", at: later))
+    budget.finish(pool: "p", project: "project", at: later, result: .success(()))
+}
+
+@MainActor @Test func repeatedPoolTimeoutsReachAndHoldTheFiveMinuteCooldown() {
+    let budget = GuestReadBudget()
+    var time = Date()
+    let timeout = Result<Void, Error>.failure(URLError(.timedOut))
+    #expect(budget.begin(pool: "p", project: "project", at: time))
+    budget.finish(pool: "p", project: "project", at: time, result: timeout)
+    for delay: TimeInterval in [30, 60, 120, 240, 300, 300] {
+        #expect(budget.begin(pool: "p", project: "project", at: time))
+        budget.finish(pool: "p", project: "project", at: time, result: timeout)
+        time += delay
+        #expect(!budget.begin(pool: "p", project: "project", at: time.addingTimeInterval(-1)))
+    }
+    #expect(budget.begin(pool: "p", project: "project", at: time))
+}
+
+@MainActor @Test func usageRequiresAnOnscreenExpandedSurfaceOrDetails() {
+    let hub = Connections(polling: false), one = UUID(), two = UUID()
+    hub.reportPresence(.focused, from: one)
+    hub.reportPresence(.hidden, from: two)
+    hub.reportUsageSurface(visible: true, from: two)
+    #expect(hub.active.cadence.interval(.usage) == nil)
+    hub.reportUsageSurface(visible: true, from: one)
+    #expect(hub.active.cadence.interval(.usage) == .seconds(60))
+    hub.reportUsageSurface(visible: false, from: one)
+    #expect(hub.active.cadence.interval(.usage) == nil)
+    hub.reportPresence(.visible, from: two)
+    #expect(hub.active.cadence.interval(.usage) == .seconds(60))
+    hub.withdrawPresence(from: two)
+    #expect(hub.active.cadence.interval(.usage) == nil)
 }

@@ -51,6 +51,7 @@ type Event struct {
 	Connection      string `json:"connection,omitempty"`
 	Project         string `json:"project,omitempty"`
 	Box             string `json:"box,omitempty"`
+	Pool            string `json:"pool,omitempty"`
 	Exec            string `json:"exec,omitempty"`
 	Build           string `json:"build"`
 	Upstream        string `json:"upstream"`
@@ -104,7 +105,7 @@ func (d *diagnosticLog) emit(e Event) {
 func (d *diagnosticLog) write(e Event) {
 	e.Session, e.PID, e.Component = d.base.Session, d.base.PID, d.base.Component
 	e.Endpoint, e.Connection = d.base.Endpoint, d.base.Connection
-	e.Project, e.Box, e.Exec = d.base.Project, d.base.Box, d.base.Exec
+	e.Project, e.Box, e.Exec, e.Pool = d.base.Project, d.base.Box, d.base.Exec, d.base.Pool
 	e.Build, e.Upstream = d.base.Build, d.base.Upstream
 	e.Dropped = d.dropped.Swap(0)
 	data, err := json.Marshal(e)
@@ -161,7 +162,7 @@ func Start(component, endpoint, connection string, req wire.Request) func() {
 	}
 	dir := diagnosticDirectory(home, runtime.GOOS)
 	return StartWithSink(Event{Session: uuid.NewString(), PID: os.Getpid(), Component: component,
-		Endpoint: EndpointHash(endpoint), Connection: safeDiagnosticID(connection), Project: safeDiagnosticID(req.ProjectID), Box: safeDiagnosticID(req.SandboxID), Exec: safeDiagnosticID(req.ExecID), Build: diagnosticBuild, Upstream: diagnosticUpstream},
+		Endpoint: EndpointHash(endpoint), Connection: safeDiagnosticID(connection), Project: safeDiagnosticID(req.ProjectID), Pool: safeDiagnosticID(req.PoolID), Box: safeDiagnosticID(req.SandboxID), Exec: safeDiagnosticID(req.ExecID), Build: diagnosticBuild, Upstream: diagnosticUpstream},
 		func(data []byte) error { return appendDiagnostic(dir, data, 2<<20, 4) })
 }
 

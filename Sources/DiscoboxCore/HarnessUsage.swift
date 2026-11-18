@@ -61,33 +61,33 @@ public final class HarnessUsage {
     public private(set) var snapshots: [String: HarnessQuota] = [:]
     public private(set) var notices: [String] = []
     public private(set) var isLoading = false
-    @ObservationIgnored private var checked: Set<String> = []
+    @ObservationIgnored private var progress = UsageProgress()
     @ObservationIgnored private var lastAttempt: Date?
     @ObservationIgnored private let now: () -> Date
     public init(now: @escaping () -> Date = Date.init) { self.now = now }
 
-    public func refresh(client: any DiscoboxClient, project: String, boxes: [Sandbox], configuredHarnesses: [Harness]? = nil) async {
+    public func refresh(client: any DiscoboxClient, project: String, boxes: [Sandbox], configuredHarnesses: [Harness]? = nil, force: Bool = false) async {
         // The cadence survives collapsing/reopening the view. Only one poll can
         // run, even when several UI tasks ask simultaneously.
-        guard !isLoading, lastAttempt.map({ now().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        guard !isLoading, force || lastAttempt.map({ now().timeIntervalSince($0) >= 60 }) ?? true else { return }
         lastAttempt = now()
         isLoading = true
         defer { isLoading = false }
-        let previous = snapshots, visited = checked
+        let previous = snapshots, start = progress, date = now()
+        let scheduled = GuestReadDiagnostics.scheduled, context = GuestReadDiagnostics.context
         let work = Task.detached(priority: .utility) {
-            try await withThrowingTaskGroup(of: UsageBatch.self) { group in
-                group.addTask {
+            try await GuestReadDiagnostics.$context.withValue(context) {
+                try await GuestReadDiagnostics.$scheduled.withValue(scheduled) {
                     try await UsageCollector.collect(client: client, project: project, boxes: boxes,
-                        configured: configuredHarnesses, snapshots: previous, checked: visited)
+                    configured: configuredHarnesses, snapshots: previous, progress: start, now: date)
                 }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(20))
-                    throw DiscoboxError("Usage refresh timed out; keeping previous readings.")
-                }
-                defer { group.cancelAll() }
-                return try await group.next()!
             }
         }
+        let timeout = Task {
+            try await Task.sleep(for: .seconds(20))
+            work.cancel()
+        }
+        defer { timeout.cancel() }
         do {
             let batch = try await withTaskCancellationHandler {
                 try await work.value
@@ -98,7 +98,7 @@ public final class HarnessUsage {
             if harnesses != batch.harnesses { harnesses = batch.harnesses }
             if snapshots != batch.snapshots { snapshots = batch.snapshots }
             if notices != batch.notices { notices = batch.notices }
-            checked = batch.checked
+            progress = batch.progress
         } catch is CancellationError { return }
         catch {
             guard !Task.isCancelled else { return }
@@ -112,61 +112,165 @@ private struct UsageBatch: Sendable {
     let harnesses: [Harness]
     let snapshots: [String: HarnessQuota]
     let notices: [String]
-    let checked: Set<String>
+    let progress: UsageProgress
 }
 
-/// All audit decoding, sorting and quota parsing runs outside the UI actor.
+private struct UsageScope: Hashable, Sendable {
+    let pool, host: String
+}
+private struct UsageCursor: Sendable {
+    var after: String?
+    var seededAt: Date?
+    var checkEpoch = false
+    var retryAt = Date.distantPast
+    var failures = 0
+    var notice: String?
+}
+private struct UsageProgress: Sendable {
+    var cursors: [UsageScope: UsageCursor] = [:]
+    var nextScope = 0
+    var pending: [UsageRecord] = []
+    var lastRecording: [String: UsageRecord] = [:]
+}
+
+private struct UsageRecords: Decodable, Sendable {
+    let records: [UsageRecord]
+    let through: String
+    let full: Bool
+}
+private struct UsageRecord: Decodable, Sendable {
+    let id, poolId, sandboxId, createdAt, provider: String
+    var retryAt = Date.distantPast
+    private enum CodingKeys: String, CodingKey { case id, poolId, sandboxId, createdAt, provider }
+
+    func later(than other: Self) -> Bool {
+        let time = ServerDate.parse(createdAt) ?? .distantPast, previous = ServerDate.parse(other.createdAt) ?? .distantPast
+        if time != previous { return time > previous }
+        if poolId != other.poolId { return poolId > other.poolId }
+        return id.localizedStandardCompare(other.id) == .orderedDescending
+    }
+}
+
+/// The cursor advances with the pending descriptors in the same batch. A
+/// cancelled refresh can safely throw both away and replay the old page.
 private enum UsageCollector {
-    static func collect(client: any DiscoboxClient, project: String, boxes: [Sandbox], configured: [Harness]?, snapshots initial: [String: HarnessQuota], checked initialChecked: Set<String>) async throws -> UsageBatch {
-        var snapshots = initial, checked = initialChecked
-        var notices: [String] = []
+    private static func read<T: Decodable & Sendable>(_ request: BridgeRequest, client: any DiscoboxClient, as type: T.Type) async throws -> T {
+        if let budget = GuestReadDiagnostics.context?.budget { return try await budget.usageRead(request, client: client, as: type) }
+        return try await client.decode(request, as: type)
+    }
+
+    static func collect(client: any DiscoboxClient, project: String, boxes: [Sandbox], configured: [Harness]?,
+                        snapshots initial: [String: HarnessQuota], progress initialProgress: UsageProgress,
+                        now: Date) async throws -> UsageBatch {
+        var snapshots = initial, progress = initialProgress
+        var notices: Set<String> = []
         let harnesses: [Harness]
         if let configured { harnesses = configured }
         else { harnesses = try await client.decode(.init(.harnesses, projectID: project), as: HarnessList.self).harnessConfigs ?? [] }
-        let result = try await client.decode(.init(.usage, projectID: project), as: UsageRecords.self)
-        try Task.checkCancellation()
-        notices = result.missing
         let byBox = Dictionary(boxes.compactMap { box in box.config.harnessConfigId.map { (box.id, $0) } }, uniquingKeysWith: { first, _ in first })
-        var fetched = 0
-        for row in result.records.sorted(by: { $0.createdAt > $1.createdAt }) {
-            guard let harness = byBox[row.sandboxId], let at = QuotaParser.date(row.createdAt),
-                  snapshots[harness].map({ $0.observedAt < at }) ?? true else { continue }
-            let key = row.poolId + ":" + row.id
-            guard !checked.contains(key), fetched < 8 else { continue }
-            fetched += 1
+        let pools = Set(boxes.filter { byBox[$0.id] != nil }.compactMap(\.poolId)).sorted()
+        let scopes = pools.flatMap { pool in ["chatgpt.com", "api.anthropic.com"].map { UsageScope(pool: pool, host: $0) } }
+        let active = Set(scopes)
+        progress.cursors = progress.cursors.filter { active.contains($0.key) }
+        if boxes.contains(where: { byBox[$0.id] != nil && $0.poolId == nil }) { notices.insert("Some boxes have no reported pool for usage.") }
+
+        var pages = 0
+        for _ in scopes.indices {
+            if pages == 4 || progress.pending.count >= 64 || Task.isCancelled { break }
+            let index = progress.nextScope % scopes.count, scope = scopes[index]
+            progress.nextScope = (index + 1) % scopes.count
+            var cursor = progress.cursors[scope] ?? UsageCursor()
+            if cursor.retryAt > now { continue }
+            // The API has no epoch for a replaced pool database. Periodically
+            // reseed a bounded recent window to discover reset row numbers.
+            let after = cursor.checkEpoch ? nil : cursor.after
+            let limit = after == nil ? 64 - progress.pending.count : 100
+            let page = BridgeRequest.UsagePage(host: scope.host, after: after, limit: limit)
+            pages += 1
             do {
-                let windows: [QuotaWindow]
-                if row.provider == "claude-headers" {
-                    let result = try await client.decode(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId, recordID: row.id, poolID: row.poolId), as: UsageHeaders.self)
-                    windows = QuotaParser.headers(result.headers)
-                } else {
-                    let body = try await client.decode(.init(.auditBody, projectID: project, sandboxID: row.sandboxId, recordID: row.id, action: "response", poolID: row.poolId), as: UsageBody.self)
-                    guard body.truncated != true, body.recordingTruncatedFrom?.isEmpty != false else {
-                        notices.append("A quota recording was truncated."); continue
-                    }
-                    windows = QuotaParser.parse(body.text, provider: row.provider)
+                let result = try await read(.init(.usage, projectID: project, poolID: scope.pool, usagePage: page), client: client, as: UsageRecords.self)
+                guard result.records.count <= limit, result.records.allSatisfy({ $0.poolId == scope.pool }) else {
+                    throw DiscoboxError("Invalid usage page.")
                 }
-                try Task.checkCancellation()
-                if !windows.isEmpty { snapshots[harness] = .init(observedAt: at, windows: windows) }
-                else { notices.append("An observed quota response had no recognized windows.") }
-                checked.insert(key)
-            } catch is CancellationError { throw CancellationError() }
-            catch { notices.append("A quota recording could not be read.") }
+                if cursor.checkEpoch, let previous = cursor.after, result.through.localizedStandardCompare(previous) != .orderedAscending {
+                    // The old cursor is still valid. Read forward from it even
+                    // if more than a full page arrived during this probe.
+                    cursor.checkEpoch = false; cursor.seededAt = now
+                    progress.cursors[scope] = cursor
+                    continue
+                }
+                if cursor.checkEpoch { notices.insert("Audit history changed on " + scope.pool + ". Refreshed recent usage.") }
+                var through = result.through, lastRetained = after, limited = false
+                for row in result.records where byBox[row.sandboxId] != nil {
+                    if !progress.pending.contains(where: { $0.poolId == row.poolId && $0.id == row.id }) {
+                        if progress.pending.count == 64 {
+                            // Forward pages arrive in write order. Read the
+                            // unretained suffix again on this scope's next turn.
+                            through = lastRetained ?? ""; limited = true; break
+                        }
+                        progress.pending.append(row)
+                    }
+                    lastRetained = row.id
+                }
+                cursor.after = through.isEmpty ? nil : through
+                if after == nil { cursor.seededAt = now }
+                cursor.checkEpoch = after != nil && through == after && cursor.seededAt.map { now.timeIntervalSince($0) >= 86400 } == true
+                cursor.failures = 0
+                if limited || (result.full && after != nil) { cursor.notice = "Catching up on usage for " + scope.pool + "." }
+                else if result.full && result.records.isEmpty { cursor.notice = "No quota recording in the latest " + String(limit) + " requests to " + scope.host + "." }
+                else { cursor.notice = nil }
+            } catch is GuestReadBudget.Deferred {
+                cursor.notice = "Waiting for pool " + scope.pool + " to resume usage."
+            } catch {
+                cursor.failures = min(5, cursor.failures + 1)
+                cursor.retryAt = now.addingTimeInterval(min(900, 60 * pow(2, Double(cursor.failures - 1))))
+                cursor.notice = "Usage unavailable for " + scope.host + " on " + scope.pool + "."
+            }
+            progress.cursors[scope] = cursor
         }
-        if checked.count > 1000 { checked.removeAll() }
-        return UsageBatch(harnesses: harnesses.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, snapshots: snapshots, notices: Array(Set(notices)).sorted(), checked: checked)
+        notices.formUnion(progress.cursors.values.compactMap(\.notice))
+        if progress.cursors.count < scopes.count { notices.insert("Catching up on usage.") }
+        // Decode the newest candidate first. A failed new recording leaves
+        // older candidates available to supply a reading for that harness.
+        progress.pending.sort { $0.later(than: $1) }
+        var pending: [UsageRecord] = [], reads = 0
+        for var row in progress.pending {
+            guard let harness = byBox[row.sandboxId], let at = ServerDate.parse(row.createdAt),
+                  progress.lastRecording[harness].map({ row.later(than: $0) }) ?? true else { continue }
+            if reads == 4 || row.retryAt > now || Task.isCancelled { pending.append(row); continue }
+            reads += 1
+            do {
+                let windows = try await recording(row, client: client, project: project)
+                if windows.isEmpty { notices.insert("An observed quota recording had no usable windows.") }
+                else { snapshots[harness] = .init(observedAt: at, windows: windows); progress.lastRecording[harness] = row }
+            } catch {
+                if let status = (error as? DiscoboxError)?.httpStatus, [404,410].contains(status) {
+                    notices.insert("A quota recording is no longer available.")
+                } else {
+                    row.retryAt = now.addingTimeInterval(60)
+                    pending.append(row)
+                    notices.insert("A quota recording could not be read.")
+                }
+            }
+        }
+        progress.pending = pending
+        if !pending.isEmpty { notices.insert("Catching up on usage recordings.") }
+        if Task.isCancelled { notices.insert("Usage refresh timed out. Remaining work will resume later.") }
+        return UsageBatch(harnesses: harnesses.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+                          snapshots: snapshots, notices: notices.sorted(), progress: progress)
     }
-}
-private struct UsageRecords: Decodable, Sendable {
-    let records: [UsageRecord]
-    let missing: [String]
-}
-private struct UsageRecord: Decodable, Sendable {
-    let id: String
-    let poolId: String
-    let sandboxId: String
-    let createdAt: String
-    let provider: String
+
+    private static func recording(_ row: UsageRecord, client: any DiscoboxClient, project: String) async throws -> [QuotaWindow] {
+        if row.provider == "claude-headers" {
+            let response = try await read(.init(.usageHeaders, projectID: project, sandboxID: row.sandboxId,
+                                                         recordID: row.id, poolID: row.poolId), client: client, as: UsageHeaders.self)
+            return QuotaParser.headers(response.headers)
+        }
+        let body = try await read(.init(.auditBody, projectID: project, sandboxID: row.sandboxId,
+                                                 recordID: row.id, action: "response", poolID: row.poolId), client: client, as: UsageBody.self)
+        guard body.truncated != true, body.recordingTruncatedFrom?.isEmpty != false else { return [] }
+        return QuotaParser.parse(body.text, provider: row.provider)
+    }
 }
 private struct UsageBody: Decodable, Sendable {
     let text: String
@@ -175,3 +279,31 @@ private struct UsageBody: Decodable, Sendable {
 }
 
 private struct UsageHeaders: Decodable, Sendable { let headers: [String: [String]] }
+
+/// A visible shelf can cover several computers. Stagger their automatic
+/// collections without forcing a manual refresh to wait for an unrelated host.
+@MainActor final class ScheduledUsageQueue {
+    private var busy = false
+    private var waiting: [(UUID, CheckedContinuation<Bool, Never>)] = []
+
+    func enter() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        if !busy { busy = true; return true }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume(returning: false) }
+                else { waiting.append((id, continuation)) }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, let index = self.waiting.firstIndex(where: { $0.0 == id }) else { return }
+                self.waiting.remove(at: index).1.resume(returning: false)
+            }
+        }
+    }
+    func leave() {
+        if waiting.isEmpty { busy = false }
+        else { waiting.removeFirst().1.resume(returning: true) }
+    }
+}

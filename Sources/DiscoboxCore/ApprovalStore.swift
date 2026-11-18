@@ -14,12 +14,12 @@ public final class ApprovalStore {
         let connection = connectionState.connectionID, request = approvalRequest.begin()
         do {
             let result = try await client.decode(.init(.approvals, projectID: projectID), as: ApprovalInbox.self)
-            guard connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
+            guard !Task.isCancelled, connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
             let pending = result.approvalRequests.filter { $0.request["status"].string == "pending" }
             if approvals != pending { approvals = pending }
             approvalError = nil
         } catch {
-            guard connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
+            guard !Task.isCancelled, connectionState.connectionID == connection, approvalRequest.owns(request) else { return }
             approvalError = error.localizedDescription
         }
     }

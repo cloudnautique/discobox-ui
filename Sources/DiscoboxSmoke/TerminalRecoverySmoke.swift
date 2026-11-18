@@ -38,12 +38,21 @@ import DiscoboxCore
 
     private static func disconnectedSelection() async throws {
         let view = GhosttyTerminalView(frame: .init(x: 0, y: 0, width: 850, height: 300))
+        let status = try TerminalAttachStatus()
+        defer { status.close() }
+        view.attachStatus = status
+        let marker = status.path + ".visible"
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = view
         let script = "/usr/bin/printf '\\033[?1000h\\033[?1006hCOPY_PROBE'; /bin/sleep 0.6"
         if let error = view.start(command: "/bin/sh -c " + TerminalSession.quote(script)) { throw DiscoboxError(error) }
         defer { view.close(); window.orderOut(nil) }
         window.makeKeyAndOrderFront(nil); window.makeFirstResponder(view)
+        try await wait { FileManager.default.fileExists(atPath: marker) }
+        view.isHidden = true
+        try await wait { !FileManager.default.fileExists(atPath: marker) }
+        view.isHidden = false
+        try await wait { FileManager.default.fileExists(atPath: marker) }
         try await wait { view.surface.map(ghostty_surface_process_exited) == true && view.readOnly }
         guard let surface = view.surface, !ghostty_surface_mouse_captured(surface) else { throw DiscoboxError("Exited TUI retained mouse capture") }
         let before = view.outputText()
@@ -101,9 +110,15 @@ import DiscoboxCore
         replacement.ended = true
         store.recoverInterrupted(inventory, connection: workspace.connectionState.connectionID)
         guard store.session(identity) === replacement else { throw DiscoboxError("Recovery ignored its cooldown") }
-        store.reconnect(identity)
+        replacement.ended = false
+        replacement.connectionState = "reconnecting"
+        guard replacement.canReconnect else { throw DiscoboxError("Reconnect unavailable during backoff") }
+        store.reconnect(identity, session: replacement)
         let retry = store.session(identity)
-        guard retry.previousOutput?.contains("Unicode: café 日本語") == true else { throw DiscoboxError("An empty reconnect attempt overwrote saved output") }
+        store.reconnect(identity, session: replacement)
+        guard store.existing(identity) === retry, retry !== replacement, replacement.view.surface == nil,
+              !retry.canReconnect, retry.previousOutput?.contains("Unicode: café 日本語") == true
+        else { throw DiscoboxError("Manual reconnect replaced the wrong attachment or lost saved output") }
         store.closeBox(identity.box, connection: identity.connection)
         guard store.session(identity).previousOutput == nil else { throw DiscoboxError("Closing the box leaked retained output") }
     }

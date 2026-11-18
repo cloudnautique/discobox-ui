@@ -26,6 +26,7 @@ import (
 
 	"time"
 
+	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/diagnostics"
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/wire"
 	serverendpoint "github.com/discobox-ai/discobox/pkg/endpoint"
 )
@@ -76,7 +77,9 @@ func RunManaged(endpoint string, allowShell, allowManage bool, input io.Reader, 
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, op.deadlineFor(req))
 	defer cancel()
+	finish := readDiagnostics(endpoint, req)
 	result, err := b.dispatch(ctx, op, req)
+	finish(result.Status, len(result.Body), err)
 	if err != nil {
 		return err
 	}
@@ -85,6 +88,25 @@ func RunManaged(endpoint string, allowShell, allowManage bool, input io.Reader, 
 	result.Version = wire.ProtocolVersion
 	*out = result
 	return nil
+}
+
+// One bounded record pair per observed read gives counts by operation and
+// trigger. Only known operation names reach the log, never the payload.
+func readDiagnostics(endpoint string, req wire.Request) func(int, int, error) {
+	trigger := os.Getenv("DISCOBOX_UI_READ_TRIGGER")
+	if trigger == "scheduled" || trigger == "requested" {
+		switch req.Operation {
+		case "execs", "services", "usage", "usageHeaders", "auditBody", "approvals", "poolResources", "sandboxes":
+			stop := diagnostics.Start("metadata", endpoint, os.Getenv("DISCOBOX_UI_GENERATION"), req)
+			started := time.Now()
+			diagnostics.Emit(diagnostics.Event{Event: "read_" + req.Operation, Reason: trigger})
+			return func(status, size int, err error) {
+				diagnostics.Emit(diagnostics.Event{Event: "read_finished", Received: int64(size), HTTPStatus: status, Reason: diagnostics.Reason(err), DurationMS: time.Since(started).Milliseconds()})
+				stop()
+			}
+		}
+	}
+	return func(int, int, error) {}
 }
 
 // ResolveEndpoint expands the default local shorthand (empty or unix://)
