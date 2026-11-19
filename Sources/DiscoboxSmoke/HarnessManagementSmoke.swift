@@ -43,7 +43,7 @@ import DiscoboxCore
             defaults.orderFront(nil)
             try await wait { descendants(defaults.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.titleOfSelectedItem == "First agent · Default" } }
             defaults.orderOut(nil); workspace.disconnect()
-            print("HARNESS_MANAGEMENT_SMOKE_OK: deferred native setup prompt, explicit review and save, durable receipt, and launch harness selection")
+            print("HARNESS_MANAGEMENT_SMOKE_OK: Later survives remount and a newer candidate, header review, explicit save, durable receipt, and launch harness selection")
             fflush(stdout); exit(0)
         } catch { print("HARNESS_MANAGEMENT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
     }
@@ -63,9 +63,15 @@ import DiscoboxCore
         blocker.messageText = "Fixture sheet"
         blocker.beginSheetModal(for: window) { _ in }
         var reviewed = false
-        window.contentView = NSHostingView(rootView: HarnessChangesBanner(box: box, harness: harness, window: window) {
-            reviewed = true
-        }.environment(workspace).defaultAppStorage(defaults))
+        func mount(_ selected: Sandbox) {
+            let hosting = NSHostingView(rootView: HarnessChangesControl(box: selected, harness: harness, window: window) {
+                reviewed = true
+            }.frame(width: 640, height: 260).environment(workspace).defaultAppStorage(defaults))
+            hosting.sizingOptions = []
+            window.contentView = hosting
+            window.setContentSize(NSSize(width: 640, height: 260))
+        }
+        mount(box)
         for _ in 0..<120 {
             if await client.previews > 0 { break }
             try await Task.sleep(for: .milliseconds(50))
@@ -77,8 +83,34 @@ import DiscoboxCore
             window.attachedSheet?.contentView.flatMap { descendants($0).compactMap { $0 as? NSButton }.first { $0.title == "Review changes…" } }
         }
         try await wait { reviewButton() != nil }
-        reviewButton()?.performClick(nil)
-        try await wait { reviewed && window.attachedSheet == nil }
+        guard let sheet = window.attachedSheet?.contentView,
+              let later = descendants(sheet).compactMap({ $0 as? NSButton }).first(where: { $0.title == "Later" }) else {
+            throw DiscoboxError("Missing Later action")
+        }
+        later.performClick(nil)
+        try await wait { window.attachedSheet == nil }
+        // Leaving the box destroys the control. While away, another edit
+        // replaces the candidate, and returning constructs a fresh control.
+        window.contentView = NSView(frame: window.contentLayoutRect)
+        await client.setCandidate("updated-candidate")
+        await workspace.refresh()
+        guard let updated = workspace.selection.selectedBox else { throw DiscoboxError("Missing updated box") }
+        mount(updated)
+        // The borderless SwiftUI button is drawn inside the hosting view;
+        // unlike the NSAlert buttons it has no descendant NSButton.
+        try await wait { !window.contentLayoutRect.isEmpty }
+        for _ in 0..<120 {
+            if await client.previews >= 2 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        await Task.yield()
+        guard updated.runtime.agentStatus?["harnessConfigCandidate"].string == "updated-candidate",
+              !reviewed, window.attachedSheet == nil else { throw DiscoboxError("Later reopened the sheet on return") }
+        let content = window.contentLayoutRect
+        try click(at: NSPoint(x: content.midX, y: content.midY), window: window)
+        try await wait { reviewed }
+        await client.setCandidate("demo-candidate")
+        await workspace.refresh()
         guard await client.saves == 0 else { throw DiscoboxError("Opening the review saved the candidate") }
     }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
@@ -103,7 +135,9 @@ import DiscoboxCore
         }.first
     }
     private static func click(_ button: NSButton, window: NSWindow) throws {
-        let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+        try click(at: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil), window: window)
+    }
+    private static func click(at point: NSPoint, window: NSWindow) throws {
         guard window.contentLayoutRect.contains(point) else { throw DiscoboxError("Review control is outside the visible form: \(point)") }
         for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -121,11 +155,17 @@ private actor HarnessManagementFixture: DiscoboxClient {
     let demo = DemoClient()
     var saves = 0
     var previews = 0
+    private var candidate = "demo-candidate"
+    func setCandidate(_ id: String) { candidate = id }
     func perform(_ request: BridgeRequest) async throws -> Data {
         if request.operation == .sandboxes {
-            return Data(#"{"sandboxes":[{"id":"demo-ui","projectId":"demo","displayName":"Login fixture","config":{"harnessConfigId":"demo-harness"},"harnessConfig":{"id":"demo-harness","name":"Subscription agent"},"runtime":{"state":"ready","runtimeState":"running","agentStatus":{"harnessConfigCandidate":"demo-candidate"}}}]}"#.utf8)
+            return Data(#"{"sandboxes":[{"id":"demo-ui","projectId":"demo","displayName":"Login fixture","config":{"harnessConfigId":"demo-harness"},"harnessConfig":{"id":"demo-harness","name":"Subscription agent"},"runtime":{"state":"ready","runtimeState":"running","agentStatus":{"harnessConfigCandidate":"\#(candidate)"}}}]}"#.utf8)
         }
-        if request.operation == .harnessChanges { previews += 1 }
+        if request.operation == .harnessChanges {
+            previews += 1
+            let data = try await demo.perform(request)
+            return Data(String(decoding: data, as: UTF8.self).replacingOccurrences(of: "demo-candidate", with: candidate).utf8)
+        }
         if request.operation == .defaultProject {
             return Data(#"{"id":"demo","name":"Fixture","defaultHarnessConfigId":"first"}"#.utf8)
         }

@@ -27,49 +27,50 @@ struct HarnessLaunchSettings: View {
 
 /// Check the immutable candidate once per candidate/state/shared revision.
 /// No additional polling loop or token values are involved.
-struct HarnessChangesBanner: View {
+struct HarnessChangesControl: View {
     let box: Sandbox
     let harness: Harness
     let window: NSWindow?
     let review: () -> Void
     @Environment(ConnectionSession.self) private var workspace
-    @AppStorage("harnessSetupSheets.v1") private var presented = "[]"
+    @AppStorage(HarnessLoginPrompts.defaultsKey) private var history = HarnessLoginPrompts()
     @State private var model: HarnessManagement?
     @State private var sheet: NSAlert?
     @State private var retry = 0
     private var reportedCandidate: String { box.runtime.agentStatus?["harnessConfigCandidate"].string ?? "" }
-    private var key: String {
-        [workspace.connectionState.connectionID.uuidString, box.id, harness.id, reportedCandidate,
-         (box.runtime.agentStatus ?? .null)["harnessConfigState"].string, (box.harnessConfig ?? .null)["revision"].pretty, String(retry)].joined(separator: "|")
+    private var scope: HarnessLoginPrompts.Scope? {
+        .init(computer: workspace.connectionState.endpointLabel, project: box.projectId, harness: harness.id, box: box.id)
     }
-    private var updateTitle: String { "Update the \(harness.name) harness?" }
-    private let updateDescription = "Review the changes from this box. Saving them updates the harness used by new boxes in this project."
-    private let reviewTitle = "Review changes…"
-
+    private var key: [String] {
+        [workspace.connectionState.connectionID.uuidString, box.id, harness.id, reportedCandidate,
+         (box.runtime.agentStatus ?? .null)["harnessConfigState"].string, (box.harnessConfig ?? .null)["revision"].pretty,
+         scope.flatMap { history.completedCandidate($0) } == reportedCandidate ? "completed" : "open", String(retry)]
+    }
+    private func isCurrent(_ model: HarnessManagement) -> Bool {
+        guard model.validConnection, model.boxID == box.id, model.harnessID == harness.id,
+              workspace.connectionState.connectionError == nil, let selected = workspace.selection.selectedBox,
+              selected.isRunning, selected.id == box.id, selected.config.harnessConfigId == harness.id,
+              selected.runtime.agentStatus?["harnessConfigCandidate"].string == reportedCandidate else { return false }
+        return !reportedCandidate.isEmpty && model.changes["candidateId"].string == reportedCandidate
+    }
     var body: some View {
-        VStack(spacing: 0) {
-            if let model, model.canSave, model.changes["candidateId"].string == reportedCandidate {
+        HStack(spacing: 0) {
+            if let model, model.canSave, isCurrent(model), let scope {
                 let handoff = model.changes["state"].string == "saved-handoff-pending"
-                HStack(spacing: 10) {
-                    Image(systemName: "square.and.arrow.up").foregroundStyle(DiscoboxAppearance.accent)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(handoff ? "Shared settings saved · source box update pending" : updateTitle)
-                            .font(.callout.weight(.medium))
-                        Text(handoff ? "The shared changes are saved. Finish updating this box; you do not need to sign in again." : updateDescription)
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if handoff || history.completedCandidate(scope) != reportedCandidate {
+                    Button(handoff ? "Finish update…" : "Review harness changes…") {
+                        guard isCurrent(model), model.canSave else { return }
+                        if !handoff { history.offered(scope) }
+                        review()
                     }
-                    Spacer(minLength: 12)
-                    Button(handoff ? "Finish update…" : reviewTitle, action: review)
-                        .buttonStyle(.borderless).accessibilityIdentifier("harness.reviewBoxChanges")
-                }.padding(.horizontal, 16).padding(.vertical, 10).background(DiscoboxAppearance.chrome)
+                        .lineLimit(1).buttonStyle(.borderless)
+                        .help(handoff ? "Finish applying the saved harness changes to this box" : "Review this box’s changes to the shared \(harness.name) harness")
+                        .accessibilityIdentifier("harness.reviewBoxChanges")
+                }
             } else if let model, !model.busy,
                       model.error != nil || ["initializing", "unavailable"].contains(model.changes["state"].string) ||
                       (model.canSave && model.changes["candidateId"].string != reportedCandidate) {
-                HStack {
-                    Text("Could not check shared harness changes").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Retry") { retry += 1 }.font(.caption)
-                }.padding(.horizontal, 16).padding(.vertical, 8).background(DiscoboxAppearance.chrome)
+                Button("Retry harness check") { retry += 1 }.buttonStyle(.borderless)
             }
         }.task(id: key) {
             dismissOffer()
@@ -89,23 +90,23 @@ struct HarnessChangesBanner: View {
         }.onDisappear { model?.close(); dismissOffer() }
     }
 
-    private func identity(for model: HarnessManagement) -> String? {
-        guard model.canSave, model.boxID == box.id, model.harnessID == harness.id, workspace.connectionState.connectionError == nil,
-              let selected = workspace.selection.selectedBox, selected.isRunning, selected.id == box.id,
-              selected.config.harnessConfigId == harness.id else { return nil }
-        return HarnessLoginPrompts.key(preview: model.changes,
-            reportedCandidate: selected.runtime.agentStatus?["harnessConfigCandidate"].string ?? "",
-            computer: workspace.connectionState.endpointLabel, project: workspace.connectionState.projectID ?? "",
-            harness: harness.id, box: box.id)
-    }
-
     private func offerReview() {
-        guard NSApp.isActive, let window, window.isKeyWindow, window.attachedSheet == nil, sheet == nil,
-              let model, let identity = identity(for: model), !HarnessLoginPrompts.contains(identity, in: presented) else { return }
+        guard let model, isCurrent(model), model.canSave, model.changes["state"].string == "pending",
+              let scope else { return }
+        if history.hasOffered(scope, candidate: reportedCandidate) {
+            // Promote a matching v1 candidate to the current pending episode.
+            if history.completedCandidate(scope) == nil {
+                var updated = history
+                updated.offered(scope)
+                if updated != history { history = updated }
+            }
+            return
+        }
+        guard NSApp.isActive, let window, window.isKeyWindow, window.attachedSheet == nil, sheet == nil else { return }
         let alert = NSAlert()
-        alert.messageText = updateTitle
-        alert.informativeText = "Changes in “\(box.sidebarTitle)” are local to that box. If you save them, new boxes using \(harness.name) in this project will start with the setup you reviewed."
-        alert.addButton(withTitle: reviewTitle).keyEquivalent = ""
+        alert.messageText = "Update the \(harness.name) harness?"
+        alert.informativeText = "Changes in “\(box.sidebarTitle)” are local to that box. If you save them, new boxes using \(harness.name) in this project will start with the setup you reviewed. Choose Later to review these changes from the agent header."
+        alert.addButton(withTitle: "Review changes…").keyEquivalent = ""
         alert.addButton(withTitle: "Later").keyEquivalent = "\u{1b}"
         // A Return intended for the terminal must not act on this sheet.
         alert.window.defaultButtonCell = nil
@@ -115,11 +116,11 @@ struct HarnessChangesBanner: View {
             sheet = nil
             guard response == .alertFirstButtonReturn else { return }
             Task { @MainActor in
-                guard self.identity(for: model) == identity else { return }
+                guard self.isCurrent(model), model.canSave else { return }
                 review()
             }
         }
-        presented = HarnessLoginPrompts.recording(identity, in: presented)
+        history.offered(scope)
     }
 
     private func dismissOffer() {

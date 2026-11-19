@@ -18,6 +18,7 @@ import DiscoboxCore
 
 /// Always mounted, including for computers whose workspace is off screen.
 struct ConnectionLifecycle: View {
+    @AppStorage(HarnessLoginPrompts.defaultsKey) private var promptHistory = HarnessLoginPrompts()
     let connections: Connections
     let session: ConnectionSession
     let runtime: ConnectionRuntime
@@ -53,7 +54,10 @@ struct ConnectionLifecycle: View {
                     }
                 }
             }
-            .onChange(of: workspace.inventory.sandboxes) {
+            .onChange(of: workspace.inventory.sandboxes, initial: true) {
+                var updated = promptHistory
+                updated.reconcile(computer: workspace.connectionState.endpointLabel, boxes: workspace.inventory.sandboxes)
+                if updated != promptHistory { promptHistory = updated }
                 runtime.terminals.retainRunningBoxes(workspace.inventory.sandboxes, connection: workspace.connectionState.connectionID)
                 runtime.forwards.retainRunningBoxes(workspace.inventory.sandboxes)
                 runtime.desktops.retainRunningBoxes(workspace.inventory.sandboxes)

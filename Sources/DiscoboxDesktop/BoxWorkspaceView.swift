@@ -30,10 +30,6 @@ struct BoxWorkspaceView: View {
         VStack(spacing: 0) {
             if let error = workspace.selection.detailError { Notice(text: error, symbol: "exclamationmark.triangle") }
             if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
-            if box.isRunning, let configuration = harnessConfiguration,
-               !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
-                HarnessChangesBanner(box: box, harness: configuration, window: commands.window) { manageHarness(configuration) }
-            }
             if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionState.connectionID.uuidString + box.id) }
             // The agent is always the first child of this split. Never mount it
             // as a tab or reparent it when opening a supporting tool.
@@ -78,6 +74,10 @@ struct BoxWorkspaceView: View {
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
                 Spacer()
+                if box.isRunning, let configuration = harnessConfiguration,
+                   !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
+                    HarnessChangesControl(box: box, harness: configuration, window: commands.window) { manageHarness(configuration) }
+                }
                 Menu {
                     if let configuration = harnessConfiguration {
                         Button("Manage harness login and settings…") { manageHarness(configuration) }

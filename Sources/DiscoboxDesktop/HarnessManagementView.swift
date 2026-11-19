@@ -11,6 +11,7 @@ struct HarnessManagementView: View {
     let newBox: () -> Void
     let console: () -> Void
     let close: () -> Void
+    @AppStorage(HarnessLoginPrompts.defaultsKey) private var promptHistory = HarnessLoginPrompts()
     @State private var reviewed = false
     @State private var showingReview: Bool
     @State private var confirmingDiscard = false
@@ -337,7 +338,14 @@ struct HarnessManagementView: View {
             case .load: await manager.load()
             case .review: await manager.refreshPreview()
             case .save, .discard:
+                let candidate = manager.changes["candidateId"].string
+                let scope = HarnessLoginPrompts.Scope(computer: manager.connectionState.endpointLabel,
+                    project: manager.connectionState.projectID ?? "", harness: manager.harnessID, box: manager.boxID)
                 await manager.answer(save: next == .save)
+                if let scope, !candidate.isEmpty, manager.validConnection,
+                   ["saved", "saved-handoff-pending", "saved-handoff-superseded", "discarded"].contains(manager.result["state"].string) {
+                    promptHistory.completed(scope, candidate: candidate)
+                }
                 if manager.result != .null {
                     showingReview = false; failedActivity = .load; activity = .load
                     await manager.load()
