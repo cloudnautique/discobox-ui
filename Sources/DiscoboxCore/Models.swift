@@ -270,6 +270,15 @@ public struct Harness: Decodable, Identifiable, Sendable, Equatable {
     public let name: String
     public let configured: Bool
     public let usesLegacySetup: Bool
+    /// The listing embeds the harness even when the separate catalog has not loaded.
+    public init?(reportedBy box: Sandbox) {
+        guard let id = box.config.harnessConfigId, let config = box.harnessConfig,
+              config["id"].string == id, !id.isEmpty, !config["name"].string.isEmpty else { return nil }
+        self.id = id
+        name = config["name"].string
+        if case .bool(let ready) = config["configured"] { configured = ready; usesLegacySetup = true }
+        else { configured = true; usesLegacySetup = false }
+    }
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)

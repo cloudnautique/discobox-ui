@@ -3,9 +3,9 @@ import Foundation
 /// Remembers presentation, not consent. Saving still requires a fresh review
 /// and an explicit action. Only opaque identities are persisted here.
 public enum HarnessLoginPrompts {
-    public static func key(preview: JSONValue, computer: String, project: String, harness: String, box: String) -> String? {
+    public static func key(preview: JSONValue, reportedCandidate: String, computer: String, project: String, harness: String, box: String) -> String? {
         guard preview["state"].string == "pending", preview["harnessConfigId"].string == harness,
-              HarnessCapture.canSave(preview), !preview["credentials"].array.isEmpty,
+              HarnessCapture.canSave(preview), preview["candidateId"].string == reportedCandidate,
               !computer.isEmpty, !project.isEmpty, !harness.isEmpty, !box.isEmpty else { return nil }
         let identity = [computer, project, harness, box, preview["candidateId"].string]
         return (try? JSONEncoder().encode(identity)).flatMap { String(data: $0, encoding: .utf8) }

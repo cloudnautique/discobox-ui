@@ -2,14 +2,15 @@ import Foundation
 import Testing
 @testable import DiscoboxCore
 
-@Test func loginPromptsRequireAPendingCredentialAndAreScopedToTheSource() throws {
+@Test func harnessPromptsRequireMatchingPendingLoginOrSettingsAndAreScopedToTheSource() throws {
     var object: [String: JSONValue] = [
         "state": .string("pending"), "harnessConfigId": .string("claude"),
         "candidateId": .string("candidate"), "credentials": .array([.object(["type": .string("oauth")])])
     ]
     let preview: JSONValue = .object(object)
-    func key(_ value: JSONValue = preview, computer: String = "unix://", project: String = "p", harness: String = "claude", box: String = "b") -> String? {
-        HarnessLoginPrompts.key(preview: value, computer: computer, project: project, harness: harness, box: box)
+    func key(_ value: JSONValue = preview, reportedCandidate: String? = nil, computer: String = "unix://", project: String = "p", harness: String = "claude", box: String = "b") -> String? {
+        HarnessLoginPrompts.key(preview: value, reportedCandidate: reportedCandidate ?? value["candidateId"].string,
+                                computer: computer, project: project, harness: harness, box: box)
     }
     let identity = try #require(key())
     let stored = HarnessLoginPrompts.recording(identity, in: "[]")
@@ -20,11 +21,13 @@ import Testing
     }
     #expect(key(harness: "other") == nil)
     #expect(key(project: "") == nil)
+    #expect(key(reportedCandidate: "different") == nil)
     object["candidateId"] = .string("new")
     #expect(!HarnessLoginPrompts.contains(try #require(key(.object(object))), in: stored))
     object["credentials"] = .array([])
-    object["files"] = .array([.object(["path": .string("settings.json")])])
     #expect(key(.object(object)) == nil)
+    object["files"] = .array([.object(["path": .string("settings.json")])])
+    #expect(key(.object(object)) != nil)
     object["credentials"] = preview["credentials"]
     for state in ["saved", "saved-handoff-pending", "discarded", "unavailable"] {
         object["state"] = .string(state)

@@ -71,7 +71,11 @@ import DiscoboxCore
             await session.selection.selectBox("demo-ui")
             let terminals = runtimes.runtime(session.id).terminals
             switch flag {
-            case "--sidebar-layout-smoke": try await SidebarLayoutSmoke.run(session: session, store: terminals, commands: commands)
+            case "--sidebar-layout-smoke":
+                connections.syncProfiles([.init(name: "Laptop", endpoint: "https://laptop.invalid"),
+                                          .init(name: "Desktop", endpoint: "https://desktop.invalid")])
+                defaults.set(320.0, forKey: "harnessUsageShelfHeight")
+                try await SidebarLayoutSmoke.run(session: session, store: terminals, commands: commands)
             case "--terminal-smoke": await TerminalSmoke.run(workspace: session, store: terminals)
             case "--command-smoke": await CommandSmoke.run(workspace: session, connections: connections, commands: commands, terminals: terminals, client: client)
             case "--dialog-smoke": await DialogSmoke.run(workspace: session, commands: commands, terminals: terminals)

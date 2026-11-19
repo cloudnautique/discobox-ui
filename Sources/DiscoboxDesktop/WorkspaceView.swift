@@ -108,6 +108,9 @@ struct WorkspaceView: View {
 
                     }.id(workspace.connectionState.connectionID)
                 }
+                // The split gets the space between the notices and the status bar.
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .clipped()
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in contentWidth = width; fitInspector() }
                 })
@@ -254,7 +257,6 @@ struct WorkspaceView: View {
                             }.padding(.horizontal, 10).padding(.bottom, 6)
                         }
                         ComputersSidebar(grouping: grouping, tagKey: groupingTagKey)
-                            .frame(minHeight: 120)
                             .refreshable { await refreshBoxes() }
                             .help("Refresh boxes with ⌘R or the refresh button above.")
                             .accessibilityAction(named: Text("Refresh boxes")) { Task { await refreshBoxes() } }

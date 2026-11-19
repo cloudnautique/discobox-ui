@@ -140,6 +140,7 @@ struct ComputersSidebar: View {
                         }
                     }
             }
+            .frame(minHeight: 120)
             if browser.filter == .archived || browser.selectedBoxes.count > 1 {
                 archiveActions(selectedCount: selected.count, hasItems: !items.isEmpty, bulkActions: context.bulkActions, canPurge: context.canPurge)
             }

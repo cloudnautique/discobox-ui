@@ -33,9 +33,24 @@ import DiscoboxCore
             return list.width > 190 && list.maxX <= left.minX && left.width > 250 &&
                 left.maxX <= right.minX && right.width > 250 && right.maxX <= root.bounds.maxX
         }
-        for width in [1320, 1000, 1320] {
-            window.setContentSize(NSSize(width: width, height: 750))
-            try await wait { abs(window.contentLayoutRect.width - CGFloat(width)) < 1 && docked() }
+        func chromeFits() -> Bool {
+            guard let search = descendants(root).compactMap({ $0 as? NSTextField }).first(where: { $0.placeholderString == "Find a box" }) else { return false }
+            let content = window.contentLayoutRect
+            let searchFrame = search.convert(search.bounds, to: nil)
+            let terminal = agent.convert(agent.bounds, to: nil)
+            // Check the full frames. visibleRect already excludes clipped chrome.
+            return content.contains(searchFrame) && searchFrame.height > 0 &&
+                abs(terminal.maxY - (content.maxY - 42 - DiscoboxAppearance.terminalInset)) <= 1 &&
+                abs(terminal.minY - (content.minY + 31 + DiscoboxAppearance.terminalInset)) <= 1
+        }
+        for (width, height) in [(1320, 900), (1000, 650), (1320, 750)] {
+            window.setContentSize(NSSize(width: width, height: height))
+            do {
+                try await wait { abs(window.contentLayoutRect.width - CGFloat(width)) < 1 &&
+                    abs(window.contentLayoutRect.height - CGFloat(height)) < 1 && docked() && chromeFits() }
+            } catch {
+                throw DiscoboxError("Workspace chrome clipped at \(width) × \(height). Content \(window.contentLayoutRect), agent \(agent.convert(agent.bounds, to: nil)), list \(String(describing: listFrame()))")
+            }
             guard window.makeFirstResponder(shell), window.firstResponder === shell, docked() else {
                 throw DiscoboxError("Shell focus displaced the sidebar at width \(width)")
             }
@@ -47,11 +62,12 @@ import DiscoboxCore
         guard store.existing(shellID)?.view === shell && store.existing(agentID)?.view === agent else {
             throw DiscoboxError("Toggling the sidebar replaced a terminal")
         }
-        print("SIDEBAR_LAYOUT_SMOKE_OK: docked agent list, agent and shell at 1000 and 1320 points, shell responder, explicit hide/show and retained terminals")
+        print("SIDEBAR_LAYOUT_SMOKE_OK: visible search, agent header, status footer and docked terminals after shrinking and growing the window, shell responder, explicit hide/show and retained terminals")
         fflush(stdout)
         exit(0)
     }
 
+    private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private static func table(in view: NSView) -> NSTableView? {
         if let table = view as? NSTableView { return table }
         return view.subviews.lazy.compactMap { table(in: $0) }.first

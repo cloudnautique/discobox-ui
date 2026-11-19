@@ -11,6 +11,7 @@ import DiscoboxCore
             let client = HarnessManagementFixture()
             let workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Harness fixture", demo: true)
+            try await checkDeferredPrompt(workspace: workspace, client: client)
             let harness = try JSONDecoder().decode(Harness.self, from: Data(#"{"id":"demo-harness","name":"Subscription agent"}"#.utf8))
             let model = HarnessManagement(connection: workspace.connectionState, inventory: workspace.inventory, service: workspace.harnessService, sourceBoxID: workspace.selection.sandboxID, harnessID: harness.id)
             await model.load(); model.selectBox("demo-ui")
@@ -42,9 +43,43 @@ import DiscoboxCore
             defaults.orderFront(nil)
             try await wait { descendants(defaults.contentView!).compactMap { $0 as? NSPopUpButton }.contains { $0.titleOfSelectedItem == "First agent · Default" } }
             defaults.orderOut(nil); workspace.disconnect()
-            print("HARNESS_MANAGEMENT_SMOKE_OK: overview opens focused review, fixed consent/save fit the minimum window and survive resizing, one host-scoped save, durable receipt, project default preselection, and sign-in box keeps its chosen harness")
+            print("HARNESS_MANAGEMENT_SMOKE_OK: deferred native setup prompt, explicit review and save, durable receipt, and launch harness selection")
             fflush(stdout); exit(0)
         } catch { print("HARNESS_MANAGEMENT_SMOKE_FAILED: \(error)"); fflush(stdout); exit(1) }
+    }
+    private static func checkDeferredPrompt(workspace: ConnectionSession, client: HarnessManagementFixture) async throws {
+        await workspace.selection.selectBox("demo-ui")
+        guard let box = workspace.selection.selectedBox, let harness = Harness(reportedBy: box) else {
+            throw DiscoboxError("Missing source harness")
+        }
+        let suite = "ai.discobox.smoke.harness-prompt." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 260), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        let blocker = NSAlert()
+        blocker.messageText = "Fixture sheet"
+        blocker.beginSheetModal(for: window) { _ in }
+        var reviewed = false
+        window.contentView = NSHostingView(rootView: HarnessChangesBanner(box: box, harness: harness, window: window) {
+            reviewed = true
+        }.environment(workspace).defaultAppStorage(defaults))
+        for _ in 0..<120 {
+            if await client.previews > 0 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard await client.previews == 1, defaults.string(forKey: "harnessSetupSheets.v1") == nil,
+              window.attachedSheet === blocker.window else { throw DiscoboxError("Blocked prompt consumed or missed the candidate") }
+        window.endSheet(blocker.window)
+        func reviewButton() -> NSButton? {
+            window.attachedSheet?.contentView.flatMap { descendants($0).compactMap { $0 as? NSButton }.first { $0.title == "Review changes…" } }
+        }
+        try await wait { reviewButton() != nil }
+        reviewButton()?.performClick(nil)
+        try await wait { reviewed && window.attachedSheet == nil }
+        guard await client.saves == 0 else { throw DiscoboxError("Opening the review saved the candidate") }
     }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private static func saveButton(_ window: NSWindow) -> NSButton? {
@@ -85,7 +120,12 @@ import DiscoboxCore
 private actor HarnessManagementFixture: DiscoboxClient {
     let demo = DemoClient()
     var saves = 0
+    var previews = 0
     func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .sandboxes {
+            return Data(#"{"sandboxes":[{"id":"demo-ui","projectId":"demo","displayName":"Login fixture","config":{"harnessConfigId":"demo-harness"},"harnessConfig":{"id":"demo-harness","name":"Subscription agent"},"runtime":{"state":"ready","runtimeState":"running","agentStatus":{"harnessConfigCandidate":"demo-candidate"}}}]}"#.utf8)
+        }
+        if request.operation == .harnessChanges { previews += 1 }
         if request.operation == .defaultProject {
             return Data(#"{"id":"demo","name":"Fixture","defaultHarnessConfigId":"first"}"#.utf8)
         }

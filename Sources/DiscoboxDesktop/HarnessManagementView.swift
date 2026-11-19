@@ -389,10 +389,8 @@ struct HarnessManagementView: View {
         windows.removeAll(); HarnessConsoleWindows.shared.closeAll()
     }
     @discardableResult
-    func open(_ harness: Harness, workspace: ConnectionSession, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil, automatically: Bool = false) -> Bool {
+    func open(_ harness: Harness, workspace: ConnectionSession, connections: Connections? = nil, commands: WorkspaceCommands? = nil, sourceBoxID: String? = nil) -> Bool {
         guard workspace.connectionState.isConnected, !workspace.connectionState.isDemo else { return false }
-        // Never interrupt another sheet, management review, or inactive app.
-        if automatically, !NSApp.isActive || NSApp.keyWindow?.attachedSheet != nil || !windows.isEmpty { return false }
         let generation = workspace.connectionState.connectionID
         let key = generation.uuidString + ":" + harness.id
         if let existing = windows[key] {

@@ -13,7 +13,9 @@ struct BoxWorkspaceView: View {
     @State private var creationAction: BoxActionRequest?
     @AppStorage("confirmShellClose") private var confirmShellClose = true
     private var harness: Exec? { workspace.selection.execs.first(where: { $0.primary == true }) ?? workspace.selection.execs.first(where: { !$0.isShell }) }
-    private var harnessConfiguration: Harness? { workspace.catalog.cachedHarnesses.first { $0.id == box.config.harnessConfigId } }
+    private var harnessConfiguration: Harness? {
+        workspace.catalog.cachedHarnesses.first { $0.id == box.config.harnessConfigId } ?? Harness(reportedBy: box)
+    }
     private var companions: [Exec] { workspace.selection.execs.filter { $0.id != harness?.id } }
     private var layout: WorkspaceTabs { commands.layout(for: workspace.connectionState.connectionID.uuidString + box.id) }
     private var creation: BoxCreation? {
@@ -30,10 +32,7 @@ struct BoxWorkspaceView: View {
             if let warning = box.runningWarning { Notice(text: "Running with a warning: " + warning, symbol: "exclamationmark.triangle") }
             if box.isRunning, let configuration = harnessConfiguration,
                !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
-                HarnessChangesBanner(box: box, harness: configuration, review: { manageHarness(configuration) }, prompt: {
-                    HarnessSetupWindows.shared.open(configuration, workspace: workspace, connections: connections,
-                        commands: commands, sourceBoxID: box.id, automatically: true)
-                })
+                HarnessChangesBanner(box: box, harness: configuration, window: commands.window) { manageHarness(configuration) }
             }
             if !box.isRunning { StoppedBoxBar(box: box).id(workspace.connectionState.connectionID.uuidString + box.id) }
             // The agent is always the first child of this split. Never mount it

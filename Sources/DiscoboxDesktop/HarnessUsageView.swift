@@ -84,7 +84,9 @@ struct HarnessUsageSection: View {
             }.padding(.horizontal, 12).frame(height: 34)
             if expanded {
                 UsageSummary(computers: computers).equatable().padding(.horizontal, 12).padding(.bottom, 10)
-                    .frame(height: min(320, max(120, resize?.height ?? height)))
+                    // Prefer the saved height, but yield space to the box list
+                    // when the window is short. Resizing keeps the preference.
+                    .frame(minHeight: 0, maxHeight: min(320, max(120, resize?.height ?? height)))
             }
         }
         .background(DiscoboxAppearance.sidebar)
