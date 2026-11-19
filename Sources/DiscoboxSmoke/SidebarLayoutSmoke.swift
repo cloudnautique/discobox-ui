@@ -6,7 +6,7 @@ import DiscoboxCore
 /// Exercises the production shell and sidebar in the fixture's workspace
 /// window. Layout and responder ownership are testable with a locked display.
 @MainActor enum SidebarLayoutSmoke {
-    static func run(session: ConnectionSession, store: TerminalStore, commands: WorkspaceCommands) async throws {
+    static func run(session: ConnectionSession, store: TerminalStore, commands: WorkspaceCommands, defaults: UserDefaults) async throws {
         try await wait { commands.window?.contentView != nil && session.selection.selectedExec?.primary == true }
         let window = commands.window!
         let root = window.contentView!
@@ -55,6 +55,15 @@ import DiscoboxCore
                 throw DiscoboxError("Shell focus displaced the sidebar at width \(width)")
             }
         }
+        guard let list = table(in: root) else { throw DiscoboxError("Missing sidebar list") }
+        let groupedRows = list.numberOfRows
+        defaults.set("parent", forKey: "boxGrouping")
+        try await wait { list.numberOfRows == session.inventory.sandboxes.filter { !$0.isDeleted && !$0.isArchived }.count }
+        guard window.firstResponder === shell, store.existing(shellID)?.view === shell, session.selection.execID == shellID.exec else {
+            throw DiscoboxError("Grouping by parent displaced the active shell")
+        }
+        defaults.set("repository", forKey: "boxGrouping")
+        try await wait { list.numberOfRows == groupedRows }
         commands.focusMode = true
         try await wait { listFrame() == nil }
         commands.focusMode = false

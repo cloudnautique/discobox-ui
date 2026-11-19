@@ -79,11 +79,15 @@ import Observation
     @ObservationIgnored var cadence = PollingCadence() {
         didSet {
             if cadence != oldValue {
+                if cadence.showsRunningBoxes != oldValue.showsRunningBoxes {
+                    refreshRunningInventory = cadence.showsRunningBoxes
+                }
                 for (kind, task) in scheduledReads where cadence.interval(kind) == nil { task.cancel() }
                 schedule.wake()
             }
         }
     }
+    @ObservationIgnored private var refreshRunningInventory = false
     @ObservationIgnored private let schedule = PollingSchedule()
     func startPolling() {
         stopPolling()
@@ -108,6 +112,7 @@ import Observation
                         }
                     } catch { return }
                     guard !Task.isCancelled else { return }
+                    if kind == .inventory { self?.refreshRunningInventory = false }
                     await self?.poll(kind)
                     last = self?.now() ?? last
                 }
@@ -159,8 +164,11 @@ import Observation
     private enum PollWait { case due, after(Double), paused }
     private func pollWait(_ kind: Poll, since last: Date?) -> PollWait {
         guard readMetrics.policy.allows(kind) else { return .paused }
+        if kind == .inventory, refreshRunningInventory, connectionState.connectionError == nil {
+            return .due
+        }
         if kind == .inventory, eventsCurrent, connectionState.connectionError == nil, let last {
-            let interval: Double = cadence.presence == .hidden || !cadence.isActiveHost ? 300 : 60
+            let interval = cadence.eventInventoryInterval
             let remaining = interval - now().timeIntervalSince(last)
             return remaining <= 0 ? .due : .after(remaining)
         }
@@ -251,10 +259,10 @@ import Observation
 
     public func refresh() async { await refresh(includeDetails: true) }
 
-    private func refresh(includeDetails: Bool) async {
+    func refresh(includeDetails: Bool) async {
         guard connectionState.isConnected else { return }
         if connectionState.connectionError != nil && !connectionState.recoveryInFlight && !connectionState.isConnecting {
-            await retryConnection(); return
+            await retryConnection(includeDetails: includeDetails); return
         }
         let current = connectionState.connectionID
         do {

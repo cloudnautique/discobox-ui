@@ -30,6 +30,12 @@ public struct PollingCadence: Sendable, Equatable {
     public var presence: PollingPresence
     public var isActiveHost: Bool
     public var usageVisible: Bool
+    var showsRunningBoxes = false
+    // The event stream omits timestamp-only pool confirmations. Keep the
+    // visible Running list inside the two-minute power freshness window.
+    var eventInventoryInterval: TimeInterval {
+        presence != .hidden && (isActiveHost || showsRunningBoxes) ? 60 : 300
+    }
     public init(presence: PollingPresence = .focused, isActiveHost: Bool = true, usageVisible: Bool = true) {
         self.presence = presence; self.isActiveHost = isActiveHost; self.usageVisible = usageVisible
     }

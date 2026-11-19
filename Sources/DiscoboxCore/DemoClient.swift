@@ -17,6 +17,7 @@ public actor DemoClient: DiscoboxClient {
 
     public func perform(_ request: BridgeRequest) async throws -> Data {
         switch request.operation {
+        case .credentialRoutes: throw DiscoboxError("Editing routes requires a connected computer.")
         case .boxLink: throw DiscoboxError("No box link parser in the demo fixture")
         case .serverPeer: return Data("{}".utf8)
         case .updateSecretLimits: return Data("{}".utf8)
@@ -146,7 +147,7 @@ public actor DemoClient: DiscoboxClient {
     private static let boxes = #"""
     {"sandboxes":[
       {"id":"demo-ui","projectId":"demo","displayName":"Native macOS workspace","config":{"name":"discobox-ui","model":"claude-sonnet","harnessConfigId":"demo-harness"},"runtime":{"state":"ready","runtimeState":"running"},"meta":{"description":"A focused desktop experience for your coding agents.","tags":{"repository":"discobox-ui","branch":"feature/native-workspace"}},"poolId":"local","platform":"linux/arm64"},
-      {"id":"demo-api","projectId":"demo","displayName":"Review API pagination","config":{"name":"discobox"},"runtime":{"state":"ready","runtimeState":"stopped"},"meta":{"description":"Inspect the last terminal screen without waking the box.","tags":{"repository":"discobox"}},"poolId":"local","platform":"linux/arm64"},
+      {"id":"demo-api","projectId":"demo","parentSandboxId":"demo-ui","displayName":"Review API pagination","config":{"name":"discobox"},"runtime":{"state":"ready","runtimeState":"stopped"},"meta":{"description":"Inspect the last terminal screen without waking the box.","tags":{"repository":"discobox"}},"poolId":"local","platform":"linux/arm64"},
       {"id":"demo-tests","projectId":"demo","displayName":"Investigate integration tests","config":{"name":"discobox"},"runtime":{"state":"failed","errorMessage":"Source delivery needs attention."},"meta":{"tags":{"repository":"discobox"}},"poolId":"remote"}
     ]}
     """#

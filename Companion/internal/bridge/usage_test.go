@@ -13,7 +13,7 @@ func TestUsageOnlyReadsBoundedAuditAndReturnsQuotaCandidates(t *testing.T) {
 	calls := 0
 	b := &Bridge{base: "http://fixture", client: &http.Client{Transport: fakeTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Method != "GET" || r.URL.Path != "/api/projects/p/audit/http" || r.URL.Query().Get("limit") != "64" || r.URL.Query().Get("poolId") != "pool" {
+		if r.Method != "GET" || r.URL.Path != "/projects/p/audit/http" || r.URL.Query().Get("limit") != "64" || r.URL.Query().Get("poolId") != "pool" {
 			t.Fatalf("unexpected request %s", r.URL)
 		}
 		if r.URL.Query().Get("host") == "api.anthropic.com" {
@@ -47,7 +47,7 @@ func TestUsageOnlyReadsBoundedAuditAndReturnsQuotaCandidates(t *testing.T) {
 
 func TestUsageHeadersOnlyReturnsSubscriptionQuotaFields(t *testing.T) {
 	b := &Bridge{base: "http://fixture", client: &http.Client{Transport: fakeTransport(func(r *http.Request) (*http.Response, error) {
-		if r.Method != "GET" || r.URL.Path != "/api/projects/p/pools/pool/audit/http/http_1" || r.URL.Query().Get("sandboxId") != "box" {
+		if r.Method != "GET" || r.URL.Path != "/projects/p/pools/pool/audit/http/http_1" || r.URL.Query().Get("sandboxId") != "box" {
 			t.Fatalf("unexpected request %s", r.URL)
 		}
 		return reply(`{"url":"https://api.anthropic.com/v1/messages?beta=true","responseHeaders":{"Anthropic-Ratelimit-Unified-5h-Utilization":["0.1"],"Anthropic-Ratelimit-Unified-7d-Utilization":["0.03"],"Set-Cookie":["private"],"anthropic-ratelimit-requests-remaining":["99"]},"requestHeaders":{"Authorization":"private"}}`), nil

@@ -155,3 +155,97 @@ func TestCredentialLimitSaveReadsBackWithoutReplayingTheWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedRoutesSurviveEditSaveAndReadback(t *testing.T) {
+	lines := []string{
+		"api.example.test/repos/demo/project,/repos/demo/project/**",
+		"GET api.example.test/repos/fork/project,/repos/fork/project/**",
+		"GET api.example.test/search/issues,/user",
+		"api.example.test/graphql graphql=query",
+		"api.example.test/graphql graphql=mutation:markPullRequestReadyForReview",
+		"GET,POST git.example.test/demo/project.git/info/refs,/demo/project.git/git-upload-pack",
+		"GET git.example.test/demo/project/**",
+		"api.example.test/repos/demo/project/pulls/*/merge=blocked",
+	}
+	raw, _ := json.Marshal(lines)
+	b, _ := New("http://fixture")
+	b.allowManage = true
+	preview, err := b.execute(t.Context(), wire.Request{Operation: "credentialRoutes", Payload: raw})
+	var draft credentialRouteList
+	if err != nil || json.Unmarshal(preview.Body, &draft) != nil || len(draft.Routes) != len(lines) {
+		t.Fatalf("preview: %s, %v", preview.Body, err)
+	}
+	if !draft.Routes[7].Blocked || draft.Routes[4].GraphQL.Fields[0] != "markPullRequestReadyForReview" {
+		t.Fatalf("lost restrictions: %v", draft)
+	}
+	stored := map[string]any{"id": "s", "maxBindingTTLSeconds": 3600, "routes": draft.Routes[:1], "routeConstraints": [][]any{{}}}
+	data, _ := json.Marshal(stored)
+	update, _ := json.Marshal(map[string]any{"expectedSecret": json.RawMessage(data), "limits": map[string]any{"routes": draft.Routes}})
+	writes := 0
+	b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodPut {
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || body["routes"] == nil {
+				t.Fatalf("expected only routes: %v, %v", body, err)
+			}
+			stored["routes"] = body["routes"]
+			writes++
+		}
+		data, _ := json.Marshal(stored)
+		return reply(string(data)), nil
+	})
+	result, err := b.execute(t.Context(), wire.Request{Operation: "updateSecretLimits", ProjectID: "p", SecretID: "s", Payload: update})
+	if err != nil || writes != 1 || result.Status != http.StatusOK {
+		t.Fatalf("save status=%d writes=%d err=%v", result.Status, writes, err)
+	}
+	var confirmed struct {
+		Routes json.RawMessage `json:"routes"`
+	}
+	if err := json.Unmarshal(result.Body, &confirmed); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := b.execute(t.Context(), wire.Request{Operation: "credentialRoutes", Payload: confirmed.Routes})
+	if err != nil || string(reopened.Body) != string(preview.Body) {
+		t.Fatalf("reopen: %v, %s", err, reopened.Body)
+	}
+}
+
+func TestSharedRouteUpdateRejectsUnknownRestrictionsAndUnverifiedWrites(t *testing.T) {
+	for _, test := range []struct {
+		name, field, routes, readback string
+		writes                        int
+		ok                            bool
+	}{
+		{"unknown", "maxBindingTTLSeconds", `[{"hosts":["a.test"],"newRestriction":true}]`, "", 0, false},
+		{"malformed", "maxBindingTTLSeconds", `[{"paths":["/"]}]`, "", 0, false},
+		{"null", "maxBindingTTLSeconds", "null", "", 0, false},
+		{"legacy", "maxGrantTTLSeconds", "[]", "", 0, false},
+		{"noop", "maxBindingTTLSeconds", `[{"hosts":["a.test"],"blocked":true}]`, `[{"hosts":["a.test"]}]`, 1, false},
+		{"clear", "maxBindingTTLSeconds", "[]", "", 1, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b, _ := New("http://fixture")
+			b.allowManage = true
+			stored := map[string]any{"id": "s", test.field: 3600, "routes": json.RawMessage(`[{"hosts":["a.test"]}]`)}
+			data, _ := json.Marshal(stored)
+			update, _ := json.Marshal(map[string]any{"expectedSecret": json.RawMessage(data), "limits": map[string]any{"routes": json.RawMessage(test.routes)}})
+			writes := 0
+			b.client.Transport = fakeTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodPut {
+					writes++
+					if test.readback == "" {
+						delete(stored, "routes")
+					} else {
+						stored["routes"] = json.RawMessage(test.readback)
+					}
+				}
+				data, _ := json.Marshal(stored)
+				return reply(string(data)), nil
+			})
+			_, err := b.execute(t.Context(), wire.Request{Operation: "updateSecretLimits", ProjectID: "p", SecretID: "s", Payload: update})
+			if (err == nil) != test.ok || writes != test.writes {
+				t.Fatalf("writes=%d err=%v", writes, err)
+			}
+		})
+	}
+}

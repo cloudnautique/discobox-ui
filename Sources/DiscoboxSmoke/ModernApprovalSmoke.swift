@@ -7,7 +7,8 @@ import DiscoboxCore
 /// Real controls and delayed, read-only fixtures for remote approval recovery.
 @MainActor enum ModernApprovalSmoke {
     static func verify() async throws {
-        for mode in ["use", "sharing", "both", "failure", "new", "deny"] {
+        try await verifySharedCredentialSave()
+        for mode in ["use", "sharing", "both", "failure", "new", "new-edited", "deny"] {
             let client = RemoteApprovalFixture(mode: mode)
             let workspace = ConnectionSession()
             await workspace.connect(client: client, label: "Remote fixture", demo: true)
@@ -28,7 +29,7 @@ import DiscoboxCore
                 try await wait { closed }
                 continue
             }
-            if mode == "new" {
+            if mode == "new" || mode == "new-edited" {
                 credential.menu?.performActionForItem(at: 0)
                 try await wait { fields(window).contains { $0 is NSSecureTextField } }
                 guard let name = fields(window).first(where: { $0.placeholderString == "Name" }),
@@ -40,6 +41,30 @@ import DiscoboxCore
                 }
                 try await wait { saveButton(window)?.isEnabled == true }
                 guard action(window)?.isEnabled == false, await client.answers == 0 else { throw DiscoboxError("New credential bypassed explicit approval") }
+                if mode == "new-edited" {
+                    // The native buttons host SwiftUI-drawn labels. The route
+                    // action precedes the inline form's Cancel and Save row.
+                    let inline = views(window.contentView!).compactMap { $0 as? NSButton }.filter {
+                        !($0 is NSPopUpButton) && $0.enclosingScrollView === token.enclosingScrollView
+                    }
+                    guard inline.count == 3, let edit = inline.first else { throw DiscoboxError("Missing inline route controls") }
+                    edit.performClick(nil)
+                    try await wait { window.attachedSheet != nil }
+                    let editor = window.attachedSheet!
+                    guard let root = editor.contentView else { throw DiscoboxError("Missing route editor content") }
+                    let buttons = views(root).compactMap { $0 as? NSButton }
+                    guard let apply = buttons.max(by: { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }) else {
+                        throw DiscoboxError("Missing route editor footer")
+                    }
+                    try await wait { apply.isEnabled }
+                    guard let text = editor.contentView.flatMap({ views($0).compactMap { $0 as? NSTextView }.first(where: { $0.isEditable && $0.string.contains("api.example.test") }) }) else {
+                        throw DiscoboxError("Route editor did not load the requested routes")
+                    }
+                    text.insertText("\nPOST api.example.test/issues/*/comments", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+                    apply.performClick(nil)
+                    try await wait { window.attachedSheet == nil }
+                    guard await client.stores == 0, await client.answers == 0 else { throw DiscoboxError("Editing draft routes wrote to the fixture") }
+                }
                 for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                     window.appearance = NSAppearance(named: appearance)
                     try await Task.sleep(for: .milliseconds(150))
@@ -110,6 +135,42 @@ import DiscoboxCore
         guard await client.answers == 1 else { throw DiscoboxError("Approval was submitted more than once") }
     }
 
+    private static func verifySharedCredentialSave() async throws {
+        let client = RemoteApprovalFixture(mode: "limits")
+        let workspace = ConnectionSession()
+        await workspace.connect(client: client, label: "Fixture", demo: true)
+        let secret: JSONValue = .object(["id": .string("fixture"), "name": .string("Example credential"), "maxBindingTTLSeconds": .number(3600)])
+        var receipt: JSONValue?
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = NSHostingView(rootView: CredentialDetailsView(request: .init(secret: secret, connection: workspace.connectionState.connectionID),
+                                                                           saved: { receipt = $0 }).environment(workspace))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); workspace.disconnect() }
+        try await wait { fields(window).contains { $0.placeholderString == "Seconds" } }
+        let field = fields(window).first { $0.placeholderString == "Seconds" }!
+        guard action(window)?.isEnabled != true else { throw DiscoboxError("An unchanged credential enabled Save") }
+        window.makeFirstResponder(field)
+        field.stringValue = "7200"
+        field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+        for confirm in [false, true] {
+            try await wait { action(window)?.isEnabled == true }
+            action(window)?.performClick(nil)
+            try await wait { window.attachedSheet.flatMap(action)?.isEnabled == true }
+            let sheet = window.attachedSheet!
+            guard await client.stores == 0 else { throw DiscoboxError("Credential limits were saved before confirmation") }
+            if confirm {
+                action(sheet)?.performClick(nil)
+            } else {
+                guard let cancel = footer(sheet).first, cancel !== action(sheet) else { throw DiscoboxError("Missing Cancel action") }
+                cancel.performClick(nil)
+            }
+            try await wait { window.attachedSheet == nil }
+        }
+        try await wait { receipt?["maxBindingTTLSeconds"] == .number(7200) }
+        guard await client.stores == 1 else { throw DiscoboxError("Expected one confirmed credential update") }
+        print("CREDENTIAL_SAVE_SMOKE_OK: Save previews changes, Cancel preserves the edit, and confirmation writes once")
+    }
+
     private static func capture(_ window: NSWindow, name: String) throws {
         guard let directory = ProcessInfo.processInfo.environment["DISCOBOX_SMOKE_SCREENSHOTS"], let root = window.contentView,
               let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return }
@@ -159,6 +220,18 @@ private actor RemoteApprovalFixture: DiscoboxClient {
         return .object(fields)
     }
     func perform(_ request: BridgeRequest) async throws -> Data {
+        if request.operation == .updateSecretLimits, mode == "limits" {
+            guard request.secretID == "fixture", request.payload?["expectedSecret"]["maxBindingTTLSeconds"] == .number(3600),
+                  request.payload?["limits"] == .object(["maxBindingTTLSeconds": .number(7200)]) else {
+                throw DiscoboxError("Incorrect shared-limit update")
+            }
+            stores += 1
+            return Data(#"{"id":"fixture","maxBindingTTLSeconds":7200}"#.utf8)
+        }
+        if request.operation == .credentialRoutes {
+            let binary = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/discobox-desktop-bridge")
+            return try await CompanionClient(executable: binary, endpoint: "unix:///tmp/missing-fixture.sock").perform(request)
+        }
         if request.operation == .approvals {
             return try JSONEncoder().encode(JSONValue.object(["approvalRequests": .array(answers == 0 ? [.object(["kind": .string("credential"), "credential": ask])] : [])]))
         }
@@ -172,8 +245,12 @@ private actor RemoteApprovalFixture: DiscoboxClient {
             ]))
         }
         if request.operation == .createSecret {
+            var routes = ask["use"]["routes"].array + ask["delegate"]["routes"].array
+            if mode == "new-edited" {
+                routes.append(.object(["hosts": .array([.string("api.example.test")]), "methods": .array([.string("POST")]), "paths": .array([.string("/issues/*/comments")])]))
+            }
             guard request.payload?["name"].string == "New fixture account", request.payload?["value"]["token"].string == "fixture-token",
-                  request.payload?["routes"].array == ask["use"]["routes"].array + ask["delegate"]["routes"].array else { throw DiscoboxError("Wrong inline credential payload") }
+                  request.payload?["routes"].array == routes else { throw DiscoboxError("Wrong inline credential payload") }
             stores += 1
             return Data(#"{"id":"created-secret"}"#.utf8)
         }

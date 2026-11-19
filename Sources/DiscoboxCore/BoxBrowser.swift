@@ -5,8 +5,13 @@ import Observation
 /// computer filter means all connected computers; opening a box never changes
 /// that filter or loses the user's search, grouping, and tag choices.
 @MainActor @Observable public final class BoxBrowser {
-    public var computerID: String?
-    public var filter: BoxFilter = .all
+    public var computerID: String? {
+        didSet { if computerID != oldValue && filter == .running { runningScopeChanged?() } }
+    }
+    public var filter: BoxFilter = .all {
+        didSet { if (filter == .running) != (oldValue == .running) { runningScopeChanged?() } }
+    }
+    @ObservationIgnored var runningScopeChanged: (() -> Void)?
     public var searchText = ""
     public var selectedTags: Set<String> = []
     public var matchAnyTag = false

@@ -24,10 +24,11 @@ public extension ApprovalItem {
 }
 
 public enum TokenCredentialPayload {
-    public static func current(name: String, value: String, routes: [JSONValue]) throws -> JSONValue {
+    public static func current(name: String, value: String, routes: [JSONValue], maximum: String = "3600") throws -> JSONValue {
         try validate(name: name, value: value)
+        let seconds = try CredentialLimits.lifetimeSeconds(maximum)
         return .object(["name": .string(name.trimmingCharacters(in: .whitespacesAndNewlines)), "type": .string("token"),
-                        "value": .object(["token": .string(value)]), "routes": .array(routes), "maxBindingTTLSeconds": .number(3600)])
+                        "value": .object(["token": .string(value)]), "routes": .array(routes), "maxBindingTTLSeconds": .number(Double(seconds))])
     }
     public static func legacy(name: String, value: String, host: String, maximum: Double) throws -> JSONValue {
         try validate(name: name, value: value)

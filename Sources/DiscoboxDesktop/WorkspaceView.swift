@@ -208,6 +208,7 @@ struct WorkspaceView: View {
                                 Menu("Group by") {
                                     Picker("Group by", selection: $grouping) {
                                         Text("Repository").tag("repository")
+                                        Text("Parent box").tag("parent")
                                         Text("Harness").tag("harness")
                                         Text("State").tag("state")
                                         Text("None").tag("none")
@@ -287,12 +288,7 @@ struct WorkspaceView: View {
     private func refreshBoxes() async {
         guard !refreshingBoxes else { return }
         refreshingBoxes = true
-        do {
-            let workspaces = connections.sessions.filter { $0.connectionState.isConnected }
-            await withTaskGroup(of: Void.self) { group in
-                for target in workspaces { group.addTask { await target.refresh() } }
-            }
-        }
+        await connections.refreshWorkspace()
         refreshingBoxes = false
     }
 }
@@ -584,6 +580,8 @@ struct RepositoryGroupHeader: View {
 struct BoxRow: View {
     let box: Sandbox
     var computer: String? = nil
+    var showRepository = false
+    var hiddenAttention = 0
     /// Precomputed by the sidebar; without it the row derives from its workspace.
     var presentation: BoxRowPresentation? = nil
     @Environment(ConnectionSession.self) private var workspace
@@ -615,7 +613,7 @@ struct BoxRow: View {
                     BoxMaintenanceIndicators(box: box)
                 }
                 HStack(spacing: 4) {
-                    Text([box.harnessName ?? box.config.name ?? "Agent", computer].compactMap { $0 }.joined(separator: " · ")).lineLimit(1)
+                    Text([box.harnessName ?? box.config.name ?? "Agent", showRepository ? box.repository : nil, computer].compactMap { $0 }.joined(separator: " · ")).lineLimit(1)
                     Spacer(minLength: 4)
                     if state.isPending { ProgressView().controlSize(.mini) }
                     if let branch = box.branch, !branch.isEmpty {
@@ -624,6 +622,10 @@ struct BoxRow: View {
                             .frame(maxWidth: 90, alignment: .trailing)
                     }
                 }.font(.caption2).foregroundStyle(.secondary)
+                if hiddenAttention > 0 {
+                    Text(hiddenAttention == 1 ? "1 child needs attention" : "\(hiddenAttention) children need attention")
+                        .font(.caption2).foregroundStyle(DiscoboxAppearance.activityAttention)
+                }
 
             }
         }.padding(.vertical, 8)

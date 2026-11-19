@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/discobox-ai/discobox/cli/desktopbridge/internal/wire"
 )
 
 // Editing shared restrictions is a separate explicit Settings operation. Never
-// include values, bindings, routes, or rules in this bounded metadata update.
+// include token values, bindings or harness-owned constraints in the update.
 func (b *Bridge) credentialLimits(ctx context.Context, req wire.Request) (wire.Response, error) {
 	if ValidID(req.ProjectID) != nil || ValidID(req.SecretID) != nil {
 		return wire.Response{}, errors.New("choose a credential on a connected computer before editing shared limits")
@@ -42,8 +43,18 @@ func (b *Bridge) credentialLimits(ctx context.Context, req wire.Request) (wire.R
 	if _, ok := metadata[field]; !ok {
 		return wire.Response{}, errors.New("this server does not report editable credential lifetime limits")
 	}
+	var requestedRoutes credentialRouteList
 	for key, raw := range input.Limits {
-		if key == "host" && field == "maxGrantTTLSeconds" {
+		if key == "routes" && field == "maxBindingTTLSeconds" {
+			requestedRoutes, err = credentialRoutes(raw, false)
+			if err != nil {
+				return wire.Response{}, err
+			}
+			input.Limits[key], err = json.Marshal(requestedRoutes.Routes)
+			if err != nil {
+				return wire.Response{}, err
+			}
+		} else if key == "host" && field == "maxGrantTTLSeconds" {
 			var host string
 			if json.Unmarshal(raw, &host) != nil {
 				return wire.Response{}, errors.New("invalid credential host")
@@ -57,7 +68,7 @@ func (b *Bridge) credentialLimits(ctx context.Context, req wire.Request) (wire.R
 			return wire.Response{}, errors.New("unsupported shared credential change")
 		}
 	}
-	if _, ok := input.Limits[field]; !ok {
+	if _, ok := input.Limits[field]; !ok && input.Limits["routes"] == nil {
 		return wire.Response{}, errors.New("missing credential lifetime")
 	}
 	body, _ := json.Marshal(input.Limits)
@@ -84,7 +95,17 @@ func (b *Bridge) credentialLimits(ctx context.Context, req wire.Request) (wire.R
 		return wire.Response{}, errors.New("Discobox did not confirm the saved credential identity; reopen its details before retrying")
 	}
 	for key, expected := range input.Limits {
-		if key == "host" {
+		if key == "routes" {
+			raw := saved[key]
+			// An empty route list is omitted by Discobox's secret summary.
+			if len(raw) == 0 || string(raw) == "null" {
+				raw = json.RawMessage("[]")
+			}
+			got, err := credentialRoutes(raw, false)
+			if err != nil || !slices.Equal(requestedRoutes.Lines, got.Lines) {
+				return wire.Response{}, errors.New("Discobox did not confirm the saved routes; reopen the credential details before retrying")
+			}
+		} else if key == "host" {
 			var want, got string
 			if json.Unmarshal(expected, &want) != nil || (len(saved[key]) > 0 && json.Unmarshal(saved[key], &got) != nil) || strings.TrimSpace(strings.ToLower(want)) != strings.TrimSpace(strings.ToLower(got)) {
 				return wire.Response{}, errors.New("Discobox did not retain the requested host restriction; reopen the credential details before retrying")

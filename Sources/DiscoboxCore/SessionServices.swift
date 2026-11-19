@@ -18,6 +18,15 @@ import Foundation
 
 @MainActor public struct CredentialService {
     let connection: ConnectionStore
+    public struct RoutePreview: Decodable, Sendable {
+        public let lines: [String]
+        public let routes: [JSONValue]
+    }
+    public func previewRoutes(_ rows: [JSONValue]) async throws -> RoutePreview {
+        let access = try connection.capture()
+        let data = try await access.perform(.init(.credentialRoutes, projectID: access.scope.project, payload: .array(rows)))
+        return try JSONDecoder().decode(RoutePreview.self, from: data)
+    }
     public func list() async throws -> [JSONValue] { try await ScopedAPI(connection: connection).json(.secrets)["secrets"].array }
     public func create(payload: JSONValue) async throws -> JSONValue { try await ScopedAPI(connection: connection).json(.createSecret, payload: payload) }
     public func updateLimits(id: String, payload: JSONValue) async throws -> JSONValue { try await ScopedAPI(connection: connection).json(.updateSecretLimits, secret: id, payload: payload) }

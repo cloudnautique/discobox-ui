@@ -17,6 +17,7 @@
     "closeTerminal": "manage",
     "createBox": "manage",
     "createSecret": "manage",
+    "credentialRoutes": "read",
     "defaultProject": "read",
     "deleteSecret": "manage",
     "discardHarnessChanges": "manage",

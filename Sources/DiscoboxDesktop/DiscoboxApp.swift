@@ -89,9 +89,9 @@ public struct DiscoboxApplication: App {
                 }
             }
             CommandGroup(after: .newItem) {
-                Button("Refresh Workspace") { Task { await workspace.refresh() } }
+                Button("Refresh Workspace") { Task { await connections.refreshWorkspace() } }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!workspace.connectionState.isConnected)
+                    .disabled(!connections.sessions.contains(where: { $0.connectionState.isConnected }))
                 Button("Disconnect Selected Computer") { connections.disconnect(connections.activeID) }
                     .disabled(!workspace.connectionState.canReconnect && !workspace.connectionState.isConnecting)
             }

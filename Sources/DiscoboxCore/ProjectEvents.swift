@@ -5,6 +5,7 @@ struct ProjectBoxEvent: Decodable, Sendable {
     let runtimeState, errorMessage: String?
     let tags: [String: String]?
     let program: Program?
+    var parentSandboxId: String?
     struct Program: Codable, Equatable, Sendable {
         let state: String
         let kind: String?
@@ -115,7 +116,7 @@ extension ProjectBoxEvent {
     func applying(to metadata: Sandbox?) -> Sandbox {
         let runtime = metadata?.runtime
         let config = metadata?.config
-        var box = Sandbox(id: sandboxId, projectId: projectId,
+        var box = Sandbox(id: sandboxId, projectId: projectId, parentSandboxId: parentSandboxId,
                           displayName: metadata?.displayName ?? name,
                           config: .init(name: name, model: config?.model, harnessConfigId: config?.harnessConfigId, source: config?.source),
                           runtime: .init(state: state, runtimeState: runtimeState, errorMessage: errorMessage,

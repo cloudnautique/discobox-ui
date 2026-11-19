@@ -26,10 +26,14 @@ private actor UsageFixture: DiscoboxClient {
         case .usage:
             usageReads += 1
             if request.usagePage?.host == "api.anthropic.com" { return Data(#"{"records":[],"through":"","full":false}"#.utf8) }
+            if request.usagePage?.after == "http_2" {
+                return Data(#"{"records":[{"id":"http_3","poolId":"pool","sandboxId":"box1","createdAt":"2026-10-27T18:00:00Z","provider":"codex"}],"through":"http_3","full":false}"#.utf8)
+            }
             return Data(#"{"records":[{"id":"http_2","poolId":"pool","sandboxId":"box2","createdAt":"2026-10-27T17:00:00Z","provider":"codex"},{"id":"http_1","poolId":"pool","sandboxId":"box1","createdAt":"2026-10-27T16:00:00Z","provider":"codex"}],"through":"http_2","full":false}"#.utf8)
         case .auditBody:
             bodyReads += 1
-            return try JSONSerialization.data(withJSONObject: ["text": #"{"rate_limit":{"primary_window":{"used_percent":70}}}"#, "truncated": truncated])
+            let percent = request.recordID == "http_3" ? 83 : 70
+            return try JSONSerialization.data(withJSONObject: ["text": #"{"rate_limit":{"primary_window":{"used_percent":\#(percent)}}}"#, "truncated": truncated])
         default: throw DiscoboxError("Unexpected operation")
         }
     }
@@ -72,9 +76,11 @@ private actor UsageFixture: DiscoboxClient {
     await usage.refresh(client: client, project: "p", boxes: boxes)
     for _ in 0..<10 { await usage.refresh(client: client, project: "p", boxes: boxes) }
     #expect(await client.usageReads == 2)
+    #expect(usage.snapshots["h"]?.windows.first?.usedPercent == 70)
     now = now.addingTimeInterval(61)
     await usage.refresh(client: client, project: "p", boxes: boxes)
     #expect(await client.usageReads == 4)
+    #expect(usage.snapshots["h"]?.windows.first?.usedPercent == 83)
 }
 
 @MainActor @Test func cancellingUsageStopsBackgroundWorkWithoutHoldingUIActor() async {

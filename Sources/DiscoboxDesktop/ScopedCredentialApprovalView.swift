@@ -22,6 +22,12 @@ struct ScopedCredentialApprovalView: View {
     @State private var creating = false
     @State private var newName = ""
     @State private var newValue = ""
+    @State private var editedRoutes: [JSONValue]?
+    @State private var newMaximum = "3600"
+    @State private var editingRoutes = false
+    private var newCredentialRoutes: [JSONValue] {
+        editedRoutes ?? (request["use"]["routes"].array + request["delegate"]["routes"].array)
+    }
     @State private var reviewRequest = UUID()
     @State private var contextDraft = ""
     private var request: JSONValue { item.request }
@@ -133,7 +139,10 @@ struct ScopedCredentialApprovalView: View {
             await reload(selectDefault: false)
         }.onChange(of: use.duration) { _, value in if use.decision == "approve" { delegate.duration = value } }
             .onChange(of: use.decision) { _, value in if value == "approve" { delegate.duration = use.duration } }
-            .onChange(of: creating) { if !creating { newValue = "" } }
+            .onChange(of: creating) { if !creating { newValue = ""; editedRoutes = nil; editingRoutes = false; newMaximum = "3600" } }
+            .sheet(isPresented: $editingRoutes) {
+                CredentialRouteEditor(routes: newCredentialRoutes) { editedRoutes = $0 }
+            }
             .onDisappear { closed = true; newValue = "" }
     }
     private var credentialChoice: some View {
@@ -144,12 +153,17 @@ struct ScopedCredentialApprovalView: View {
             if pinned { Text("This box’s existing credential determines the choice.").font(.caption).foregroundStyle(.secondary) }
             if creating {
                 InlineTokenCredentialForm(name: $newName, value: $newValue,
-                    canSave: !busy && !loading && !requiresReload && !newName.isEmpty && !newValue.isEmpty,
+                    canSave: !busy && !loading && !requiresReload && !newName.isEmpty && !newValue.isEmpty && (try? CredentialLimits.lifetimeSeconds(newMaximum)) != nil,
                     save: createCredential, cancel: { creating = false; newValue = "" }) {
-                        Text("Destination: " + item.destinationSummary).font(.caption).foregroundStyle(.secondary)
-                        DisclosureGroup("New credential restrictions") {
-                            RouteReview(routes: request["use"]["routes"].array + request["delegate"]["routes"].array, title: "Allowed routes")
-                            Text("Maximum lifetime: one hour. Raw delivery is off.").font(.caption).foregroundStyle(.secondary)
+                        Text(editedRoutes == nil ? "This request’s routes will become the shared credential’s limit for every box." : "Your edited routes will limit this credential for every box. The approval below still uses the requested scope.").font(.caption).foregroundStyle(.secondary)
+                        Button("Edit credential routes…") { editingRoutes = true }.disabled(busy || loading)
+                            .accessibilityIdentifier("credential.editRoutes")
+                        DisclosureGroup("Shared credential limits") {
+                            RouteReview(routes: newCredentialRoutes, title: "Destinations")
+                            StudioConfirmationField(title: "Maximum grant lifetime in seconds") {
+                                TextField("Seconds", text: $newMaximum)
+                            }
+                            Text("Zero allows grants without expiry. Raw delivery is off.").font(.caption).foregroundStyle(.secondary)
                         }.font(.caption)
                     }
             } else if secret != .null {
@@ -292,7 +306,7 @@ struct ScopedCredentialApprovalView: View {
         guard !busy, !loading, !requiresReload, creating, let connection else { return }
         busy = true; error = nil; operationStatus = "Checking the request…"
         let body: JSONValue
-        do { body = try TokenCredentialPayload.current(name: newName, value: newValue, routes: request["use"]["routes"].array + request["delegate"]["routes"].array) }
+        do { body = try TokenCredentialPayload.current(name: newName, value: newValue, routes: newCredentialRoutes, maximum: newMaximum) }
         catch { busy = false; self.error = error.localizedDescription; return }
         Task {
             defer { busy = false; newValue = "" }
@@ -348,6 +362,7 @@ struct RouteReview: View {
                     Label(route["hosts"].array.map(\.string).joined(separator: ", "), systemImage: route["blocked"] == .bool(true) ? "nosign" : "network")
                     Text((route["methods"].array.isEmpty ? "Any method" : route["methods"].array.map(\.string).joined(separator: ", ")) + " · " + (route["paths"].array.isEmpty ? "Any path" : route["paths"].array.map(\.string).joined(separator: ", "))).font(.caption.monospaced())
                     if route["graphql"] != .null { Text("GraphQL: " + route["graphql"].pretty).font(.caption.monospaced()) }
+                    if route["body"] != .null { Text("Body locations: " + route["body"]["places"].array.map(\.string).joined(separator: ", ")).font(.caption.monospaced()) }
                     if route["mcp"] != .null { Text("MCP tools: " + (route["mcp"]["tools"].array.isEmpty ? "Any tool" : route["mcp"]["tools"].array.map(\.string).joined(separator: ", "))).font(.caption.monospaced()) }
                     if route["blocked"] == .bool(true) { Text("Blocked").font(.caption.weight(.semibold)).foregroundStyle(.red) }
                 }.textSelection(.enabled)

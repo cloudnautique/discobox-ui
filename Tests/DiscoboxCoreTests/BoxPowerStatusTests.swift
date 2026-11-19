@@ -77,13 +77,85 @@ private func powerBox(display: String = "running", reported: String? = nil) thro
     #expect(!workspace.selection.canAttachTerminal(live))
 }
 
-private actor PowerInventoryFixture: DiscoboxClient {
+@MainActor @Test func runningAcrossComputersReconcilesRemotePowerWhileKeepingTheOpenTerminal() async throws {
+    let hub = Connections()
+    let laptop = ConnectionProfile(name: "Laptop", endpoint: "https://laptop.invalid")
+    hub.syncProfiles([laptop])
+    for host in hub.sessions {
+        host.pollSleep = { _, _ in try await Task.sleep(for: .seconds(3600)) }
+    }
+    let local = try await hub.connect(.thisComputer, demo: true) { PowerInventoryFixture() }
+    defer { hub.disconnectAll() }
+    await hub.selectBox(.init(connection: local.id, box: "demo-ui"))
+    let client = PowerInventoryFixture()
+    await client.setReport(Date.now.addingTimeInterval(-180).ISO8601Format())
+    let remote = try await hub.connect(laptop, demo: true, select: false) { client }
+    await remote.selection.selectBox("demo-ui")
+    try await client.confirmRunning()
+    try #require(remote.eventsCurrent)
+    let terminal = try #require(local.selection.execID)
+    let originalReads = await client.counts
+    #expect(remote.cadence.eventInventoryInterval == 300)
+
+    // The pool confirms the same running state. No new project event is emitted.
+    await client.setReport(Date.now.ISO8601Format())
+    func expectBothComputers() async throws {
+        let limit = ContinuousClock.now + .seconds(3)
+        while !hub.browserBoxes.contains(where: { $0.location.connection == remote.id }) && ContinuousClock.now < limit {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(Set(hub.browserBoxes.map(\.location.connection)) == [local.id, remote.id])
+    }
+    hub.browser.filter = .running
+    try await expectBothComputers()
+    #expect(remote.cadence.eventInventoryInterval == 60)
+    let refreshed = await client.counts
+    #expect(refreshed[.sandboxes, default: 0] == originalReads[.sandboxes, default: 0] + 1)
+    #expect(refreshed[.execs] == originalReads[.execs] && refreshed[.services] == originalReads[.services])
+
+    hub.refreshPolicy.manual = true
+    await client.setReport(Date.now.addingTimeInterval(-180).ISO8601Format())
+    await hub.refreshWorkspace()
+    #expect(Set(hub.browserBoxes.map(\.location.connection)) == [local.id])
+    let manualReads = await client.counts
+    #expect(manualReads[.sandboxes, default: 0] == refreshed[.sandboxes, default: 0] + 1)
+    #expect(manualReads[.execs] == refreshed[.execs] && manualReads[.services] == refreshed[.services])
+    hub.browser.computerID = local.id
+    #expect(remote.cadence.eventInventoryInterval == 300)
+    hub.refreshPolicy.manual = false
+    await client.setReport(Date.now.ISO8601Format())
+    hub.browser.computerID = nil
+    try await expectBothComputers()
+    #expect(hub.activeID == local.id && local.selection.execID == terminal)
+    hub.presence = .hidden
+    #expect(remote.cadence.eventInventoryInterval == 300)
+}
+
+private actor PowerInventoryFixture: DiscoboxClient, ProjectEventSource {
     let demo = DemoClient()
     var report = Date.now.ISO8601Format()
     var online = true
+    private(set) var counts: [BridgeRequest.Operation: Int] = [:]
+    private var receiveEvents: ProjectEventReceiver?
+    func readEvents(endpoint: String, project: String, generation: UUID, after: Int64?, receive: @escaping ProjectEventReceiver) async throws {
+        receiveEvents = receive
+        try await Task.sleep(for: .seconds(3600))
+    }
+    func confirmRunning() async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while receiveEvents == nil && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let receive = try #require(receiveEvents)
+        let box = ProjectBoxEvent(projectId: "demo", sandboxId: "demo-ui", name: "Fixture", state: "ready",
+                                  displayState: "running", runtimeState: "running", errorMessage: nil, tags: nil, program: nil)
+        try await receive([.init(version: 1, kind: .event, id: 1, type: "sandbox.updated", data: box, retry: nil),
+                           .init(version: 1, kind: .checkpoint, id: 1, type: nil, data: nil, retry: nil)])
+    }
     func setReport(_ value: String) { report = value }
     func goOffline() { online = false }
     func perform(_ request: BridgeRequest) async throws -> Data {
+        counts[request.operation, default: 0] += 1
         guard online else { throw URLError(.networkConnectionLost) }
         let data = try await demo.perform(request)
         guard request.operation == .sandboxes else { return data }

@@ -111,10 +111,14 @@ jitter so it cannot increase the stated maximum steady-state request rate:
 | Resource | Focused, selected host | Visible but unfocused | Hidden or unselected host |
 | --- | --- | --- | --- |
 | Box lifecycle/activity | Project SSE subscription | Same subscription | Same subscription |
-| Full box metadata | DB-only reconciliation every 60 s | Every 60 s | Every 300 s |
+| Full box metadata | DB-only reconciliation every 60 s | Every 60 s for the selected host | Every 300 s, or every 60 s for computers included in a visible Running list |
 | Selected running box's execs | On demand; 30 s reconciliation while a terminal pane is visible | 60 s while visible | No automatic reads |
 | Services | On opening a stale services panel; 60 s while that panel is visible | 120 s while visible | No automatic reads |
 | Usage | Incremental refresh no faster than 60 s when a usage surface is visible | Same | Paused |
+
+Opening Running or expanding its computer scope requests fresh box metadata for
+newly included computers. Pool confirmations can advance the power timestamp
+without generating a lifecycle event.
 
 Keep the current DB-only inventory cadence as the compatibility fallback when a
 server definitively does not support SSE. Do not reintroduce guest detail reads

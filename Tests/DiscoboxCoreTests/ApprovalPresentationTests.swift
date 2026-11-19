@@ -42,3 +42,18 @@ import Testing
     #expect(try CredentialLimits.payload(secret: current, seconds: "1800", host: "ignored")["limits"] == .object(["maxBindingTTLSeconds": .number(1800)]))
     #expect(throws: DiscoboxError.self) { try CredentialLimits.payload(secret: current, seconds: "-1", host: "") }
 }
+
+@Test func sharedRouteEditsKeepGrantLimitsAndCredentialCreationSeparate() throws {
+    let route: JSONValue = .object(["hosts": .array([.string("api.example.test")]), "methods": .array([.string("POST")])])
+    let current: JSONValue = .object(["id": .string("sec"), "maxBindingTTLSeconds": .number(3600)])
+    let edit = try CredentialLimits.payload(secret: current, seconds: "3600", host: "", routes: [route])
+    #expect(edit["expectedSecret"] == current && edit["limits"] == .object(["routes": .array([route])]))
+    #expect(try CredentialLimits.payload(secret: current, seconds: "1209600", host: "", routes: [])["limits"] ==
+        .object(["routes": .array([]), "maxBindingTTLSeconds": .number(1209600)]))
+    #expect(throws: DiscoboxError.self) {
+        try CredentialLimits.payload(secret: .object(["maxGrantTTLSeconds": .number(3600)]), seconds: "3600", host: "", routes: [])
+    }
+    let created = try TokenCredentialPayload.current(name: "Fixture", value: "fixture", routes: [route], maximum: "1209600")
+    #expect(created["routes"] == .array([route]) && created["maxBindingTTLSeconds"] == .number(1209600))
+    #expect(throws: DiscoboxError.self) { try TokenCredentialPayload.current(name: "Fixture", value: "fixture", routes: [], maximum: "-1") }
+}

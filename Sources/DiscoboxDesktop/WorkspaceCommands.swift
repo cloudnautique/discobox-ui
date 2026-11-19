@@ -239,7 +239,9 @@ import DiscoboxCore
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) { toggleAgentMaximization() }
-        case .refresh: Task { await workspace.refresh() }
+        case .refresh:
+            if let connections { Task { await connections.refreshWorkspace() } }
+            else { Task { await workspace.refresh() } }
         case .help: showCommands = true
         case .disconnect:
             if let connections { connections.disconnect(connections.activeID) } else { workspace.disconnect() }

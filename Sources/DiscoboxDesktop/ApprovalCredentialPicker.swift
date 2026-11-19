@@ -44,14 +44,14 @@ struct InlineTokenCredentialForm<Restrictions: View>: View {
             if let destinationHost {
                 TextField("Allowed destination host", text: destinationHost).textFieldStyle(.roundedBorder)
             }
-            Text("Saving stores a credential. It does not approve this request.").font(.caption).foregroundStyle(.secondary)
+            restrictions
+            Text("Save the credential here, then review and approve the request.").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel", action: cancel)
                 Button("Save credential", action: save).disabled(!canSave)
                     .accessibilityIdentifier("approval.saveCredential")
             }
-            restrictions
         }.onSubmit { if canSave { save() } }
     }
 }

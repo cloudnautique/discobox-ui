@@ -71,15 +71,16 @@ var (
 
 // operations is the companion's whole bounded request surface.
 var operations = map[string]operation{
-	"boxLink":        readOp(boxLinkOperation),
-	"serverPeer":     readOp((*Bridge).routed),
-	"defaultProject": readOp((*Bridge).routed),
-	"harnesses":      readOp((*Bridge).routed),
-	"sandboxes":      readOp((*Bridge).routed),
-	"execs":          readOp((*Bridge).routed),
-	"services":       readOp((*Bridge).routed),
-	"screen":         readOp((*Bridge).routed),
-	"newShell":       {permission: permissionShell, run: (*Bridge).newShell},
+	"credentialRoutes": readOp(previewCredentialRoutes),
+	"boxLink":          readOp(boxLinkOperation),
+	"serverPeer":       readOp((*Bridge).routed),
+	"defaultProject":   readOp((*Bridge).routed),
+	"harnesses":        readOp((*Bridge).routed),
+	"sandboxes":        readOp((*Bridge).routed),
+	"execs":            readOp((*Bridge).routed),
+	"services":         readOp((*Bridge).routed),
+	"screen":           readOp((*Bridge).routed),
+	"newShell":         {permission: permissionShell, run: (*Bridge).newShell},
 
 	"setDefaultHarness":     writeOp((*Bridge).setDefaultHarness),
 	"updateSecretLimits":    writeOp((*Bridge).credentialLimits),

@@ -86,6 +86,7 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         local.selection.guestBudget = guestBudget
         local.usageQueue = usageQueue
         local.applyRefreshPolicy(refreshPolicy)
+        browser.runningScopeChanged = { [weak self] in self?.updateCadence() }
         updateCadence()
     }
     public func session(_ id: String) -> ConnectionSession? { sessions.first { $0.id == id } }
@@ -105,7 +106,24 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
     }
     private func updateCadence() {
         let usageVisible = usageWindows.contains { presenceReports[$0].map { $0 != .hidden } ?? false }
-        for host in sessions { host.cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID, usageVisible: usageVisible) }
+        for host in sessions {
+            var cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID, usageVisible: usageVisible)
+            cadence.showsRunningBoxes = presence != .hidden && browser.filter == .running &&
+                (browser.computerID == nil || browser.computerID == host.id)
+            host.cadence = cadence
+        }
+    }
+    /// Refresh the open workspace and the box lists represented in the sidebar.
+    /// Only the open workspace needs terminal and service details.
+    public func refreshWorkspace() async {
+        let selected = active
+        let scope = browser.computerID
+        await withTaskGroup(of: Void.self) { group in
+            for host in sessions where host.connectionState.isConnected && (scope == nil || scope == host.id || host === selected) {
+                let includeDetails = host === selected
+                group.addTask { await host.refresh(includeDetails: includeDetails) }
+            }
+        }
     }
     public func activate(_ id: String) {
         if session(id) != nil { activeID = id }

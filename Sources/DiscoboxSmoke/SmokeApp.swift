@@ -75,7 +75,7 @@ import DiscoboxCore
                 connections.syncProfiles([.init(name: "Laptop", endpoint: "https://laptop.invalid"),
                                           .init(name: "Desktop", endpoint: "https://desktop.invalid")])
                 defaults.set(320.0, forKey: "harnessUsageShelfHeight")
-                try await SidebarLayoutSmoke.run(session: session, store: terminals, commands: commands)
+                try await SidebarLayoutSmoke.run(session: session, store: terminals, commands: commands, defaults: defaults)
             case "--terminal-smoke": await TerminalSmoke.run(workspace: session, store: terminals)
             case "--command-smoke": await CommandSmoke.run(workspace: session, connections: connections, commands: commands, terminals: terminals, client: client)
             case "--dialog-smoke": await DialogSmoke.run(workspace: session, commands: commands, terminals: terminals)

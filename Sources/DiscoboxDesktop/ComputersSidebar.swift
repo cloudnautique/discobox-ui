@@ -12,6 +12,7 @@ struct ComputersSidebar: View {
     @State private var resourceHost: ConnectionSession?
     @State private var purge: SidebarPurgeRequest?
     @State private var bulkAction: SidebarBulkActionRequest?
+    @State private var collapsedParents: Set<BoxLocation> = []
     @AppStorage("sidebarComputersExpanded") private var computersExpanded = true
     @AppStorage("collapsedComputerRepositoryGroups") private var collapsedData = "[]"
     private var browser: BoxBrowser { connections.browser }
@@ -74,6 +75,10 @@ struct ComputersSidebar: View {
         // Derive the visible rows and bulk availability once per body, not per row.
         let snapshot = connections.browserSnapshot, pins = self.pins
         let items = visibleItems(snapshot, pins: pins)
+        let outline = grouping == "parent" ? BoxParentOutline(items) : nil
+        let selectedAncestors = workspace.selection.sandboxID.flatMap { id in
+            outline?.ancestors(of: .init(connection: connections.activeID, box: id))
+        } ?? []
         let selectionPin = connections.browserSelectionPin(in: snapshot)
         let selectedIDs = browser.filter == .archived ? browser.archivedSelection : browser.selectedBoxes
         let selected = items.filter { selectedIDs.contains($0.location) }
@@ -96,7 +101,11 @@ struct ComputersSidebar: View {
                             }
                         }
                     }
-                    if grouping == "none" {
+                    if let outline {
+                        ForEach(outline.visibleRows(collapsed: collapsedParents)) { entry in
+                            row(entry.item, snapshot, context, entry: entry)
+                        }
+                    } else if grouping == "none" {
                         ForEach(items) { item in row(item, snapshot, context) }
                     } else {
                         let groups = Dictionary(grouping: items) { BoxOrganization.group($0.box, by: grouping, tagKey: tagKey) }
@@ -124,13 +133,21 @@ struct ComputersSidebar: View {
                     .overlay { if items.isEmpty && pins.isEmpty && selectionPin == nil { emptyState } }
                     .onDeleteCommand { confirmPurge() }
                     .onChange(of: snapshot.boxes.map(\.location)) { connections.reconcileCreations() }
+                    .onChange(of: selectedAncestors, initial: true) { collapsedParents.subtract(selectedAncestors) }
+                    .onChange(of: grouping) {
+                        if let box = workspace.selection.sandboxID {
+                            browser.requestReveal(.init(connection: connections.activeID, box: box))
+                        }
+                    }
                     .onChange(of: browser.revealRevision, initial: true) {
                         guard let location = browser.revealLocation,
                               connections.activeID == location.connection, workspace.selection.sandboxID == location.box else { return }
-                        if let item = items.first(where: { $0.location == location }) {
+                        if let outline {
+                            collapsedParents.subtract(outline.ancestors(of: location))
+                        } else if let item = items.first(where: { $0.location == location }) {
                             let group = BoxOrganization.group(item.box, by: grouping, tagKey: tagKey)
                             collapsed.remove(collapseKey(group))
-                        } else if !pins.contains(where: { $0.id == location }) { return }
+                        } else if !pins.contains(where: { $0.id == location }) && selectionPin?.location != location { return }
                         let generation = workspace.connectionState.connectionID
                         Task { @MainActor in
                             await Task.yield()
@@ -295,10 +312,14 @@ struct ComputersSidebar: View {
     /// Rows receive plain values, so a change to one host's workspace does not
     /// invalidate every row. Box action sheets get their runtime environment
     /// where they are presented, so rows only carry their host's workspace.
-    private func row(_ item: ConnectedBox, _ snapshot: BrowserSnapshot, _ context: SidebarRowContext) -> some View {
+    private func row(_ item: ConnectedBox, _ snapshot: BrowserSnapshot, _ context: SidebarRowContext, entry: BoxParentOutline.Row? = nil) -> some View {
         Group {
             if let host = connections.session(item.location.connection) {
                 ComputerBoxRow(box: item.box, host: host, computer: context.showComputer ? item.computer : nil, presentation: snapshot.row(item),
+                    entry: entry, expanded: !collapsedParents.contains(item.location), toggleChildren: {
+                        if collapsedParents.contains(item.location) { collapsedParents.remove(item.location) }
+                        else { collapsedParents.insert(item.location) }
+                    },
                     selectionCount: context.selection.count > 1 && context.selection.contains(item.location) ? context.selection.count : 0,
                     archived: context.archived, canPurgeSelection: context.canPurge, purgeSelection: confirmPurge,
                     bulkActions: context.bulkActions, chooseBulkAction: confirmBulkAction,
@@ -308,7 +329,7 @@ struct ComputersSidebar: View {
                     .environment(host)
             }
         }.tag(item.location).listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7))
+            .listRowInsets(EdgeInsets(top: 2, leading: 7 + CGFloat(min(entry?.depth ?? 0, 5)) * 12, bottom: 2, trailing: 7))
     }
     private func connect(_ host: ConnectionSession) {
         Task { do { _ = try await connections.connect(host.profile) { try ConnectionClients.make(host.profile) } }
@@ -394,6 +415,9 @@ private struct ComputerBoxRow: View {
     let host: ConnectionSession
     let computer: String?
     let presentation: BoxRowPresentation
+    let entry: BoxParentOutline.Row?
+    let expanded: Bool
+    let toggleChildren: () -> Void
     /// The selection size when this row is part of a multiple selection, else 0.
     let selectionCount: Int
     let archived: Bool
@@ -406,7 +430,21 @@ private struct ComputerBoxRow: View {
     var body: some View {
         let connection = host.connectionState.connectionID
         let pending = presentation.isPending
-        BoxRow(box: box, computer: computer, presentation: presentation)
+        HStack(alignment: .top, spacing: 3) {
+            if let entry {
+                if entry.childCount > 0 {
+                    Button(action: toggleChildren) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold)).frame(width: 16, height: 30)
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.borderless)
+                        .help(expanded ? "Collapse children" : "Expand children")
+                        .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(entry.childCount) children of \(presentation.title)")
+                } else { Color.clear.frame(width: 16, height: 1).accessibilityHidden(true) }
+            }
+            BoxRow(box: box, computer: computer, showRepository: entry != nil,
+                   hiddenAttention: expanded ? 0 : entry?.attentionBelow ?? 0, presentation: presentation)
+        }
             .contextMenu {
                 if selectionCount > 1 {
                     ForEach(bulkActions) { action in

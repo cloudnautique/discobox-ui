@@ -31,7 +31,7 @@ func (b *Bridge) usage(ctx context.Context, req wire.Request) (wire.Response, er
 		query.Set("after", req.PoolID+":"+cursor.String())
 		query.Set("order", "asc")
 	}
-	result, err := b.Call(ctx, http.MethodGet, "/api/projects/"+req.ProjectID+"/audit/http?"+query.Encode(), nil)
+	result, err := b.Call(ctx, http.MethodGet, "/projects/"+req.ProjectID+"/audit/http?"+query.Encode(), nil)
 	if err != nil || result.Status != 200 {
 		return result, err
 	}
@@ -92,7 +92,7 @@ func (b *Bridge) usageHeaders(ctx context.Context, req wire.Request) (wire.Respo
 	if ValidID(req.ProjectID) != nil || ValidID(req.PoolID) != nil || ValidID(req.RecordID) != nil || ValidID(req.SandboxID) != nil {
 		return wire.Response{}, fmt.Errorf("invalid audit identity")
 	}
-	result, err := b.Call(ctx, "GET", "/api/projects/"+req.ProjectID+"/pools/"+req.PoolID+"/audit/http/"+req.RecordID+"?sandboxId="+url.QueryEscape(req.SandboxID), nil)
+	result, err := b.Call(ctx, "GET", "/projects/"+req.ProjectID+"/pools/"+req.PoolID+"/audit/http/"+req.RecordID+"?sandboxId="+url.QueryEscape(req.SandboxID), nil)
 	if err != nil {
 		return wire.Response{}, err
 	}

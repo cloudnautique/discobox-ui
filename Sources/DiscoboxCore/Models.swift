@@ -11,6 +11,7 @@ public struct Project: Codable, Identifiable, Sendable, Equatable {
 public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     public let id: String
     public let projectId: String
+    public let parentSandboxId: String?
     public let displayName: String
     public let config: Configuration
     public let runtime: Runtime
@@ -21,7 +22,7 @@ public struct Sandbox: Codable, Identifiable, Sendable, Equatable {
     public let harnessConfig: JSONValue?
     public let discoboxApi: Bool?
     private enum CodingKeys: String, CodingKey {
-        case id, projectId, displayName, config, runtime, meta, poolId, platform, createdAt, harnessConfig, discoboxApi, preparationStatus
+        case id, projectId, parentSandboxId, displayName, config, runtime, meta, poolId, platform, createdAt, harnessConfig, discoboxApi, preparationStatus
     }
     var projectProgram: ProjectBoxEvent.Program? = nil
     public var preparationStatus: String? = nil
@@ -178,7 +179,7 @@ public struct ServicesResponse: Decodable, Sendable {
 /// Go and Swift tests both check, so neither side can drift alone.
 public struct BridgeRequest: Encodable, Sendable {
     public static let protocolVersion = 2
-    public enum Operation: String, Encodable, Sendable, CaseIterable { case boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, saveAuditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, defaultProject, sandboxes, execs, services, screen, newShell, closeShell, closeTerminal, createBox, harnesses, audit
+    public enum Operation: String, Encodable, Sendable, CaseIterable { case credentialRoutes, boxLink, serverPeer, setDefaultHarness, updateSecretLimits, harnessDetails, harnessChanges, saveHarnessChanges, discardHarnessChanges, poolConfiguration, updatePoolProxy, approvalContext, poolResources, clearPoolCache, deleteSecret, usageHeaders, usage, boxAction, auditBody, saveAuditBody, files, upload, download, tools, openTool, newAgent, approvals, secrets, answer, createSecret, defaultProject, sandboxes, execs, services, screen, newShell, closeShell, closeTerminal, createBox, harnesses, audit
         /// The companion flag this operation needs. It keeps a polling read
         /// from mutating by mistake; it is not a security boundary.
         public enum Permission: String, Sendable { case read, manage, shell }
@@ -188,7 +189,7 @@ public struct BridgeRequest: Encodable, Sendable {
             case .setDefaultHarness, .updateSecretLimits, .saveHarnessChanges, .discardHarnessChanges, .updatePoolProxy,
                  .clearPoolCache, .deleteSecret, .boxAction, .saveAuditBody, .upload, .download, .openTool, .newAgent,
                  .answer, .createSecret, .closeShell, .closeTerminal, .createBox: .manage
-            case .boxLink, .serverPeer, .harnessDetails, .harnessChanges, .poolConfiguration, .approvalContext, .poolResources,
+            case .credentialRoutes, .boxLink, .serverPeer, .harnessDetails, .harnessChanges, .poolConfiguration, .approvalContext, .poolResources,
                  .usageHeaders, .usage, .auditBody, .files, .tools, .approvals, .secrets, .defaultProject, .sandboxes, .execs,
                  .services, .screen, .harnesses, .audit: .read
             }
