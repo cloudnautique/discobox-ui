@@ -56,7 +56,13 @@ struct BoxWorkspaceView: View {
             }
         }
         .onChange(of: commands.showInspector) { _, visible in if !visible { focusActiveTerminal() } }
-        .onChange(of: commands.agentFocusRequest) { focusActiveTerminal(agent: true) }
+        .onChange(of: layout.agentFocused || !layout.isSplit, initial: true) { _, active in
+            if active { commands.requestAgentFocus(in: layout) }
+            else if commands.agentFocusRequest?.layout === layout { commands.agentFocusRequest?.pending = false }
+        }
+        .onDisappear {
+            if commands.agentFocusRequest?.layout === layout { commands.agentFocusRequest?.pending = false }
+        }
         .onChange(of: commands.showFiles) { _, show in if show { layout.open("files") } }
         .onChange(of: commands.showAudit) { _, show in if show { layout.open("audit") } }
         .sheet(item: $closing) { request in TerminalCloseSheet(request: request) { closeTerminal(request) } }
@@ -67,13 +73,16 @@ struct BoxWorkspaceView: View {
     private var agentPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Label("Agent", systemImage: "sparkles").fontWeight(.semibold)
-                Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 8) {
+                    Label("Agent", systemImage: "sparkles").fontWeight(.semibold)
+                    Text(box.harnessName ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }.contentShape(Rectangle()).onTapGesture { requestAgentFocus() }
                 if workspace.approvalStore.approvals.contains(where: { $0.boxID == box.id }) {
                     Button { commands.reviewApprovals(for: box.id, on: workspace) } label: { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red) }
                         .help("Review credential requests").accessibilityLabel("Review credential requests")
                 }
-                Spacer()
+                Spacer().frame(maxHeight: .infinity)
+                    .contentShape(Rectangle()).onTapGesture { requestAgentFocus() }
                 if box.isRunning, let configuration = harnessConfiguration,
                    !(box.runtime.agentStatus ?? .null)["harnessConfigCandidate"].string.isEmpty {
                     HarnessChangesControl(box: box, harness: configuration, window: commands.window) { manageHarness(configuration) }
@@ -91,9 +100,8 @@ struct BoxWorkspaceView: View {
                 }.help(commands.isAgentMaximized ? "Restore workspace layout" : "Maximize agent")
                     .accessibilityIdentifier("workspace.maximizeAgent")
             }.workspacePaneHeader()
-                .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1) }
-                .onTapGesture { layout.agentFocused = true }
-            agentContent
+                .overlay(alignment: .bottom) { DiscoboxAppearance.border.frame(height: 1).allowsHitTesting(false) }
+            agentContent.environment(\.agentFocusHandoff, commands.agentFocusRequest?.layout === layout ? commands.agentFocusRequest : nil)
         }.frame(minWidth: 280, minHeight: 180, maxHeight: .infinity)
             .background(WorkspaceSplitPosition(key: persistenceKey, enabled: layout.isSplit, secondaryMinimum: layout.shellsSplit && layout.shellSideBySide ? 720 : 360,
                 revision: layout.shellsSplit ? (layout.shellSideBySide ? "columns" : "stack") : "tabs"))
@@ -103,7 +111,7 @@ struct BoxWorkspaceView: View {
     }
     @ViewBuilder private var agentContent: some View {
         if let harness, box.isRunning, harness.status == "running" {
-            ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
+            ConsoleView(terminal: harness, focused: (layout.agentFocused || !layout.isSplit) && commands.agentFocusRequest?.layout === layout, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
         } else if let creation, creation.phase == .failed {
             ContentUnavailableView {
                 Label("Box needs attention", systemImage: "exclamationmark.triangle")
@@ -118,13 +126,16 @@ struct BoxWorkspaceView: View {
                 Text("Starting your box…").font(.headline)
                 Text(box.preparationStatus?.isEmpty == false ? box.preparationStatus! : box.status).font(.callout).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle()).onTapGesture { requestAgentFocus() }
         } else if let harness, !["starting", "repairing"].contains(box.runtime.displayState ?? "") {
-            ConsoleView(terminal: harness, focused: layout.agentFocused || !layout.isSplit, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
+            ConsoleView(terminal: harness, focused: (layout.agentFocused || !layout.isSplit) && commands.agentFocusRequest?.layout === layout, onFocus: { layout.agentFocused = true }).studioTerminalFrame()
         } else if creation != nil {
             ProgressView("Waiting for the agent…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle()).onTapGesture { requestAgentFocus() }
         } else if ["starting", "repairing"].contains(box.runtime.displayState ?? "") {
             VStack(spacing: 12) { ProgressView(); Text(box.preparationStatus ?? "Preparing the box…").font(.callout).foregroundStyle(.secondary) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle()).onTapGesture { requestAgentFocus() }
         } else { ContentUnavailableView("No harness terminal", systemImage: "terminal", description: Text("A startup hook or harness may have exited. You can still open a shell to inspect this box.")) }
     }
     @ViewBuilder private var companionArea: some View {
@@ -260,8 +271,13 @@ struct BoxWorkspaceView: View {
         }
     }
     private func symbol(_ id: String) -> String { id == "audit" ? "list.bullet.rectangle" : id == "files" ? "folder" : "terminal" }
-    private func focusActiveTerminal(agent: Bool = false) {
-        let exec = agent || layout.agentFocused || !layout.isSplit ? harness?.id : (layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil)
+    private func requestAgentFocus() {
+        layout.agentFocused = true
+        commands.requestAgentFocus(in: layout)
+    }
+    private func focusActiveTerminal() {
+        if layout.agentFocused || !layout.isSplit { requestAgentFocus(); return }
+        let exec = layout.selected.hasPrefix("exec:") ? String(layout.selected.dropFirst(5)) : nil
         guard let exec else { return }
         terminals.focus(.init(connection: workspace.connectionState.connectionID, endpoint: workspace.connectionState.transportEndpoint, project: workspace.connectionState.projectID ?? "", box: box.id, exec: exec, demo: workspace.connectionState.isDemo))
     }

@@ -296,6 +296,7 @@ struct LiveTerminal: View {
     @Environment(Connections.self) private var connections: Connections?
     @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     @Environment(BoxLinkNavigation.self) private var boxLinks: BoxLinkNavigation?
+    @Environment(\.agentFocusHandoff) private var agentHandoff
     @State private var showingPreviousOutput = false
     var body: some View {
         // A single container keeps the presence task alive while the content
@@ -307,6 +308,12 @@ struct LiveTerminal: View {
                 // effect of evaluating body. It also replaces a session that
                 // Reconnect or recovery retired while this view is shown.
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle()).onTapGesture {
+                        if let agentHandoff {
+                            agentHandoff.layout.agentFocused = true
+                            commands?.requestAgentFocus(in: agentHandoff.layout)
+                        }
+                    }
                     .task(id: identity) { _ = store.session(identity) }
             }
         }
@@ -362,24 +369,14 @@ struct TerminalSurface: NSViewRepresentable {
     let view: GhosttyTerminalView
     let focused: Bool
     let onFocus: (() -> Void)?
-    final class Coordinator { var focused = false }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> NSView { TerminalContainerView() }
-    func updateNSView(_ container: NSView, context: Context) {
-        guard let container = container as? TerminalContainerView else { return }
+    @Environment(\.agentFocusHandoff) private var handoff
+    func makeNSView(context: Context) -> TerminalContainerView { TerminalContainerView() }
+    func updateNSView(_ container: TerminalContainerView, context: Context) {
         view.onFocus = onFocus
-        container.requestedFocus = focused
+        container.setFocusRequest(focused, handoff: handoff)
         container.bind(view)
-        if focused && (!context.coordinator.focused || view.superview !== container) {
-            DispatchQueue.main.async { [weak container, weak view] in
-                guard let container, let view, view.superview === container, container.window != nil,
-                      container.requestedFocus else { return }
-                view.window?.makeFirstResponder(view)
-            }
-        }
-        context.coordinator.focused = focused
     }
-    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: TerminalContainerView, coordinator: ()) {
         // TerminalStore owns the surface. SwiftUI may cache and reuse this
         // native container when returning to a host/tab without another update.
         // Leave its child attached; updateNSView reparents it when needed, and
@@ -388,7 +385,36 @@ struct TerminalSurface: NSViewRepresentable {
 }
 
 @MainActor final class TerminalContainerView: NSView {
-    var requestedFocus = false
+    private var wantsFocus = false
+    private var needsFocus = false
+    private var focusScheduled = false
+    private var handoff: AgentFocusRequest?
+    func setFocusRequest(_ focused: Bool, handoff: AgentFocusRequest?) {
+        if focused != wantsFocus || self.handoff !== handoff { needsFocus = focused }
+        wantsFocus = focused
+        self.handoff = handoff
+    }
+
+    // AppKit can attach a zero-sized container or restore the sidebar responder
+    // while a sheet is closing. Layout and window notifications retry the same
+    // request, and ordinary redraws do nothing after it has been fulfilled.
+    @objc private func scheduleFocus() {
+        guard needsFocus, !focusScheduled, handoff?.pending != false,
+              let terminal, terminal.superview === self, window != nil else { return }
+        focusScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.focusScheduled = false
+            guard self.needsFocus, self.handoff?.pending != false, let window = self.window,
+                  window.isKeyWindow, window.attachedSheet == nil, !self.isHiddenOrHasHiddenAncestor,
+                  let terminal = self.terminal, terminal.superview === self, terminal.presentationContainer === self,
+                  self.bounds.width > 0, self.bounds.height > 0 else { return }
+            if window.firstResponder === terminal || window.makeFirstResponder(terminal) {
+                self.needsFocus = false
+                self.handoff?.pending = false
+            }
+        }
+    }
     private var terminal: GhosttyTerminalView?
     func bind(_ view: GhosttyTerminalView) {
         let changed = terminal !== view
@@ -401,6 +427,7 @@ struct TerminalSurface: NSViewRepresentable {
     private func mount() {
         guard window != nil, bounds.width > 0, bounds.height > 0, let terminal,
               terminal.presentationContainer === self else { return }
+        defer { scheduleFocus() }
         if terminal.superview === self {
             // A cached representable can return with a child sized for the
             // previous pane. Autoresizing only applies subsequent size deltas.
@@ -419,20 +446,25 @@ struct TerminalSurface: NSViewRepresentable {
         if window != nil, terminal?.presentationContainer?.window == nil { terminal?.presentationContainer = self }
         mount()
     }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didEndSheetNotification, object: window)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: window)
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else {
+        guard let window else {
             if terminal?.presentationContainer === self { terminal?.presentationContainer = nil }
             return
         }
-        terminal?.presentationContainer = self
-        mount()
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
-            self.mount()
-            guard self.requestedFocus, let terminal = self.terminal, terminal.superview === self else { return }
-            window.makeFirstResponder(terminal)
+        for name in [NSWindow.didEndSheetNotification, NSWindow.didBecomeKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(scheduleFocus), name: name, object: window)
         }
+        terminal?.presentationContainer = self
+        needsFocus = wantsFocus
+        mount()
     }
 }
 

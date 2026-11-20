@@ -58,7 +58,7 @@ import DiscoboxCore
             ("--feature-smoke", { await FeatureSmoke.run() }),
             ("--files-smoke", { await FilesSmoke.run() })
         ]
-        let embedded = ["--terminal-smoke", "--command-smoke", "--dialog-smoke", "--sidebar-layout-smoke"]
+        let embedded = ["--terminal-smoke", "--command-smoke", "--dialog-smoke", "--sidebar-layout-smoke", "--terminal-focus-smoke"]
         let selected = arguments.intersection(Set(standalone.map(\.0) + embedded))
         guard selected.count == 1, let flag = selected.first else {
             print("Choose one smoke check:\n" + (standalone.map(\.0) + embedded).joined(separator: "\n"))
@@ -71,6 +71,8 @@ import DiscoboxCore
             await session.selection.selectBox("demo-ui")
             let terminals = runtimes.runtime(session.id).terminals
             switch flag {
+            case "--terminal-focus-smoke":
+                try await TerminalFocusSmoke.run(connections: connections, session: session, store: terminals, commands: commands)
             case "--sidebar-layout-smoke":
                 connections.syncProfiles([.init(name: "Laptop", endpoint: "https://laptop.invalid"),
                                           .init(name: "Desktop", endpoint: "https://desktop.invalid")])

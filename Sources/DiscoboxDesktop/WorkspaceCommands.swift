@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 import DiscoboxCore
 
+// A request belongs to one box layout in one workspace window. The native
+// terminal consumes it only after AppKit can give that view keyboard focus.
+@MainActor final class AgentFocusRequest {
+    let layout: WorkspaceTabs
+    var pending = true
+    init(layout: WorkspaceTabs) { self.layout = layout }
+}
+
+extension EnvironmentValues {
+    @Entry var agentFocusHandoff: AgentFocusRequest? = nil
+}
+
 @MainActor @Observable final class WorkspaceCommands {
     var bindings: CommandBindings
     var appShortcuts: AppShortcuts
@@ -20,7 +32,11 @@ import DiscoboxCore
     var showApprovals = false
     var showAudit = false
     var tab = WorkspaceTab.terminal
-    var agentFocusRequest = UUID()
+    private(set) var agentFocusRequest: AgentFocusRequest?
+    func requestAgentFocus(in layout: WorkspaceTabs) {
+        agentFocusRequest?.pending = false
+        agentFocusRequest = AgentFocusRequest(layout: layout)
+    }
     var showInspector = false
     var inspectorSection = UserDefaults.standard.string(forKey: "inspectorSection") ?? "services" {
         didSet { UserDefaults.standard.set(inspectorSection, forKey: "inspectorSection") }
@@ -154,10 +170,14 @@ import DiscoboxCore
     func cancelPrefix() { router.cancel(); timeout?.cancel(); hint = nil }
     private func route(_ event: NSEvent) -> NSEvent? {
         if event.type == .keyUp, swallowed.remove(event.keyCode) != nil { return nil }
-        guard let window, event.window === window, window.isKeyWindow,
-              window.attachedSheet == nil else { cancelPrefix(); return event }
-        if event.type == .leftMouseDown { cancelPrefix(); return event }
-        guard event.type == .keyDown else { return event }
+        guard let window, event.window === window, window.attachedSheet == nil else { cancelPrefix(); return event }
+        if event.type == .leftMouseDown {
+            agentFocusRequest?.pending = false
+            cancelPrefix()
+            return event
+        }
+        guard window.isKeyWindow, event.type == .keyDown else { return event }
+        if event.keyCode == 48 || window.firstResponder is NSTextView { agentFocusRequest?.pending = false }
         let flags = event.modifierFlags.intersection([.command, .shift, .control, .option])
         let character = (event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers ?? "").lowercased()
         for action in AppShortcutAction.allCases {
@@ -217,14 +237,12 @@ import DiscoboxCore
             if let layout = currentLayout, layout.isSplit { layout.agentFocused = true }
             else { currentLayout?.open("agent") }
             tab = .terminal
+            if let layout = currentLayout { requestAgentFocus(in: layout) }
             if let exec = (workspace.selection.execs.first(where: { $0.primary == true }) ?? workspace.selection.execs.first) {
                 let generation = workspace.connectionState.connectionID, box = workspace.selection.sandboxID
                 Task {
-                    await workspace.selection.selectExec(exec.id)
                     guard workspace.connectionState.connectionID == generation, workspace.selection.sandboxID == box else { return }
-                    // An already-selected agent still needs keyboard ownership
-                    // after a text field, inspector, or dialog had focus.
-                    agentFocusRequest = UUID()
+                    await workspace.selection.selectExec(exec.id)
                 }
             }
         case .previousTerminal: moveTerminal(-1)
