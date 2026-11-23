@@ -6,12 +6,18 @@ import Observation
 /// that filter or loses the user's search, grouping, and tag choices.
 @MainActor @Observable public final class BoxBrowser {
     public var computerID: String? {
-        didSet { if computerID != oldValue && filter == .running { runningScopeChanged?() } }
+        didSet { if computerID != oldValue { scopeChanged?() } }
     }
     public var filter: BoxFilter = .all {
-        didSet { if (filter == .running) != (oldValue == .running) { runningScopeChanged?() } }
+        didSet { if filter == .running && oldValue != .running { enteredRunningFilter?() } }
     }
-    @ObservationIgnored var runningScopeChanged: (() -> Void)?
+    @ObservationIgnored var scopeChanged: (() -> Void)?
+    @ObservationIgnored var enteredRunningFilter: (() -> Void)?
+    public func showAllComputers() {
+        if computerID == nil { scopeChanged?() } else { computerID = nil }
+        archivedSelection.removeAll()
+        selectedBoxes.removeAll()
+    }
     public var searchText = ""
     public var selectedTags: Set<String> = []
     public var matchAnyTag = false

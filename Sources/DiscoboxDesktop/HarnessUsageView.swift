@@ -152,10 +152,17 @@ private struct UsageSummary: View, @MainActor Equatable {
 private struct UsageComputerHeading: View {
     let computer: UsageComputer
     var body: some View {
-        Label(computer.name, systemImage: "desktopcomputer")
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            .lineLimit(1).help(computer.name)
-            .accessibilityIdentifier("usage.computer." + computer.id)
+        HStack {
+            Label(computer.name, systemImage: "desktopcomputer")
+            if computer.usage.refreshDelayed {
+                Label("Refresh delayed", systemImage: "clock").foregroundStyle(.orange)
+            }
+        }
+        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        .lineLimit(1)
+        .help(computer.usage.lastCheckedAt.map { computer.name + " · Last checked " + $0.formatted() }
+              ?? computer.name + " · Waiting for first usage check")
+        .accessibilityIdentifier("usage.computer." + computer.id)
     }
 }
 
@@ -172,7 +179,8 @@ private struct ComputerUsageSummary: View {
                             Text(harness.name).font(.caption.weight(.semibold)).lineLimit(1)
                             Spacer()
                             if now.timeIntervalSince(snapshot.observedAt) > 900 {
-                                Label("Stale", systemImage: "clock").font(.caption2).foregroundStyle(.orange)
+                                Text("Last reading " + ServerDate.relative(snapshot.observedAt, to: now))
+                                    .font(.caption2).foregroundStyle(.secondary)
                                     .help("Last observed \(snapshot.observedAt.formatted())")
                             }
                         }
@@ -219,7 +227,7 @@ struct HarnessUsageDetails: View {
                         }
                         DisclosureGroup("About these readings") {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("While usage is visible, Discobox checks new quota recordings about once a minute. Readings stay separate for each computer and harness.")
+                                Text("Discobox checks for new quota recordings about every 20 seconds while usage is in focus and every minute while visible in the background. Readings stay separate for each computer and harness.")
                                 ForEach(computers) { computer in
                                     let notices = Array(Set(computer.usage.notices)).sorted()
                                     if !notices.isEmpty {
@@ -235,8 +243,14 @@ struct HarnessUsageDetails: View {
         } footer: {
             HStack {
                 Button("Refresh usage") {
-                    Task { for host in connections.sessions where host.connectionState.isConnected { await host.refreshUsage(force: true) } }
-                }.disabled(computers.isEmpty || computers.contains { $0.usage.isLoading })
+                    Task {
+                        await withTaskGroup(of: Void.self) { group in
+                            for host in connections.sessions where host.connectionState.isConnected {
+                                group.addTask { await host.refreshUsage(force: true) }
+                            }
+                        }
+                    }
+                }.disabled(computers.isEmpty || computers.allSatisfy { $0.usage.isLoading })
                 Spacer()
                 Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction)
             }

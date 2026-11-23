@@ -29,54 +29,10 @@ struct PoolResourcesView: View {
     private var busy: Bool { workspace.pending.clearingPools.contains(poolID) }
     private var selectedRunning: [Sandbox] { boxes.filter { selection.contains($0.id) && BoxAction.stop.isAvailable(for: $0) } }
     var body: some View {
-        StudioConfirmation(title: "Resources", symbol: "gauge.with.dots.needle.33percent", subtitle: computer, width: 860) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("Pool").foregroundStyle(.secondary)
-                    StudioMenuPicker(title: "Pool", selection: $poolID, options: workspace.pools.resources.pools.isEmpty
-                        ? [.init(id: "", title: "No pools available")]
-                        : workspace.pools.resources.pools.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.pools.resources.defaultPoolID ? " (default)" : "")) }, alignment: .left)
-                        .padding(8).studioCard().frame(maxWidth: 360)
-                    Spacer()
-                    Text("Sort by").foregroundStyle(.secondary)
-                    StudioMenuPicker(title: "Sort by", selection: $sort, options: [.init(id: "disk", title: "Disk"), .init(id: "cpu", title: "CPU"), .init(id: "memory", title: "Memory")], alignment: .left)
-                        .padding(8).studioCard().frame(width: 100)
-                    if workspace.pools.resources.isRefreshing { ProgressView().controlSize(.small) }
-                    Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.pools.resources.isRefreshing || busy)
-                }.disabled(busy)
-                if let status = workspace.pools.poolCleanupStatus[poolID] {
-                    Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                if let error = workspace.pools.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                if let pool {
-                    TimelineView(.periodic(from: .now, by: 15)) { context in
-                        resourceSummary(pool, now: context.date)
-                    }
-                    HStack {
-                        Text("Boxes · \(boxes.count)").font(.headline)
-                        Spacer()
-                        Text("Stopped and archived boxes still occupy disk.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Table(rows, selection: $selection) {
-                        TableColumn("Box") { box in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(box.displayName).lineLimit(1)
-                                Text(box.status).font(.caption).foregroundStyle(.secondary)
-                            }.padding(.vertical, 3)
-                        }.width(min: 180, ideal: 280)
-                        TableColumn("CPU cores") { box in Text(ResourceValue.cpu(box.resourceCPU)).monospacedDigit() }.width(82)
-                        TableColumn("Memory") { box in Text(ResourceValue.bytes(box.resourceMemory)).monospacedDigit() }.width(92)
-                        TableColumn("Disk") { box in Text(ResourceValue.bytes(box.resourceDisk)).monospacedDigit() }.width(92)
-                        TableColumn("Processes") { box in
-                            Text(box.isRunning ? box.resourceReport["processCount"].number.map { String(Int(clamping: Int64(min(max($0, 0), 1_000_000_000)))) } ?? "—" : "—")
-                        }.width(76)
-                    }.scrollContentBackground(.hidden).studioCard().frame(minHeight: 135)
-                    if selection.count == 1, let box = boxes.first(where: { selection.contains($0.id) }) {
-                        boxDetail(box)
-                    }
-                    if let actionError { Text(actionError).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                } else {
-                    ContentUnavailableView(workspace.pools.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
+        StudioConfirmation(title: "Resources", symbol: "gauge.with.dots.needle.33percent", subtitle: computer, width: nil) {
+            GeometryReader { viewport in
+                ScrollView {
+                    report.frame(minHeight: viewport.size.height, alignment: .top)
                 }
             }
         } footer: {
@@ -92,23 +48,76 @@ struct PoolResourcesView: View {
                 Spacer()
                 Button("Done") { dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.cancelAction)
             }
-        }.frame(height: 690)
-            .onChange(of: poolID) { selection = []; actionError = nil }
-            .task(id: workspace.connectionState.connectionID) {
-                let generation = workspace.connectionState.connectionID
-                await workspace.pools.refreshResources()
-                guard !Task.isCancelled, generation == workspace.connectionState.connectionID else { return }
-                choosePool()
+        }
+        .frame(minWidth: 680, idealWidth: 860, maxWidth: .infinity,
+               minHeight: 380, idealHeight: 690, maxHeight: .infinity)
+        .onChange(of: poolID) { selection = []; actionError = nil }
+        .task(id: workspace.connectionState.connectionID) {
+            let generation = workspace.connectionState.connectionID
+            await workspace.pools.refreshResources()
+            guard !Task.isCancelled, generation == workspace.connectionState.connectionID else { return }
+            choosePool()
+        }
+        .sheet(item: $networkPool) { request in
+            PoolNetworkView(poolID: request.pool.id, computer: computer, connection: request.connection).environment(workspace)
+        }
+        .sheet(item: $stopRequest) { request in
+            BulkBoxActionSheet(request: request).environment(workspace)
+        }
+        .sheet(item: $clearRequest) { request in
+            PoolCacheClearSheet(request: request, computer: computer)
+        }
+    }
+    private var report: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Pool").foregroundStyle(.secondary)
+                StudioMenuPicker(title: "Pool", selection: $poolID, options: workspace.pools.resources.pools.isEmpty
+                    ? [.init(id: "", title: "No pools available")]
+                    : workspace.pools.resources.pools.map { .init(id: $0.id, title: $0.name + ($0.id == workspace.pools.resources.defaultPoolID ? " (default)" : "")) }, alignment: .left)
+                    .padding(8).studioCard().frame(maxWidth: 360)
+                Spacer()
+                Text("Sort by").foregroundStyle(.secondary)
+                StudioMenuPicker(title: "Sort by", selection: $sort, options: [.init(id: "disk", title: "Disk"), .init(id: "cpu", title: "CPU"), .init(id: "memory", title: "Memory")], alignment: .left)
+                    .padding(8).studioCard().frame(width: 100)
+                if workspace.pools.resources.isRefreshing { ProgressView().controlSize(.small) }
+                Button("Refresh", systemImage: "arrow.clockwise") { refresh(force: true) }.disabled(workspace.pools.resources.isRefreshing || busy)
+            }.disabled(busy)
+            if let status = workspace.pools.poolCleanupStatus[poolID] {
+                Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            .sheet(item: $networkPool) { request in
-                PoolNetworkView(poolID: request.pool.id, computer: computer, connection: request.connection).environment(workspace)
+            if let error = workspace.pools.resources.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+            if let pool {
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    resourceSummary(pool, now: context.date)
+                }
+                HStack {
+                    Text("Boxes · \(boxes.count)").font(.headline)
+                    Spacer()
+                    Text("Stopped and archived boxes still occupy disk.").font(.caption).foregroundStyle(.secondary)
+                }
+                Table(rows, selection: $selection) {
+                    TableColumn("Box") { box in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(box.displayName).lineLimit(1)
+                            Text(box.status).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 3)
+                    }.width(min: 180, ideal: 280)
+                    TableColumn("CPU cores") { box in Text(ResourceValue.cpu(box.resourceCPU)).monospacedDigit() }.width(82)
+                    TableColumn("Memory") { box in Text(ResourceValue.bytes(box.resourceMemory)).monospacedDigit() }.width(92)
+                    TableColumn("Disk") { box in Text(ResourceValue.bytes(box.resourceDisk)).monospacedDigit() }.width(92)
+                    TableColumn("Processes") { box in
+                        Text(box.isRunning ? box.resourceReport["processCount"].number.map { String(Int(clamping: Int64(min(max($0, 0), 1_000_000_000)))) } ?? "—" : "—")
+                    }.width(76)
+                }.scrollContentBackground(.hidden).studioCard().frame(minHeight: 200, idealHeight: 240, maxHeight: .infinity)
+                if selection.count == 1, let box = boxes.first(where: { selection.contains($0.id) }) {
+                    boxDetail(box)
+                }
+                if let actionError { Text(actionError).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+            } else {
+                ContentUnavailableView(workspace.pools.resources.isRefreshing ? "Reading pool resources…" : "No pool resources available", systemImage: "gauge.with.dots.needle.33percent", description: Text("Connect to a computer with a Discobox pool, then refresh."))
             }
-            .sheet(item: $stopRequest) { request in
-                BulkBoxActionSheet(request: request).environment(workspace)
-            }
-            .sheet(item: $clearRequest) { request in
-                PoolCacheClearSheet(request: request, computer: computer)
-            }
+        }
     }
     private func reading(_ box: Sandbox) -> Double? {
         switch sort { case "cpu": box.resourceCPU; case "memory": box.resourceMemory; default: box.resourceDisk }
@@ -155,21 +164,19 @@ struct PoolResourcesView: View {
     }
     private func boxDetail(_ box: Sandbox) -> some View {
         DisclosureGroup("Details · " + box.displayName) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 7) {
-                    if let observed = box.resourceObservedAt { Text("CPU and memory measured \(observed, style: .relative) ago").foregroundStyle(.secondary) }
-                    Text("Memory is the cgroup charge, including page cache. Process resident totals can count shared pages more than once.").foregroundStyle(.secondary)
-                    Text("Process resident memory: " + ResourceValue.bytes(box.isRunning ? box.resourceReport["memory"]["residentBytes"].number : nil))
-                    Text("Sources: " + ResourceValue.bytes(box.resourceReport["storage"]["sourcesBytes"].number) + " · Workspace data: " + ResourceValue.bytes(box.resourceReport["storage"]["dataBytes"].number))
-                    ForEach(Array(box.resourceReport["processes"].array.prefix(10).enumerated()), id: \.offset) { _, process in
-                        HStack {
-                            Text(process["command"].string).lineLimit(1)
-                            Spacer()
-                            Text(ResourceValue.cpu(process["vcpus"].number) + " cores · " + ResourceValue.bytes(process["residentBytes"].number)).monospacedDigit()
-                        }
+            VStack(alignment: .leading, spacing: 7) {
+                if let observed = box.resourceObservedAt { Text("CPU and memory measured \(observed, style: .relative) ago").foregroundStyle(.secondary) }
+                Text("Memory is the cgroup charge, including page cache. Process resident totals can count shared pages more than once.").foregroundStyle(.secondary)
+                Text("Process resident memory: " + ResourceValue.bytes(box.isRunning ? box.resourceReport["memory"]["residentBytes"].number : nil))
+                Text("Sources: " + ResourceValue.bytes(box.resourceReport["storage"]["sourcesBytes"].number) + " · Workspace data: " + ResourceValue.bytes(box.resourceReport["storage"]["dataBytes"].number))
+                ForEach(Array(box.resourceReport["processes"].array.prefix(10).enumerated()), id: \.offset) { _, process in
+                    HStack {
+                        Text(process["command"].string).lineLimit(1)
+                        Spacer()
+                        Text(ResourceValue.cpu(process["vcpus"].number) + " cores · " + ResourceValue.bytes(process["residentBytes"].number)).monospacedDigit()
                     }
-                }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
-            }.frame(maxHeight: 110)
+                }
+            }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

@@ -1,6 +1,7 @@
 #if DEBUG
 @testable import DiscoboxUI
 import AppKit
+import SwiftUI
 import DiscoboxCore
 
 /// Targeted demo-only checks: no server, Keychain, box creation, or port probes.
@@ -43,6 +44,7 @@ import DiscoboxCore
                 _ = field.delegate?.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
                 try await wait { window.attachedSheet == nil && workspace.selection.sandboxID == target.id }
             }
+            try await verifyResourcesResize(workspace)
             let originalSection = commands.inspectorSection
             let selected = commands.currentLayout?.selected
             commands.showInspector = false
@@ -66,6 +68,56 @@ import DiscoboxCore
             terminals.closeAll(); fflush(stdout); exit(1)
         }
     }
+    private struct ResourcesFixture: View {
+        let session: ConnectionSession
+        @State private var presented = false
+        var body: some View {
+            Color.clear.onAppear { presented = true }
+                .sheet(isPresented: $presented) {
+                    PoolResourcesView(computer: "Fixture computer").environment(session)
+                }
+        }
+    }
+
+    private static func verifyResourcesResize(_ session: ConnectionSession) async throws {
+        let parent = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 740),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        parent.contentView = NSHostingView(rootView: ResourcesFixture(session: session))
+        parent.orderFront(nil)
+        defer { parent.orderOut(nil) }
+        try await wait { parent.attachedSheet?.contentView != nil }
+        let sheet = parent.attachedSheet!
+        let root = sheet.contentView!
+        guard sheet.styleMask.contains(.resizable),
+              sheet.contentMinSize.width < sheet.contentMaxSize.width,
+              sheet.contentMinSize.height < sheet.contentMaxSize.height else {
+            throw DiscoboxError("Resources sheet has a fixed size")
+        }
+        func doneButton() -> NSButton? {
+            // SwiftUI draws the button labels itself. Done is the trailing
+            // button outside the report's scroll view and dismisses the sheet.
+            guard let scroll = descendants(root).compactMap({ $0 as? NSScrollView }).first else { return nil }
+            let report = scroll.convert(scroll.bounds, to: root)
+            return descendants(root).compactMap { $0 as? NSButton }.filter {
+                let bounds = $0.convert($0.bounds, to: root)
+                return root.bounds.contains(bounds) && (root.isFlipped ? bounds.minY >= report.maxY : bounds.maxY <= report.minY)
+            }.max { $0.convert($0.bounds, to: root).midX < $1.convert($1.bounds, to: root).midX }
+        }
+        try await wait { descendants(root).compactMap { $0 as? NSTableView }.contains { $0.numberOfRows > 0 } }
+        let table = descendants(root).compactMap { $0 as? NSTableView }.first { $0.numberOfRows > 0 }!
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        for size in [NSSize(width: 700, height: 420), NSSize(width: 900, height: 700)] {
+            sheet.setContentSize(size)
+            try await wait {
+                root.layoutSubtreeIfNeeded()
+                return root.bounds.size == size && table.selectedRow == 0 && doneButton() != nil
+            }
+        }
+        doneButton()?.performClick(nil)
+        try await wait { parent.attachedSheet == nil }
+        print("DIALOG: Resources sheet resizes in both dimensions with its Done button visible")
+    }
+
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private static func wait(line: Int = #line, _ predicate: () -> Bool) async throws {
         for _ in 0..<100 { if predicate() { return }; try await Task.sleep(for: .milliseconds(50)) }

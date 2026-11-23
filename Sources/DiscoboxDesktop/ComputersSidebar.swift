@@ -214,7 +214,7 @@ struct ComputersSidebar: View {
                 }.foregroundStyle(.secondary).contentShape(Rectangle())
             }.buttonStyle(.plain).padding(.horizontal, 8).padding(.vertical, 6)
             if computersExpanded {
-                Button { browser.computerID = nil; browser.archivedSelection.removeAll(); browser.selectedBoxes.removeAll() } label: {
+                Button { browser.showAllComputers() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.stack.3d.up").frame(width: 16).foregroundStyle(.secondary)
                         Text("All computers").fontWeight(browser.computerID == nil ? .semibold : .regular)
@@ -427,6 +427,8 @@ private struct ComputerBoxRow: View {
     let chooseBulkAction: (BoxAction) -> Void
     let chooseAction: (BoxAction, UUID) -> Void
     @Environment(Connections.self) private var connections
+    @Environment(EditorLauncher.self) private var editors: EditorLauncher?
+    @Environment(WorkspaceCommands.self) private var commands: WorkspaceCommands?
     var body: some View {
         let connection = host.connectionState.connectionID
         let pending = presentation.isPending
@@ -462,6 +464,24 @@ private struct ComputerBoxRow: View {
                         if host.connectionState.connectionID == generation, host.selection.sandboxID == box.id { await host.selection.openShell() }
                     }
                 }.disabled(!box.isRunning)
+                if let editors {
+                    Menu("Open in Editor") {
+                        ForEach(BoxEditor.allCases, id: \.self) { editor in
+                            if editors.apps[editor] != nil {
+                                Button(box.isRunning ? editor.name : "Start & Open in " + editor.name + "…") {
+                                    if let window = commands?.window, host.connectionState.connectionID == connection {
+                                        editors.open(editor, box: box, host: host, window: window)
+                                    }
+                                }
+                            }
+                        }
+                        if editors.apps.isEmpty { Text("No supported editor found") }
+                        Divider()
+                        Button("Locate Editor…") {
+                            if let window = commands?.window { Task { await editors.locateEditor(in: window) } }
+                        }
+                    }.disabled(!editors.available(host, box: box))
+                }
                 Divider()
                 BoxActionMenu(box: box, pending: pending) { chooseAction($0, connection) }
                 }

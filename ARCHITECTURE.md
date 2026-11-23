@@ -599,13 +599,12 @@ reads are coalesced and cached per connection for 60 seconds. A nonblocking
 prefetch after connection warms the New Box picker; usage reuses the same list.
 
 Usage collection runs in a cancellable detached utility task with a 20-second
-budget, sequential bounded recording reads, and at most one attempt per minute.
+budget and sequential bounded recording reads within each computer.
 Parsing and sorting stay outside MainActor. A single batch of changed results is
 published on MainActor; existing readings remain visible during collection.
 Companion request processes inherit utility QoS for this background workload.
 The visible usage shelf and its Details sheet report demand. Closing the last
-visible usage surface cancels scheduled collection. Automatic cycles take turns
-across computers. A cycle reads up to four audit pages across pool/provider
+visible usage surface cancels scheduled collection. Connected computers collect independently while sharing the per-pool read budget. A cycle reads up to four audit pages across pool/provider
 cursors and up to four recordings. Up to 64 candidates carry forward with their
 cursor. Usage Details can request a fresh cycle explicitly.
 
@@ -620,8 +619,11 @@ own stores and independent inventory, approval, resource, and usage polling task
 Each event-capable host also owns one read-only `--events` helper. It subscribes
 to the project SSE route over the effective endpoint. Swift publishes replay at
 its checkpoint and retains listing-only metadata separately. A healthy stream
-allows full listings every 60 seconds on the visible active host and every 300
-seconds elsewhere. Interrupted or unsupported feeds fall back to host listings.
+allows sidebar inventory to reconcile every 15 seconds on each computer in the
+focused browser scope, including every connected host in All computers. Selecting
+a scope checks inventories older than five seconds. Visible background windows
+use 60 seconds for in-scope or active hosts. Other hosts use 300 seconds. Sidebar and manual inventory reads share one in-flight listing
+per computer. Interrupted or unsupported feeds fall back to host listings.
 A box event never requests a live exec or service inventory.
 
 The desktop controls how often it requests guest data and retries an attachment.
@@ -630,8 +632,10 @@ records the reported hairpin NAT diagnosis and the client performance budgets.
 See [Polling and event updates](docs/POLLING-AND-EVENTS-PLAN.md).
 
 Polling cadence follows what can be seen (`PollingCadence`): each workspace window
-reports whether it is focused, visible behind another app or hidden, and the
-computer being viewed polls fastest. By default approvals continue while hidden to support notifications. Manual refresh mode in Settings pauses those checks and keeps project events connected.
+reports whether it is focused, visible behind another app or hidden, and inventory follows the sidebar independently of the open terminal. Each
+computer checks visible usage independently every 20 seconds while focused and
+every minute in the background. Hidden usage pauses. The provider reading
+timestamp and collection health are displayed separately. By default approvals continue while hidden to support notifications. Manual refresh mode in Settings pauses those checks and keeps project events connected.
 Activity aging uses an `ActivityClock` that advances only when a report's
 freshness would change, so unchanged refreshes publish nothing, and the sidebar
 derives each box's row values once per input change before `BoxBrowser`'s

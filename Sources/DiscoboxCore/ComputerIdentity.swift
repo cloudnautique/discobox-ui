@@ -14,8 +14,9 @@ public enum ComputerIdentity {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    public static func enrollmentCommand(peerID: String, name: String) -> String {
+    public static func enrollmentCommand(peerID: String, name: String, localServer: Bool = false) -> String {
         func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        return "discobox admin peer add \(quote(peerID)) --name \(quote(resolvedName(name)))"
+        let client = localServer ? "discobox --server unix://" : "discobox"
+        return "\(client) admin peer add \(quote(peerID)) --name \(quote(resolvedName(name)))"
     }
 }

@@ -37,7 +37,7 @@ struct StudioConfirmation<Content: View, Footer: View>: View {
     let symbol: String
     var subtitle: String? = nil
     var destructive = false
-    var width: CGFloat = 560
+    var width: CGFloat? = 560
     @ViewBuilder var content: Content
     @ViewBuilder var footer: Footer
 

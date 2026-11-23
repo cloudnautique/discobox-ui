@@ -6,8 +6,8 @@ import Testing
     func intervals(_ presence: PollingPresence, active: Bool = true) -> [Duration?] {
         PollingLoop.allCases.map { PollingCadence(presence: presence, isActiveHost: active).interval($0) }
     }
-    #expect(intervals(.focused) == [.seconds(3), .seconds(2), .seconds(30), .seconds(60), .seconds(30)])
-    #expect(intervals(.focused, active: false) == [.seconds(10), .seconds(5), .seconds(30), .seconds(60), nil])
+    #expect(intervals(.focused) == [.seconds(3), .seconds(2), .seconds(30), .seconds(20), .seconds(30)])
+    #expect(intervals(.focused, active: false) == [.seconds(10), .seconds(5), .seconds(30), .seconds(20), nil])
     #expect(intervals(.visible) == [.seconds(15), .seconds(5), .seconds(30), .seconds(60), .seconds(60)])
     #expect(intervals(.visible, active: false) == [.seconds(15), .seconds(5), .seconds(30), .seconds(60), nil])
     // Approvals keep feeding notifications while hidden; panels pause.
@@ -234,11 +234,11 @@ private actor CadenceFixture: DiscoboxClient {
     hub.reportUsageSurface(visible: true, from: two)
     #expect(hub.active.cadence.interval(.usage) == nil)
     hub.reportUsageSurface(visible: true, from: one)
-    #expect(hub.active.cadence.interval(.usage) == .seconds(60))
+    #expect(hub.active.cadence.interval(.usage) == .seconds(20))
     hub.reportUsageSurface(visible: false, from: one)
     #expect(hub.active.cadence.interval(.usage) == nil)
     hub.reportPresence(.visible, from: two)
-    #expect(hub.active.cadence.interval(.usage) == .seconds(60))
+    #expect(hub.active.cadence.interval(.usage) == .seconds(20))
     hub.withdrawPresence(from: two)
     #expect(hub.active.cadence.interval(.usage) == nil)
 }

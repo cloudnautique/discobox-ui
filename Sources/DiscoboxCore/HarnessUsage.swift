@@ -61,6 +61,8 @@ public final class HarnessUsage {
     public private(set) var snapshots: [String: HarnessQuota] = [:]
     public private(set) var notices: [String] = []
     public private(set) var isLoading = false
+    public private(set) var lastCheckedAt: Date?
+    public private(set) var refreshDelayed = false
     @ObservationIgnored private var progress = UsageProgress()
     @ObservationIgnored private var lastAttempt: Date?
     @ObservationIgnored private let now: () -> Date
@@ -69,7 +71,7 @@ public final class HarnessUsage {
     public func refresh(client: any DiscoboxClient, project: String, boxes: [Sandbox], configuredHarnesses: [Harness]? = nil, force: Bool = false) async {
         // The cadence survives collapsing/reopening the view. Only one poll can
         // run, even when several UI tasks ask simultaneously.
-        guard !isLoading, force || lastAttempt.map({ now().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        guard !isLoading, force || lastAttempt.map({ now().timeIntervalSince($0) >= PollingCadence.focusedUsageSeconds }) ?? true else { return }
         lastAttempt = now()
         isLoading = true
         defer { isLoading = false }
@@ -99,9 +101,12 @@ public final class HarnessUsage {
             if snapshots != batch.snapshots { snapshots = batch.snapshots }
             if notices != batch.notices { notices = batch.notices }
             progress = batch.progress
+            refreshDelayed = batch.delayed
+            if batch.checked { lastCheckedAt = now() }
         } catch is CancellationError { return }
         catch {
             guard !Task.isCancelled else { return }
+            refreshDelayed = true
             let message = ["Usage unavailable: \(error.localizedDescription)"]
             if notices != message { notices = message }
         }
@@ -112,6 +117,7 @@ private struct UsageBatch: Sendable {
     let harnesses: [Harness]
     let snapshots: [String: HarnessQuota]
     let notices: [String]
+    let checked, delayed: Bool
     let progress: UsageProgress
 }
 
@@ -123,6 +129,7 @@ private struct UsageCursor: Sendable {
     var seededAt: Date?
     var checkEpoch = false
     var retryAt = Date.distantPast
+    var deferred = false
     var failures = 0
     var notice: String?
 }
@@ -174,7 +181,7 @@ private enum UsageCollector {
         progress.cursors = progress.cursors.filter { active.contains($0.key) }
         if boxes.contains(where: { byBox[$0.id] != nil && $0.poolId == nil }) { notices.insert("Some boxes have no reported pool for usage.") }
 
-        var pages = 0
+        var pages = 0, checked = false
         for _ in scopes.indices {
             if pages == 4 || progress.pending.count >= 64 || Task.isCancelled { break }
             let index = progress.nextScope % scopes.count, scope = scopes[index]
@@ -192,6 +199,9 @@ private enum UsageCollector {
                 guard result.records.count <= limit, result.records.allSatisfy({ $0.poolId == scope.pool }) else {
                     throw DiscoboxError("Invalid usage page.")
                 }
+                checked = true
+                cursor.deferred = false
+                cursor.failures = 0
                 if cursor.checkEpoch, let previous = cursor.after, result.through.localizedStandardCompare(previous) != .orderedAscending {
                     // The old cursor is still valid. Read forward from it even
                     // if more than a full page arrived during this probe.
@@ -215,11 +225,11 @@ private enum UsageCollector {
                 cursor.after = through.isEmpty ? nil : through
                 if after == nil { cursor.seededAt = now }
                 cursor.checkEpoch = after != nil && through == after && cursor.seededAt.map { now.timeIntervalSince($0) >= 86400 } == true
-                cursor.failures = 0
                 if limited || (result.full && after != nil) { cursor.notice = "Catching up on usage for " + scope.pool + "." }
                 else if result.full && result.records.isEmpty { cursor.notice = "No quota recording in the latest " + String(limit) + " requests to " + scope.host + "." }
                 else { cursor.notice = nil }
             } catch is GuestReadBudget.Deferred {
+                cursor.deferred = true
                 cursor.notice = "Waiting for pool " + scope.pool + " to resume usage."
             } catch {
                 cursor.failures = min(5, cursor.failures + 1)
@@ -256,8 +266,10 @@ private enum UsageCollector {
         progress.pending = pending
         if !pending.isEmpty { notices.insert("Catching up on usage recordings.") }
         if Task.isCancelled { notices.insert("Usage refresh timed out. Remaining work will resume later.") }
+        let delayed = Task.isCancelled || progress.cursors.values.contains { $0.failures > 0 || $0.deferred }
+            || pending.contains { $0.retryAt > now }
         return UsageBatch(harnesses: harnesses.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
-                          snapshots: snapshots, notices: notices.sorted(), progress: progress)
+                          snapshots: snapshots, notices: notices.sorted(), checked: checked, delayed: delayed, progress: progress)
     }
 
     private static func recording(_ row: UsageRecord, client: any DiscoboxClient, project: String) async throws -> [QuotaWindow] {
@@ -279,31 +291,3 @@ private struct UsageBody: Decodable, Sendable {
 }
 
 private struct UsageHeaders: Decodable, Sendable { let headers: [String: [String]] }
-
-/// A visible shelf can cover several computers. Stagger their automatic
-/// collections without forcing a manual refresh to wait for an unrelated host.
-@MainActor final class ScheduledUsageQueue {
-    private var busy = false
-    private var waiting: [(UUID, CheckedContinuation<Bool, Never>)] = []
-
-    func enter() async -> Bool {
-        guard !Task.isCancelled else { return false }
-        if !busy { busy = true; return true }
-        let id = UUID()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                if Task.isCancelled { continuation.resume(returning: false) }
-                else { waiting.append((id, continuation)) }
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                guard let self, let index = self.waiting.firstIndex(where: { $0.0 == id }) else { return }
-                self.waiting.remove(at: index).1.resume(returning: false)
-            }
-        }
-    }
-    func leave() {
-        if waiting.isEmpty { busy = false }
-        else { waiting.removeFirst().1.resume(returning: true) }
-    }
-}

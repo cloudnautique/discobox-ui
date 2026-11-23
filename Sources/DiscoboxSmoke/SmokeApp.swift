@@ -56,6 +56,7 @@ import DiscoboxCore
             ("--multihost-smoke", { await MultiHostSmoke.run() }),
             ("--desktop-smoke", { await DesktopSmoke.run() }),
             ("--feature-smoke", { await FeatureSmoke.run() }),
+            ("--editor-launcher-smoke", { await EditorLauncherSmoke.run() }),
             ("--files-smoke", { await FilesSmoke.run() })
         ]
         let embedded = ["--terminal-smoke", "--command-smoke", "--dialog-smoke", "--sidebar-layout-smoke", "--terminal-focus-smoke"]

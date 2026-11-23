@@ -32,7 +32,7 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
 /// workspace, client, caches, polling and connection generation while hidden.
 @MainActor @Observable public final class Connections {
     public let browser = BoxBrowser()
-    @ObservationIgnored private let usageQueue = ScheduledUsageQueue()
+    @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let guestBudget = GuestReadBudget()
     @ObservationIgnored private let preferences: UserDefaults?
     public var refreshPolicy: RefreshPolicy {
@@ -80,13 +80,17 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
     }
     public init(polling: Bool = true, now: @escaping () -> Date = Date.init, preferences: UserDefaults? = nil) {
         self.preferences = preferences
+        self.now = now
         refreshPolicy = preferences?.data(forKey: "discoboxRefreshPolicy").flatMap { try? JSONDecoder().decode(RefreshPolicy.self, from: $0) } ?? RefreshPolicy()
         let local = ConnectionSession(profile: .thisComputer, now: now)
         sessions = [local]; activeID = local.id; pollingEnabled = polling
         local.selection.guestBudget = guestBudget
-        local.usageQueue = usageQueue
         local.applyRefreshPolicy(refreshPolicy)
-        browser.runningScopeChanged = { [weak self] in self?.updateCadence() }
+        browser.scopeChanged = { [weak self] in
+            self?.updateCadence()
+            self?.requestSidebarInventories()
+        }
+        browser.enteredRunningFilter = { [weak self] in self?.requestSidebarInventories(force: true) }
         updateCadence()
     }
     public func session(_ id: String) -> ConnectionSession? { sessions.first { $0.id == id } }
@@ -95,9 +99,8 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
             let id = ConnectionProfiles.normalizedEndpoint(profile.endpoint)
             if let existing = session(id) { existing.update(profile) }
             else {
-                let host = ConnectionSession(profile: profile)
+                let host = ConnectionSession(profile: profile, now: now)
                 host.selection.guestBudget = guestBudget
-                host.usageQueue = usageQueue
                 host.applyRefreshPolicy(refreshPolicy)
                 sessions.append(host)
             }
@@ -108,20 +111,23 @@ public struct ConnectedBox: Identifiable, Sendable, Equatable {
         let usageVisible = usageWindows.contains { presenceReports[$0].map { $0 != .hidden } ?? false }
         for host in sessions {
             var cadence = PollingCadence(presence: presence, isActiveHost: host.id == activeID, usageVisible: usageVisible)
-            cadence.showsRunningBoxes = presence != .hidden && browser.filter == .running &&
-                (browser.computerID == nil || browser.computerID == host.id)
+            cadence.showsComputer = browser.computerID == nil || browser.computerID == host.id
             host.cadence = cadence
         }
     }
+    private func requestSidebarInventories(force: Bool = false) {
+        guard presence != .hidden else { return }
+        for host in sessions where host.cadence.showsComputer { host.requestSidebarInventory(force: force) }
+    }
+
     /// Refresh the open workspace and the box lists represented in the sidebar.
     /// Only the open workspace needs terminal and service details.
     public func refreshWorkspace() async {
         let selected = active
-        let scope = browser.computerID
         await withTaskGroup(of: Void.self) { group in
-            for host in sessions where host.connectionState.isConnected && (scope == nil || scope == host.id || host === selected) {
+            for host in sessions where host.connectionState.isConnected && host.cadence.showsComputer {
                 let includeDetails = host === selected
-                group.addTask { await host.refresh(includeDetails: includeDetails) }
+                group.addTask { await host.refreshFromSidebar(includeDetails: includeDetails) }
             }
         }
     }

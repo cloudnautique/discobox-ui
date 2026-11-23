@@ -99,6 +99,11 @@ retries. Authorization or certificate errors need your attention before retrying
   are offered. Archived boxes also support **Purge Selected…**.
 - **Resources → Stop Selected…** asks for confirmation. Cache cleanup can keep
   running after you close its dialog; reopen Resources for its status and result.
+- Choose **Editor** in the title bar to open the selected box’s workspace in
+  VS Code or Zed on this Mac. After a successful launch, click the app icon to
+  open another box in the same editor, or use the arrow to switch. You can
+  also right-click a box and choose **Open in Editor**. This uses the installed
+  Discobox CLI and its SSH aliases. Remote computers must admit the CLI’s peer.
 - Use **Desktop** in the title bar to open the box’s desktop, or **Services**
   for its ports. The inspector also holds box details and tags.
 - Expand **Harness usage** in the sidebar for quota readings and reset times.

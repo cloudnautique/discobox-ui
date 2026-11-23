@@ -6,6 +6,7 @@ struct WorkspaceView: View {
     @Environment(ConnectionSession.self) private var workspace
     @Environment(WorkspaceCommands.self) private var commands
     @Environment(BoxActionPresentation.self) private var boxActions: BoxActionPresentation
+    @State private var editors = EditorLauncher()
     @State private var refreshingBoxes = false
     @State private var contentWidth: CGFloat = 0
     @State private var sidebarWidth: CGFloat = 282
@@ -150,17 +151,25 @@ struct WorkspaceView: View {
                         .accessibilityIdentifier("workspace.toggleSidebar")
                     }.studioPlainBackground()
                     ToolbarItemGroup(placement: .automatic) { Spacer() }
+                    ToolbarItem(id: "workspace.shells", placement: .automatic) {
+                        let hidden = commands.currentLayout?.isSplit != true
+                        Button { commands.performAppShortcut(.toggleShells) } label: {
+                            let count = commands.currentLayout?.terminalIDs.count ?? 0
+                            Label(count == 0 ? "New shell" : "Shells · \(count)", systemImage: "terminal")
+                        }.labelStyle(.titleAndIcon).buttonStyle(.borderless).frame(width: 92)
+                            .opacity(hidden ? 1 : 0).disabled(!hidden || workspace.selection.selectedBox?.isRunning != true && commands.currentLayout?.companionIDs.isEmpty != false)
+                            .allowsHitTesting(hidden).accessibilityHidden(!hidden)
+                            .accessibilityIdentifier("workspace.restoreShells")
+                            .help("Show the last shell (" + commands.appShortcuts[.toggleShells] + ")")
+                    }.studioPlainBackground()
+                    ToolbarItem(id: "workspace.editor", placement: .automatic) {
+                        let box = workspace.selection.selectedBox
+                        EditorPicker(launcher: editors, box: box, host: workspace, compact: contentWidth > 0 && contentWidth < 1150,
+                                     enabled: box.map { editors.available(workspace, box: $0) } == true && connections.browser.selectedBoxes.count <= 1)
+                            .fixedSize()
+                    }.studioPlainBackground()
                     ToolbarItem(id: "workspace.actions", placement: .automatic) {
                         HStack(spacing: 12) {
-                            let hidden = commands.currentLayout?.isSplit != true
-                            Button { commands.performAppShortcut(.toggleShells) } label: {
-                                let count = commands.currentLayout?.terminalIDs.count ?? 0
-                                Label(count == 0 ? "New shell" : "Shells · \(count)", systemImage: "terminal")
-                            }.labelStyle(.titleAndIcon).buttonStyle(.borderless).frame(width: 92)
-                                .opacity(hidden ? 1 : 0).disabled(!hidden || workspace.selection.selectedBox?.isRunning != true && commands.currentLayout?.companionIDs.isEmpty != false)
-                                .allowsHitTesting(hidden).accessibilityHidden(!hidden)
-                                .accessibilityIdentifier("workspace.restoreShells")
-                                .help("Show the last shell (" + commands.appShortcuts[.toggleShells] + ")")
                             WorkspaceDesktopButton()
                             Button { commands.toggleServices() } label: { Label("Services", systemImage: "network") }
                                 .labelStyle(.titleAndIcon).buttonStyle(.borderless)
@@ -176,7 +185,7 @@ struct WorkspaceView: View {
                             } label: { Image(systemName: "ellipsis.circle") }
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                                 .disabled(workspace.selection.selectedBox == nil).help("Actions for this box")
-                        }.font(.callout).foregroundStyle(.primary).frame(width: 340, alignment: .trailing)
+                        }.font(.callout).foregroundStyle(.primary).fixedSize()
 
                     }.studioPlainBackground()
                 }
@@ -184,6 +193,9 @@ struct WorkspaceView: View {
                 .toolbarBackground(.visible, for: .windowToolbar)
             } else { WelcomeView() }
         }
+        .environment(editors)
+        .onAppear { editors.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in editors.refresh() }
         .background(WorkspaceWindowReader(commands: commands))
         .sheet(isPresented: $commands.showCommands) { CommandsSheet().environment(commands) }
         .background {

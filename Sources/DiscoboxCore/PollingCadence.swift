@@ -30,11 +30,12 @@ public struct PollingCadence: Sendable, Equatable {
     public var presence: PollingPresence
     public var isActiveHost: Bool
     public var usageVisible: Bool
-    var showsRunningBoxes = false
-    // The event stream omits timestamp-only pool confirmations. Keep the
-    // visible Running list inside the two-minute power freshness window.
+    var showsComputer = true
+    static let focusedUsageSeconds: TimeInterval = 20
+    // Events carry transitions. Listings also include fresh pool confirmations.
     var eventInventoryInterval: TimeInterval {
-        presence != .hidden && (isActiveHost || showsRunningBoxes) ? 60 : 300
+        if presence == .focused && showsComputer { return 15 }
+        return presence != .hidden && (isActiveHost || showsComputer) ? 60 : 300
     }
     public init(presence: PollingPresence = .focused, isActiveHost: Bool = true, usageVisible: Bool = true) {
         self.presence = presence; self.isActiveHost = isActiveHost; self.usageVisible = usageVisible
@@ -51,7 +52,7 @@ public struct PollingCadence: Sendable, Equatable {
         case (.hidden, .resources), (.hidden, .usage): nil
         case (_, .details): isActiveHost && presence != .hidden ? .seconds(presence == .focused ? 30 : 60) : nil
         case (_, .resources): .seconds(30)
-        case (_, .usage): usageVisible ? .seconds(60) : nil
+        case (_, .usage): usageVisible ? .seconds(presence == .focused ? Self.focusedUsageSeconds : 60) : nil
         }
     }
     /// Time left before the next poll, or nil to wait for a cadence change; a

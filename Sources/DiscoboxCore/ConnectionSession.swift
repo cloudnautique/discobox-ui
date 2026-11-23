@@ -68,7 +68,6 @@ import Observation
     /// Set by Connections from window presence and the active computer. A change
     /// wakes sleeping loops so they recompute their deadline from the last poll.
     public let readMetrics = ReadMetrics()
-    @ObservationIgnored var usageQueue = ScheduledUsageQueue()
     @ObservationIgnored private var scheduledReads: [Poll: Task<Void, Never>] = [:]
     func applyRefreshPolicy(_ value: RefreshPolicy) {
         readMetrics.apply(value)
@@ -79,15 +78,20 @@ import Observation
     @ObservationIgnored var cadence = PollingCadence() {
         didSet {
             if cadence != oldValue {
-                if cadence.showsRunningBoxes != oldValue.showsRunningBoxes {
-                    refreshRunningInventory = cadence.showsRunningBoxes
-                }
+                if !cadence.showsComputer || cadence.presence == .hidden { sidebarInventoryDue = false }
                 for (kind, task) in scheduledReads where cadence.interval(kind) == nil { task.cancel() }
                 schedule.wake()
             }
         }
     }
-    @ObservationIgnored private var refreshRunningInventory = false
+    @ObservationIgnored private var sidebarInventoryDue = false
+    func requestSidebarInventory(force: Bool) {
+        guard sidebarRead == nil, scheduledReads[.inventory] == nil, connectionState.isConnected,
+              connectionState.connectionError == nil, readMetrics.policy.allows(.inventory) else { return }
+        if !force, let observed = inventory.boxesObservedAt, now().timeIntervalSince(observed) <= 5 { return }
+        sidebarInventoryDue = true
+        schedule.wake()
+    }
     @ObservationIgnored private let schedule = PollingSchedule()
     func startPolling() {
         stopPolling()
@@ -112,7 +116,7 @@ import Observation
                         }
                     } catch { return }
                     guard !Task.isCancelled else { return }
-                    if kind == .inventory { self?.refreshRunningInventory = false }
+                    if kind == .inventory { self?.sidebarInventoryDue = false }
                     await self?.poll(kind)
                     last = self?.now() ?? last
                 }
@@ -164,7 +168,7 @@ import Observation
     private enum PollWait { case due, after(Double), paused }
     private func pollWait(_ kind: Poll, since last: Date?) -> PollWait {
         guard readMetrics.policy.allows(kind) else { return .paused }
-        if kind == .inventory, refreshRunningInventory, connectionState.connectionError == nil {
+        if kind == .inventory, sidebarInventoryDue, connectionState.connectionError == nil {
             return .due
         }
         if kind == .inventory, eventsCurrent, connectionState.connectionError == nil, let last {
@@ -212,14 +216,11 @@ import Observation
         }
         guard connectionState.isConnected, connectionState.connectionError == nil else { return }
         switch kind {
-        case .inventory: await refresh(includeDetails: false)
+        case .inventory: await refreshFromSidebar(includeDetails: false)
         case .details: await selection.reconcileDetails(cadence: cadence)
         case .approvals: await approvalStore.refreshApprovals(); advanceActivityClock()
         case .resources: await pools.refreshResources()
         case .usage:
-            let queue = usageQueue
-            guard await queue.enter() else { return }
-            defer { queue.leave() }
             guard !Task.isCancelled, cadence.interval(.usage) != nil else { return }
             await refreshUsage()
         }
@@ -257,6 +258,32 @@ import Observation
         }
     }
 
+    // Share browse and keyboard refreshes per connection. A mutation still gets
+    // its own post-write read so an earlier listing cannot acknowledge it.
+    @ObservationIgnored private var sidebarRead: Task<Void, Never>?
+    func refreshFromSidebar(includeDetails: Bool) async {
+        guard connectionState.isConnected else { return }
+        if connectionState.connectionError != nil {
+            await retryConnection(includeDetails: includeDetails)
+            return
+        }
+        let generation = connectionState.connectionID
+        if let sidebarRead {
+            await sidebarRead.value
+        } else {
+            let task = Task {
+                guard connectionState.isCurrent(generation) else { return }
+                await refreshConnected(includeDetails: false)
+            }
+            sidebarRead = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+            if generation == connectionState.connectionID { sidebarRead = nil }
+        }
+        if includeDetails, !Task.isCancelled, connectionState.isCurrent(generation), connectionState.connectionError == nil {
+            await selection.refreshDetails()
+        }
+    }
+
     public func refresh() async { await refresh(includeDetails: true) }
 
     func refresh(includeDetails: Bool) async {
@@ -264,6 +291,10 @@ import Observation
         if connectionState.connectionError != nil && !connectionState.recoveryInFlight && !connectionState.isConnecting {
             await retryConnection(includeDetails: includeDetails); return
         }
+        await refreshConnected(includeDetails: includeDetails)
+    }
+
+    private func refreshConnected(includeDetails: Bool) async {
         let current = connectionState.connectionID
         do {
             guard let request = try await inventory.refresh(using: connectionState, now: now), current == connectionState.connectionID else { return }
@@ -330,11 +361,12 @@ import Observation
     }
 
     private func resetConnection() {
+        sidebarRead?.cancel(); sidebarRead = nil; sidebarInventoryDue = false
         stopEvents()
         connectionState.invalidate()
         selection.reset()
         inventory.reset(); approvalStore.reset(); catalog.reset(); pools.reset(); pending.reset()
-        usage = HarnessUsage()
+        usage = HarnessUsage(now: now)
         activityClock = ActivityClock(); reportDatesCache = nil
     }
 }

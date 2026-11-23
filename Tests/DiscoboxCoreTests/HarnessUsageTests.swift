@@ -18,6 +18,8 @@ import Testing
 private actor UsageFixture: DiscoboxClient {
     var bodyReads = 0
     var usageReads = 0
+    var unavailable = false
+    func setUnavailable(_ value: Bool) { unavailable = value }
     let truncated: Bool
     init(truncated: Bool = false) { self.truncated = truncated }
     func perform(_ request: BridgeRequest) async throws -> Data {
@@ -25,6 +27,7 @@ private actor UsageFixture: DiscoboxClient {
         case .harnesses: return Data(#"{"harnessConfigs":[{"id":"h","name":"Codex work","configured":true}]}"#.utf8)
         case .usage:
             usageReads += 1
+            if unavailable { throw URLError(.networkConnectionLost) }
             if request.usagePage?.host == "api.anthropic.com" { return Data(#"{"records":[],"through":"","full":false}"#.utf8) }
             if request.usagePage?.after == "http_2" {
                 return Data(#"{"records":[{"id":"http_3","poolId":"pool","sandboxId":"box1","createdAt":"2026-10-27T18:00:00Z","provider":"codex"}],"through":"http_3","full":false}"#.utf8)
@@ -77,10 +80,28 @@ private actor UsageFixture: DiscoboxClient {
     for _ in 0..<10 { await usage.refresh(client: client, project: "p", boxes: boxes) }
     #expect(await client.usageReads == 2)
     #expect(usage.snapshots["h"]?.windows.first?.usedPercent == 70)
-    now = now.addingTimeInterval(61)
+    now += 19
+    await usage.refresh(client: client, project: "p", boxes: boxes)
+    #expect(await client.usageReads == 2)
+    now += 1
     await usage.refresh(client: client, project: "p", boxes: boxes)
     #expect(await client.usageReads == 4)
     #expect(usage.snapshots["h"]?.windows.first?.usedPercent == 83)
+    let reading = usage.snapshots["h"]?.observedAt
+    now += 20
+    await usage.refresh(client: client, project: "p", boxes: boxes)
+    #expect(usage.lastCheckedAt == now && usage.snapshots["h"]?.observedAt == reading)
+    #expect(!usage.refreshDelayed)
+    let lastCheck = usage.lastCheckedAt
+    await client.setUnavailable(true)
+    now += 20
+    await usage.refresh(client: client, project: "p", boxes: boxes)
+    #expect(usage.refreshDelayed && usage.lastCheckedAt == lastCheck)
+    #expect(usage.snapshots["h"]?.observedAt == reading)
+    await client.setUnavailable(false)
+    now += 60
+    await usage.refresh(client: client, project: "p", boxes: boxes)
+    #expect(!usage.refreshDelayed && usage.lastCheckedAt == now)
 }
 
 @MainActor @Test func cancellingUsageStopsBackgroundWorkWithoutHoldingUIActor() async {
